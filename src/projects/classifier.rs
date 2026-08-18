@@ -41,7 +41,7 @@ pub(crate) fn classify(cwd: Option<&Path>) -> ProjectClassification {
 /// Existing user projects win unless their location and name both identify an application-owned
 /// scratch area. Missing paths can still be recognized by their generated epoch/UUID leaf.
 pub(crate) fn is_ephemeral_agent_cwd(cwd: &Path) -> bool {
-    if is_temp_runner_path(cwd) || is_application_support_scratch(cwd) {
+    if is_temp_runner_path(cwd) || is_application_support_scratch(cwd) || is_aionui_scratch(cwd) {
         return true;
     }
     !cwd.is_dir()
@@ -90,11 +90,34 @@ fn is_application_support_scratch(cwd: &Path) -> bool {
     tail.last().is_some_and(|name| is_generated_temp_leaf(name))
 }
 
+fn is_aionui_scratch(cwd: &Path) -> bool {
+    let components = cwd
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+    if !components.contains(&".aionui") {
+        return false;
+    }
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_aionui_temp_leaf)
+}
+
 fn is_generated_temp_leaf(name: &str) -> bool {
     let Some((prefix, epoch)) = name.rsplit_once("-temp-") else {
         return false;
     };
     !prefix.is_empty() && epoch.len() >= 10 && epoch.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn is_aionui_temp_leaf(name: &str) -> bool {
+    if is_generated_temp_leaf(name) {
+        return true;
+    }
+    let Some((prefix, suffix)) = name.rsplit_once("-temp-") else {
+        return false;
+    };
+    !prefix.is_empty() && suffix.len() >= 8 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn is_uuid(name: &str) -> bool {
@@ -214,6 +237,14 @@ mod tests {
             Path::new("/Users/example/Library/Application Support/dev.runboard.runboard/general");
         assert!(is_ephemeral_agent_cwd(epoch));
         assert!(is_ephemeral_agent_cwd(state));
+    }
+
+    #[test]
+    fn home_aionui_temp_dirs_are_ephemeral_even_when_they_still_exist() {
+        let epoch = Path::new("/Users/example/.aionui/codex-temp-1774794513560");
+        let hex = Path::new("/Users/example/.aionui/conversations/2026/07/17/codex-temp-cc413191");
+        assert!(is_ephemeral_agent_cwd(epoch));
+        assert!(is_ephemeral_agent_cwd(hex));
     }
 
     #[test]

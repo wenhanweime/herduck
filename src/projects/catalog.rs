@@ -194,6 +194,7 @@ impl ProjectCatalog {
         catalog.refresh_automation_classes()?;
         catalog.restore_legacy_semantic_assignments()?;
         catalog.exclude_ephemeral_agent_assignments()?;
+        catalog.purge_junk_semantic_assignments()?;
         Ok(catalog)
     }
 
@@ -502,6 +503,7 @@ impl ProjectCatalog {
         let changed = refresh_automation_classes_in_transaction(
             &transaction,
             self.automation_title_threshold,
+            true,
         )?;
         if changed > 0 {
             bump_revision(&transaction)?;
@@ -590,7 +592,10 @@ impl ProjectCatalog {
                  JOIN sessions s ON s.stable_key = a.session_key
                  WHERE a.locked = 0
                    AND a.evidence != 'ephemeral-agent-cwd'
-                   AND s.cwd LIKE '%paseo-multica-agent-%'
+                   AND (s.cwd LIKE '%paseo-multica-agent-%'
+                        OR s.cwd LIKE '%-temp-%'
+                        OR s.cwd LIKE '%/general'
+                        OR s.cwd LIKE '%ork-direct-accept%')
                  ORDER BY a.session_key ASC",
             )?;
             let rows = statement
@@ -631,6 +636,51 @@ impl ProjectCatalog {
             )?;
         }
         bump_revision(&transaction)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn purge_junk_semantic_assignments(&mut self) -> Result<(), CatalogError> {
+        if !table_has_column(&self.connection, "semantic_assignments", "topic_label")?
+            || !table_has_column(&self.connection, "sessions", "title")?
+        {
+            return Ok(());
+        }
+        let has_title_priority = table_has_column(&self.connection, "sessions", "title_priority")?;
+        let has_assignment_lock = table_has_column(&self.connection, "assignments", "locked")?;
+        let fallback_guard = if has_title_priority {
+            "s.title_priority = 0 OR s.title LIKE '% session · %'"
+        } else {
+            "s.title LIKE '% session · %'"
+        };
+        let lock_guard = if has_assignment_lock {
+            "AND NOT EXISTS (
+                 SELECT 1 FROM assignments a
+                  WHERE a.session_key = semantic_assignments.session_key AND a.locked = 1
+             )"
+        } else {
+            ""
+        };
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = transaction.execute(
+            &format!(
+                "DELETE FROM semantic_assignments
+                 WHERE (
+                     topic_label = '未分类会话'
+                     OR session_key IN (
+                         SELECT s.stable_key FROM sessions s
+                          WHERE {fallback_guard}
+                     )
+                 )
+                 {lock_guard}"
+            ),
+            [],
+        )?;
+        if deleted > 0 {
+            bump_revision(&transaction)?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -725,7 +775,11 @@ impl ProjectCatalog {
             upsert_aliases(&transaction, &candidate)?;
             upsert_runtime(&transaction, &candidate)?;
         }
-        refresh_automation_classes_in_transaction(&transaction, self.automation_title_threshold)?;
+        refresh_automation_classes_in_transaction(
+            &transaction,
+            self.automation_title_threshold,
+            false,
+        )?;
         let revision = bump_revision(&transaction)?;
         transaction.commit()?;
         Ok(revision)
@@ -817,6 +871,7 @@ impl ProjectCatalog {
              LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
              WHERE a.locked = 0
                AND s.session_class = 'interactive'
+               AND s.title_priority != 0
                -- Skip throwaway sessions, which otherwise become junk Projects like
                -- \"no clear topic\". Either signal alone is enough to be worth classifying:
                -- a long back-and-forth, or one detailed request. Mirrors
@@ -1668,39 +1723,66 @@ fn backup_before_session_class_migration(
 fn refresh_automation_classes_in_transaction(
     transaction: &Transaction<'_>,
     threshold: usize,
+    reverse_short_titles: bool,
 ) -> Result<usize, CatalogError> {
     let rows = {
-        let mut statement = transaction
-            .prepare("SELECT stable_key, title FROM sessions ORDER BY stable_key ASC")?;
+        let mut statement = transaction.prepare(
+            "SELECT stable_key, backend, title, session_class
+             FROM sessions
+             ORDER BY stable_key ASC",
+        )?;
         let rows = statement
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows
     };
-    let mut groups = HashMap::<String, Vec<String>>::new();
-    for (stable_key, title) in rows {
+    let mut groups = HashMap::<(String, String), Vec<(String, String)>>::new();
+    for (stable_key, backend, title, session_class) in rows {
         let normalized = normalize_session_title(&title);
         if !normalized.is_empty() {
-            groups.entry(normalized).or_default().push(stable_key);
+            groups
+                .entry((backend, normalized))
+                .or_default()
+                .push((stable_key, session_class));
         }
     }
 
     let mut changed = 0usize;
-    let mut update = transaction.prepare(
+    let mut mark = transaction.prepare(
         "UPDATE sessions SET session_class = 'automation'
          WHERE stable_key = ?1 AND session_class != 'automation'",
     )?;
-    for stable_keys in groups
-        .values()
-        .filter(|stable_keys| stable_keys.len() >= threshold.max(1))
-    {
-        for stable_key in stable_keys {
-            changed = changed.saturating_add(update.execute([stable_key])?);
+    let mut unmark = transaction.prepare(
+        "UPDATE sessions SET session_class = 'interactive'
+         WHERE stable_key = ?1 AND session_class = 'automation'",
+    )?;
+    let threshold = threshold.max(1);
+    for ((_, normalized), members) in &groups {
+        let short_title = normalized.chars().count() < super::adapters::MIN_TITLE_CHARS;
+        let qualifies = members.len() >= threshold && !short_title;
+        if qualifies {
+            for (stable_key, session_class) in members {
+                if session_class != "automation" {
+                    changed = changed.saturating_add(mark.execute([stable_key.as_str()])?);
+                }
+            }
+        } else if reverse_short_titles && short_title {
+            for (stable_key, session_class) in members {
+                if session_class == "automation" {
+                    changed = changed.saturating_add(unmark.execute([stable_key.as_str()])?);
+                }
+            }
         }
     }
-    drop(update);
+    drop(mark);
+    drop(unmark);
     changed = changed.saturating_add(transaction.execute(
         "DELETE FROM semantic_assignments
          WHERE session_key IN (
@@ -2929,6 +3011,215 @@ mod tests {
             .expect("assignment evidence");
         assert_eq!(evidence, "ephemeral-agent-cwd");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn catalog_open_repairs_aionui_and_runner_general_assignments() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let seed_root = temp_dir("legacy-visible");
+        let aionui_seed = seed_root.join("aionui");
+        let general_seed = seed_root.join("general-seed");
+        std::fs::create_dir_all(&aionui_seed).expect("aionui seed");
+        std::fs::create_dir_all(&general_seed).expect("general seed");
+        let mut aionui = candidate("codex", "aionui-temp", 20);
+        aionui.cwd = Some(CandidateField {
+            value: aionui_seed,
+            observed_at: 20,
+            priority: SourcePriority::PrimaryIndex,
+            source_key: "codex-index".into(),
+        });
+        let mut general = candidate("codex", "runner-general", 21);
+        general.cwd = Some(CandidateField {
+            value: general_seed,
+            observed_at: 21,
+            priority: SourcePriority::PrimaryIndex,
+            source_key: "codex-index".into(),
+        });
+        catalog
+            .upsert_scanned_candidates(&[aionui.clone(), general.clone()])
+            .expect("seed visible assignments");
+        assert_eq!(
+            catalog.snapshot(50).expect("before repair").projects.len(),
+            2
+        );
+
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET cwd = ?2 WHERE stable_key = ?1",
+                params![
+                    aionui.identity.stable_key,
+                    "/Users/example/.aionui/codex-temp-1774794513560"
+                ],
+            )
+            .expect("seed aionui cwd");
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET cwd = ?2 WHERE stable_key = ?1",
+                params![
+                    general.identity.stable_key,
+                    "/Users/example/Library/Application Support/dev.ork.ork/general"
+                ],
+            )
+            .expect("seed general cwd");
+
+        let ProjectCatalog { connection, .. } = catalog;
+        let repaired =
+            ProjectCatalog::initialize(connection, false, None, 20).expect("repair catalog");
+        assert!(repaired
+            .snapshot(50)
+            .expect("after repair")
+            .projects
+            .is_empty());
+        for key in [
+            aionui.identity.stable_key.as_str(),
+            general.identity.stable_key.as_str(),
+        ] {
+            let evidence: String = repaired
+                .connection
+                .query_row(
+                    "SELECT evidence FROM assignments WHERE session_key = ?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .expect("assignment evidence");
+            assert_eq!(evidence, "ephemeral-agent-cwd");
+        }
+        let _ = std::fs::remove_dir_all(seed_root);
+    }
+
+    #[test]
+    fn short_greeting_titles_are_not_heuristic_automation() {
+        let connection = rusqlite::Connection::open_in_memory().expect("memory");
+        let mut catalog =
+            ProjectCatalog::initialize(connection, false, None, 2).expect("low threshold");
+        let items = (0..3)
+            .map(|index| {
+                let mut item = candidate("codex", &format!("hi-{index}"), 10 + index);
+                item.title.as_mut().expect("title").value = "hi".to_string();
+                item.weight = super::super::adapters::SessionWeight {
+                    turns: 1,
+                    chars: 2,
+                    known: true,
+                };
+                item
+            })
+            .collect::<Vec<_>>();
+        catalog
+            .upsert_scanned_candidates(&items)
+            .expect("scan greetings");
+        let automation: i64 = catalog
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE title = 'hi' AND session_class = 'automation'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(automation, 0);
+
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET session_class = 'automation' WHERE title = 'hi'",
+                [],
+            )
+            .expect("seed mislabel");
+        let ProjectCatalog { connection, .. } = catalog;
+        let repaired =
+            ProjectCatalog::initialize(connection, false, None, 2).expect("reverse short titles");
+        let automation: i64 = repaired
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE title = 'hi' AND session_class = 'automation'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count after repair");
+        assert_eq!(automation, 0);
+    }
+
+    #[test]
+    fn fallback_titles_leave_semantic_queue_and_unlocked_topics() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut item = candidate("grok", "fallback-semantic", 10);
+        item.title = None;
+        item.weight = super::super::adapters::SessionWeight {
+            turns: 8,
+            chars: 4_000,
+            known: true,
+        };
+        catalog.upsert_candidate(&item).expect("fallback session");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: item.identity.stable_key.clone(),
+                    topic_key: super::super::semantic_topic_key("Grok 空会话"),
+                    topic_label: "Grok 空会话".to_string(),
+                    fingerprint: "fp".to_string(),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                20,
+            )
+            .expect("seed junk topic");
+
+        let ProjectCatalog { connection, .. } = catalog;
+        let repaired =
+            ProjectCatalog::initialize(connection, false, None, 20).expect("purge fallback");
+        let leftover: i64 = repaired
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM semantic_assignments WHERE session_key = ?1",
+                [&item.identity.stable_key],
+                |row| row.get(0),
+            )
+            .expect("semantic leftover");
+        assert_eq!(leftover, 0);
+        assert!(repaired
+            .pending_semantic_sessions(10)
+            .expect("pending")
+            .is_empty());
+    }
+
+    #[test]
+    fn unclassified_topic_rows_are_deleted_on_open() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut item = candidate("claude", "unclassified-topic", 10);
+        item.title.as_mut().expect("title").value = "帮我点一下浏览器".to_string();
+        item.weight = super::super::adapters::SessionWeight {
+            turns: 4,
+            chars: 120,
+            known: true,
+        };
+        catalog.upsert_candidate(&item).expect("session");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: item.identity.stable_key.clone(),
+                    topic_key: super::super::semantic_topic_key("未分类会话"),
+                    topic_label: "未分类会话".to_string(),
+                    fingerprint: "fp".to_string(),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                20,
+            )
+            .expect("seed trash topic");
+
+        let ProjectCatalog { connection, .. } = catalog;
+        let repaired =
+            ProjectCatalog::initialize(connection, false, None, 20).expect("purge trash topic");
+        let leftover: i64 = repaired
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM semantic_assignments WHERE topic_label = '未分类会话'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("trash leftover");
+        assert_eq!(leftover, 0);
     }
 
     #[test]

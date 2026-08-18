@@ -315,6 +315,25 @@ CREATE INDEX IF NOT EXISTS sessions_class ON sessions(session_class);
 
 1. 模板启发式阈值默认 20 是否合适？（实测最小的自动化模板 15 条：`Reply with exactly:
    pong`；但 15 也可能是真人重复粘贴。首轮先取 20，观察漏网量。）
+   **round3：** 阈值保持 20，但分组改为 `(backend, normalized_title)`，且规范化标题
+   `< MIN_TITLE_CHARS`（12）的组永不标 automation。活库里「在吗」「hi」共 123 条被
+   跨 backend 标题启发式误标；它们是瘦交互会话，不是机器模板。反向修复只动短标题
+   组，避免误伤 originator 写入的独特长标题。本轮不加 `automation_source` 列。
 2. `automation` 聚合条目放在 Projects 树的什么位置：挂在其 cwd 项目下折叠，还是全局
    一个「Automation」分组？（倾向前者，与目录视图语义一致。）
 3. opencode 无头调用未来若提供 no-persist 官方开关，是否替换 XDG_DATA_HOME 方案。
+
+---
+
+## 8. round3 增量（2026-08-18）
+
+F15 规则补一条位置证据（不放宽到任意 `*-temp-*` 用户仓库）：
+
+4. cwd 含路径组件 `.aionui`，且叶名匹配 `*-temp-<10+ 位数字>` 或 `*-temp-<8+ hex>`
+   （覆盖仍存在的 `~/.aionui/codex-temp-<epoch>` 与
+   `~/.aionui/conversations/.../codex-temp-<hex>`）。
+
+存量启动迁移的 SQL 预筛必须宽到能捞到上述 cwd；精筛仍是 `is_ephemeral_agent_cwd`。
+
+fallback 标题用入库时的 `title_priority = 0`（无 title 字段 → `fallback_title()`）
+作为聚类排除条件，不以 `LIKE '% session · %'` 为主判别。

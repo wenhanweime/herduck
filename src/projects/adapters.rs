@@ -1240,7 +1240,7 @@ const TITLE_SCAN_TURNS: usize = 4;
 /// Hard cap on turns inspected, so a session of only one-word turns still terminates.
 const MAX_TITLE_SCAN_TURNS: usize = 40;
 /// A title shorter than this ("hi", "继续") does not describe the session, so keep looking.
-const MIN_TITLE_CHARS: usize = 12;
+pub(crate) const MIN_TITLE_CHARS: usize = 12;
 /// Enough opener text to describe the work without pulling in transcript bulk.
 const TITLE_MAX_CHARS: usize = 96;
 
