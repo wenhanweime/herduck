@@ -410,14 +410,203 @@ impl App {
                     self.state.projects.history_session_key = None;
                     self.focus_pane_internal_via_api(ws_idx, pane_id);
                     self.state.mode = Mode::Terminal;
-                } else {
+                } else if !self.resume_or_focus_catalog_session(&session_key) {
                     self.open_project_history(session_key);
                 }
             }
             crate::app::state::ProjectSessionActivation::History { session_key } => {
-                self.open_project_history(session_key)
+                if !self.resume_or_focus_catalog_session(&session_key) {
+                    self.open_project_history(session_key);
+                }
             }
         }
+    }
+
+    fn indexed_catalog_session(
+        &self,
+        session_key: &str,
+    ) -> Option<crate::projects::IndexedSessionSummary> {
+        self.state
+            .projects
+            .snapshot
+            .projects
+            .iter()
+            .chain(self.state.projects.snapshot.topics.iter())
+            .flat_map(|project| project.sessions.iter())
+            .find(|session| session.stable_key == session_key)
+            .cloned()
+    }
+
+    fn resume_plan_for_catalog_session(
+        session: &crate::projects::IndexedSessionSummary,
+    ) -> Option<crate::agent_resume::AgentResumePlan> {
+        let session_ref = match session.ref_kind {
+            crate::projects::SessionRefKind::Id => {
+                crate::agent_resume::AgentSessionRef::id(session.ref_value.clone())?
+            }
+            crate::projects::SessionRefKind::Path => {
+                crate::agent_resume::AgentSessionRef::path(session.ref_value.clone())?
+            }
+        };
+        crate::agent_resume::plan(
+            &format!("herdr:{}", session.backend),
+            &session.backend,
+            &session_ref,
+        )
+    }
+
+    fn pane_for_catalog_session(
+        &self,
+        session: &crate::projects::IndexedSessionSummary,
+    ) -> Option<(usize, crate::layout::PaneId)> {
+        if session.ref_value.is_empty() {
+            return None;
+        }
+        for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
+            for tab in &workspace.tabs {
+                for pane_id in tab.layout.pane_ids() {
+                    let Some(terminal_id) = workspace.terminal_id(pane_id) else {
+                        continue;
+                    };
+                    let Some(terminal) = self.state.terminals.get(terminal_id) else {
+                        continue;
+                    };
+                    let Some(persisted) = terminal.persisted_agent_session.as_ref() else {
+                        continue;
+                    };
+                    if persisted.agent == session.backend
+                        && persisted.session_ref.value == session.ref_value
+                    {
+                        return Some((ws_idx, pane_id));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn resume_or_focus_catalog_session(&mut self, session_key: &str) -> bool {
+        let Some(session) = self.indexed_catalog_session(session_key) else {
+            return false;
+        };
+        if let Some((ws_idx, pane_id)) = self.pane_for_catalog_session(&session) {
+            self.state.projects.history_session_key = None;
+            self.focus_pane_internal_via_api(ws_idx, pane_id);
+            self.state.mode = Mode::Terminal;
+            return true;
+        }
+        self.spawn_catalog_session_resume(&session)
+    }
+
+    fn spawn_catalog_session_resume(
+        &mut self,
+        session: &crate::projects::IndexedSessionSummary,
+    ) -> bool {
+        let Some(plan) = Self::resume_plan_for_catalog_session(session) else {
+            return false;
+        };
+        let cwd = session
+            .cwd
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        let extra_env = Vec::new();
+        let (rows, cols) = self.state.estimate_pane_size();
+        let theme = self.state.host_terminal_theme;
+        let scrollback = self.state.pane_scrollback_limit_bytes;
+
+        let spawned = if self.state.workspaces.is_empty() {
+            match crate::workspace::Workspace::new_argv_command_with_extra_env(
+                cwd,
+                rows,
+                cols,
+                &plan.argv,
+                scrollback,
+                theme,
+                self.event_tx.clone(),
+                self.render_notify.clone(),
+                self.render_dirty.clone(),
+                extra_env,
+            ) {
+                Ok((ws, terminal, runtime)) => {
+                    self.terminal_runtimes.insert(terminal.id.clone(), runtime);
+                    self.state.terminals.insert(terminal.id.clone(), terminal);
+                    self.state.workspaces.push(ws);
+                    let ws_idx = self.state.workspaces.len() - 1;
+                    let pane_id = self.state.workspaces[ws_idx].tabs[0].root_pane;
+                    self.state.switch_workspace(ws_idx);
+                    Some((ws_idx, pane_id))
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        agent = %plan.agent,
+                        err = %err,
+                        "failed to resume catalog session in a new workspace"
+                    );
+                    None
+                }
+            }
+        } else {
+            let ws_idx = self.state.active.unwrap_or(0);
+            let created = self.state.workspaces.get_mut(ws_idx).and_then(|ws| {
+                ws.create_tab_argv_command(rows, cols, cwd, &plan.argv, extra_env, scrollback, theme)
+                    .ok()
+            });
+            match created {
+                Some((tab_idx, terminal, runtime)) => {
+                    self.terminal_runtimes.insert(terminal.id.clone(), runtime);
+                    self.state.terminals.insert(terminal.id.clone(), terminal);
+                    let pane_id = self.state.workspaces[ws_idx].tabs[tab_idx].root_pane;
+                    self.state.remove_alias_shadowed_by_new_pane(pane_id);
+                    self.state.switch_workspace_tab(ws_idx, tab_idx);
+                    Some((ws_idx, pane_id))
+                }
+                None => {
+                    tracing::warn!(
+                        agent = %plan.agent,
+                        "failed to resume catalog session in a new tab"
+                    );
+                    None
+                }
+            }
+        };
+
+        let Some((ws_idx, pane_id)) = spawned else {
+            return false;
+        };
+        if let Some(terminal_id) = self.state.workspaces[ws_idx]
+            .terminal_id(pane_id)
+            .cloned()
+        {
+            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                terminal.set_agent_name(plan.agent.clone());
+                terminal.set_manual_label(session.title.clone());
+                if let Some(session_ref) = match session.ref_kind {
+                    crate::projects::SessionRefKind::Id => {
+                        crate::agent_resume::AgentSessionRef::id(session.ref_value.clone())
+                    }
+                    crate::projects::SessionRefKind::Path => {
+                        crate::agent_resume::AgentSessionRef::path(session.ref_value.clone())
+                    }
+                } {
+                    terminal.set_persisted_agent_session(
+                        crate::agent_resume::PersistedAgentSession {
+                            source: format!("herdr:{}", session.backend),
+                            agent: session.backend.clone(),
+                            session_ref,
+                        },
+                    );
+                }
+            }
+        }
+        self.state.projects.history_session_key = None;
+        self.state.mode = Mode::Terminal;
+        self.focus_pane_internal_via_api(ws_idx, pane_id);
+        self.sync_project_runtime_for_pane(pane_id, true);
+        self.schedule_session_save();
+        true
     }
 
     fn open_project_history(&mut self, session_key: String) {
@@ -1173,6 +1362,7 @@ mod tests {
             stable_key: "session-live".into(),
             backend: "codex".into(),
             ref_kind: crate::projects::SessionRefKind::Id,
+            ref_value: String::new(),
             title: "live project session".into(),
             cwd: Some("/tmp/project-live".into()),
             first_activity_at: 1,
@@ -1207,6 +1397,32 @@ mod tests {
             runtime_generation: 9,
         };
         (app, activation, receiver)
+    }
+
+    #[test]
+    fn catalog_session_resume_plan_covers_codex_and_grok() {
+        let mut session = crate::projects::IndexedSessionSummary {
+            stable_key: "k".into(),
+            backend: "codex".into(),
+            ref_kind: crate::projects::SessionRefKind::Id,
+            ref_value: "abc".into(),
+            title: "t".into(),
+            cwd: None,
+            first_activity_at: 1,
+            last_activity_at: 1,
+            live: false,
+            workspace_id: None,
+            pane_id: None,
+            runtime_generation: None,
+            session_class: crate::projects::SessionClass::Interactive,
+        };
+        let plan = App::resume_plan_for_catalog_session(&session).expect("codex plan");
+        assert_eq!(plan.argv, vec!["codex", "resume", "abc"]);
+        session.backend = "grok".into();
+        let plan = App::resume_plan_for_catalog_session(&session).expect("grok plan");
+        assert_eq!(plan.argv, vec!["grok", "--resume", "abc"]);
+        session.ref_value.clear();
+        assert!(App::resume_plan_for_catalog_session(&session).is_none());
     }
 
     #[tokio::test]

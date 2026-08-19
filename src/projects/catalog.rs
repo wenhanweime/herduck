@@ -21,7 +21,8 @@ const CATALOG_SCHEMA_VERSION: u32 = 4;
 /// `sessions_total_order`. Letting SQLite drive from `assignments` instead makes every page
 /// re-sort the whole project in a temp B-tree, which is what
 /// `sessions_page_query_uses_the_total_order_index` guards against.
-const SESSIONS_PAGE_SQL: &str = "SELECT s.stable_key, s.backend, s.ref_kind, s.title, s.cwd,
+const SESSIONS_PAGE_SQL: &str =
+    "SELECT s.stable_key, s.backend, s.ref_kind, s.ref_value, s.title, s.cwd,
             s.first_activity_at, s.last_activity_at,
             r.workspace_id, r.pane_id, r.generation, s.session_class,
             s.user_weight_known, s.user_turns, s.user_chars
@@ -39,7 +40,8 @@ const SESSIONS_PAGE_SQL: &str = "SELECT s.stable_key, s.backend, s.ref_kind, s.t
 ///
 /// Topic membership is deliberately read from `semantic_assignments`; directory ownership stays
 /// in `assignments` and is never replaced by an inferred topic.
-const TOPIC_SESSIONS_PAGE_SQL: &str = "SELECT s.stable_key, s.backend, s.ref_kind, s.title, s.cwd,
+const TOPIC_SESSIONS_PAGE_SQL: &str =
+    "SELECT s.stable_key, s.backend, s.ref_kind, s.ref_value, s.title, s.cwd,
             s.first_activity_at, s.last_activity_at,
             r.workspace_id, r.pane_id, r.generation, s.session_class,
             s.user_weight_known, s.user_turns, s.user_chars
@@ -1481,25 +1483,28 @@ impl ProjectCatalog {
                 params![project_id, cursor_time, cursor_key, (limit + 1) as i64],
                 |row| {
                     let ref_kind: String = row.get(2)?;
-                    let workspace_id: Option<String> = row.get(7)?;
+                    let workspace_id: Option<String> = row.get(8)?;
                     let summary = IndexedSessionSummary {
                         stable_key: row.get(0)?,
                         backend: row.get(1)?,
                         ref_kind: parse_ref_kind(&ref_kind),
-                        title: row.get(3)?,
-                        cwd: row.get(4)?,
-                        first_activity_at: row.get(5)?,
-                        last_activity_at: row.get(6)?,
+                        ref_value: row.get(3)?,
+                        title: row.get(4)?,
+                        cwd: row.get(5)?,
+                        first_activity_at: row.get(6)?,
+                        last_activity_at: row.get(7)?,
                         live: workspace_id.is_some(),
                         workspace_id,
-                        pane_id: row.get(8)?,
-                        runtime_generation: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
-                        session_class: parse_session_class(&row.get::<_, String>(10)?),
+                        pane_id: row.get(9)?,
+                        runtime_generation: row
+                            .get::<_, Option<i64>>(10)?
+                            .map(|value| value as u64),
+                        session_class: parse_session_class(&row.get::<_, String>(11)?),
                     };
-                    let thin = row.get::<_, i64>(11)? == 0
-                        || row.get::<_, i64>(13)? < super::adapters::MIN_ANY_CHARS as i64
-                        || (row.get::<_, i64>(12)? < super::adapters::MIN_SUBSTANTIVE_TURNS as i64
-                            && row.get::<_, i64>(13)?
+                    let thin = row.get::<_, i64>(12)? == 0
+                        || row.get::<_, i64>(14)? < super::adapters::MIN_ANY_CHARS as i64
+                        || (row.get::<_, i64>(13)? < super::adapters::MIN_SUBSTANTIVE_TURNS as i64
+                            && row.get::<_, i64>(14)?
                                 < super::adapters::MIN_SUBSTANTIVE_CHARS as i64);
                     Ok((summary, thin))
                 },
@@ -1544,25 +1549,28 @@ impl ProjectCatalog {
                 params![topic_key, cursor_time, cursor_key, (limit + 1) as i64],
                 |row| {
                     let ref_kind: String = row.get(2)?;
-                    let workspace_id: Option<String> = row.get(7)?;
+                    let workspace_id: Option<String> = row.get(8)?;
                     let summary = IndexedSessionSummary {
                         stable_key: row.get(0)?,
                         backend: row.get(1)?,
                         ref_kind: parse_ref_kind(&ref_kind),
-                        title: row.get(3)?,
-                        cwd: row.get(4)?,
-                        first_activity_at: row.get(5)?,
-                        last_activity_at: row.get(6)?,
+                        ref_value: row.get(3)?,
+                        title: row.get(4)?,
+                        cwd: row.get(5)?,
+                        first_activity_at: row.get(6)?,
+                        last_activity_at: row.get(7)?,
                         live: workspace_id.is_some(),
                         workspace_id,
-                        pane_id: row.get(8)?,
-                        runtime_generation: row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
-                        session_class: parse_session_class(&row.get::<_, String>(10)?),
+                        pane_id: row.get(9)?,
+                        runtime_generation: row
+                            .get::<_, Option<i64>>(10)?
+                            .map(|value| value as u64),
+                        session_class: parse_session_class(&row.get::<_, String>(11)?),
                     };
-                    let thin = row.get::<_, i64>(11)? == 0
-                        || row.get::<_, i64>(13)? < super::adapters::MIN_ANY_CHARS as i64
-                        || (row.get::<_, i64>(12)? < super::adapters::MIN_SUBSTANTIVE_TURNS as i64
-                            && row.get::<_, i64>(13)?
+                    let thin = row.get::<_, i64>(12)? == 0
+                        || row.get::<_, i64>(14)? < super::adapters::MIN_ANY_CHARS as i64
+                        || (row.get::<_, i64>(13)? < super::adapters::MIN_SUBSTANTIVE_TURNS as i64
+                            && row.get::<_, i64>(14)?
                                 < super::adapters::MIN_SUBSTANTIVE_CHARS as i64);
                     Ok((summary, thin))
                 },
@@ -3850,6 +3858,22 @@ mod tests {
             .clear_runtime_mapping(&item.identity.stable_key, 2)
             .unwrap();
         assert!(!catalog.snapshot(50).unwrap().projects[0].sessions[0].live);
+    }
+
+    #[test]
+    fn snapshot_sessions_include_native_ref_value() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let item = candidate("codex", "native-session-id", 10);
+        catalog.upsert_candidate(&item).expect("session");
+        let snapshot = catalog.snapshot(50).expect("snapshot");
+        assert_eq!(
+            snapshot.projects[0].sessions[0].ref_kind,
+            SessionRefKind::Id
+        );
+        assert_eq!(
+            snapshot.projects[0].sessions[0].ref_value,
+            "native-session-id"
+        );
     }
 
     #[test]

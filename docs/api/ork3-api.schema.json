@@ -6767,6 +6767,11 @@
             "ref_kind": {
               "$ref": "#/schemas/success_response/$defs/SessionRefKind"
             },
+            "ref_value": {
+              "default": "",
+              "description": "Native session id or path. Needed to resume the agent; default empty for old clients.",
+              "type": "string"
+            },
             "runtime_generation": {
               "format": "uint64",
               "minimum": 0,

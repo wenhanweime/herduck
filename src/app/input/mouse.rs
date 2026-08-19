@@ -4001,6 +4001,7 @@ mod tests {
                     stable_key: "hist-1".into(),
                     backend: "codex".into(),
                     ref_kind: crate::projects::SessionRefKind::Id,
+                    ref_value: String::new(),
                     title: "fix sidebar click".into(),
                     cwd: Some("/tmp/ait".into()),
                     first_activity_at: 1,

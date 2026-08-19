@@ -465,6 +465,9 @@ pub struct IndexedSessionSummary {
     pub stable_key: String,
     pub backend: String,
     pub ref_kind: SessionRefKind,
+    /// Native session id or path. Needed to resume the agent; default empty for old clients.
+    #[serde(default)]
+    pub ref_value: String,
     pub title: String,
     pub cwd: Option<String>,
     pub first_activity_at: i64,
