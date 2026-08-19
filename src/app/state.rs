@@ -2,6 +2,7 @@ use crate::config::{Keybinds, NewTerminalCwdConfig, SoundConfig, ToastConfig, To
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Direction, Rect};
 use ratatui::style::Color;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 
 use crate::detect::AgentState;
@@ -821,6 +822,7 @@ pub struct ProjectsViewState {
     /// Identity of the tab that was focused when history opened. `root_pane` is stable across
     /// pane exits, so the Esc fallback can still find the tab after its pane is gone.
     pub history_return_tab: Option<(String, crate::layout::PaneId)>,
+    pub expanded_thin_keys: HashSet<String>,
 }
 
 impl Default for ProjectsViewState {
@@ -837,6 +839,7 @@ impl Default for ProjectsViewState {
             history_session_key: None,
             history_scroll: 0,
             history_return_tab: None,
+            expanded_thin_keys: HashSet::new(),
         }
     }
 }
@@ -857,6 +860,7 @@ pub enum ProjectSessionActivation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectTreeAction {
     ToggleProject { project_key: String },
+    ToggleThin { project_key: String },
     Activate(ProjectSessionActivation),
     LoadOlder { project_key: String },
 }

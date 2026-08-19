@@ -499,8 +499,21 @@ impl AppState {
                                 self.mark_session_dirty();
                                 None
                             }
+                            ProjectTreeAction::ToggleThin { project_key } => {
+                                if !self.projects.expanded_thin_keys.remove(&project_key) {
+                                    self.projects.expanded_thin_keys.insert(project_key);
+                                }
+                                None
+                            }
                             action => Some(MouseAction::ProjectTree(action)),
                         };
+                    }
+                    if self.on_sidebar_divider(mouse.column, mouse.row) {
+                        self.drag = Some(DragState {
+                            target: DragTarget::SidebarDivider,
+                        });
+                        self.set_manual_sidebar_width(mouse.column);
+                        return None;
                     }
                     return None;
                 }
@@ -3965,6 +3978,72 @@ mod tests {
             app.state.projects.filter,
             crate::app::state::ProjectFilter::All,
             "a disabled chip must not strand the user in an empty filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn clicking_project_session_row_opens_history() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.sidebar_view = SidebarView::Projects;
+        app.state.mode = Mode::Navigate;
+        app.state.projects.snapshot = crate::projects::ProjectsSnapshot {
+            projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
+            revision: 1,
+            projects: vec![crate::projects::ProjectSummary {
+                canonical_key: "p1".into(),
+                kind: crate::projects::ProjectKind::Cwd,
+                display_name: "ait".into(),
+                canonical_path: "/tmp/ait".into(),
+                sessions: vec![crate::projects::IndexedSessionSummary {
+                    stable_key: "hist-1".into(),
+                    backend: "codex".into(),
+                    ref_kind: crate::projects::SessionRefKind::Id,
+                    title: "fix sidebar click".into(),
+                    cwd: Some("/tmp/ait".into()),
+                    first_activity_at: 1,
+                    last_activity_at: 2,
+                    live: false,
+                    workspace_id: None,
+                    pane_id: None,
+                    runtime_generation: None,
+                    session_class: crate::projects::SessionClass::Interactive,
+                }],
+                automation: Vec::new(),
+                thin_count: 0,
+                next_cursor: None,
+            }],
+            topics: Vec::new(),
+            scan_status: Vec::new(),
+            diagnostic_category: None,
+        };
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let session_hit = app
+            .state
+            .view
+            .project_row_hit_areas
+            .iter()
+            .find(|hit| {
+                matches!(
+                    hit.action,
+                    ProjectTreeAction::Activate(crate::app::state::ProjectSessionActivation::History { .. })
+                )
+            })
+            .cloned()
+            .expect("session row should be clickable");
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            session_hit.rect.x + 1,
+            session_hit.rect.y,
+        ));
+
+        assert_eq!(app.state.mode, Mode::ProjectHistory);
+        assert_eq!(
+            app.state.projects.history_session_key.as_deref(),
+            Some("hist-1")
         );
     }
 

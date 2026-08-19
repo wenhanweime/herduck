@@ -22,7 +22,10 @@ pub(crate) enum ProjectTreeRow {
     },
     Session(IndexedSessionSummary),
     Automation(AutomationTemplateSummary),
-    Thin(usize),
+    Thin {
+        project_key: String,
+        count: usize,
+    },
     LoadOlder {
         project_key: String,
     },
@@ -58,7 +61,10 @@ impl ProjectTreeRow {
                 };
                 Some(ProjectTreeAction::Activate(activation))
             }
-            Self::Automation(_) | Self::Thin(_) => None,
+            Self::Thin { project_key, .. } => Some(ProjectTreeAction::ToggleThin {
+                project_key: project_key.clone(),
+            }),
+            Self::Automation(_) => None,
             Self::LoadOlder { project_key } => Some(ProjectTreeAction::LoadOlder {
                 project_key: project_key.clone(),
             }),
@@ -150,7 +156,12 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             kind: project.kind,
         });
         if !collapsed {
-            let collapse_thin = query.is_empty() && app.projects.filter == ProjectFilter::All;
+            let collapse_thin = query.is_empty()
+                && app.projects.filter == ProjectFilter::All
+                && !app
+                    .projects
+                    .expanded_thin_keys
+                    .contains(&project.canonical_key);
             let thin = if collapse_thin {
                 sessions.len().min(project.thin_count as usize)
             } else {
@@ -164,7 +175,10 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
                     .map(ProjectTreeRow::Session),
             );
             if thin > 0 {
-                rows.push(ProjectTreeRow::Thin(thin));
+                rows.push(ProjectTreeRow::Thin {
+                    project_key: project.canonical_key.clone(),
+                    count: thin,
+                });
             }
             rows.extend(automation.into_iter().map(ProjectTreeRow::Automation));
             if project.next_cursor.is_some() && app.projects.filter == ProjectFilter::All {
@@ -265,15 +279,23 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
         };
     }
 
-    let first_width = content.width / 3;
-    let second_width = content.width.saturating_sub(first_width) / 2;
+    let tab_gap = u16::from(content.width >= 5);
+    let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(2));
+    let first_width = tab_inner / 3;
+    let second_width = tab_inner.saturating_sub(first_width) / 2;
+    let third_width = tab_inner.saturating_sub(first_width.saturating_add(second_width));
     let sidebar_tabs = [
         Rect::new(content.x, content.y, first_width, 1),
-        Rect::new(content.x + first_width, content.y, second_width, 1),
         Rect::new(
-            content.x + first_width + second_width,
+            content.x + first_width + tab_gap,
             content.y,
-            content.width.saturating_sub(first_width + second_width),
+            second_width,
+            1,
+        ),
+        Rect::new(
+            content.x + first_width + tab_gap + second_width + tab_gap,
+            content.y,
+            third_width,
             1,
         ),
     ];
@@ -332,7 +354,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 }
 
 pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 3]) {
-    let labels = ["sessions", "projects", "clusters"];
+    let labels = ["Sessions", "Projects", "Clusters"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 {
             continue;
@@ -498,7 +520,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                     Style::default().fg(app.palette.overlay0),
                 ),
             ]),
-            ProjectTreeRow::Thin(count) => Line::from(Span::styled(
+            ProjectTreeRow::Thin { count, .. } => Line::from(Span::styled(
                 format!("  +{count} short sessions"),
                 Style::default().fg(app.palette.surface_dim),
             )),
@@ -616,9 +638,60 @@ mod tests {
         assert!(geometry.sidebar_tabs.iter().all(|rect| rect.height == 1));
         assert_eq!(geometry.sidebar_tabs[0].y, geometry.filter_tabs[0].y - 1);
         assert_eq!(geometry.sidebar_tabs[2].right(), 29);
+        assert!(
+            geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
+            "Sessions/Projects/Clusters tabs must not abut"
+        );
         assert!(geometry.filter_tabs.iter().all(|rect| rect.height == 1));
         assert_eq!(geometry.row_hits.len(), 2);
         assert_eq!(geometry.row_hits[0].rect.height, 1);
+    }
+
+    #[test]
+    fn thin_row_is_clickable_and_expands_sessions() {
+        let mut state = AppState::test_new();
+        let mut snapshot = snapshot();
+        snapshot.projects[0].thin_count = 1;
+        snapshot.projects[0].sessions.push(IndexedSessionSummary {
+            stable_key: "s-thin".into(),
+            backend: "codex".into(),
+            ref_kind: SessionRefKind::Id,
+            title: "hi".into(),
+            cwd: Some("/tmp/ait".into()),
+            first_activity_at: 1,
+            last_activity_at: 1,
+            live: false,
+            workspace_id: None,
+            pane_id: None,
+            runtime_generation: None,
+            session_class: crate::projects::SessionClass::Interactive,
+        });
+        state.projects.snapshot = snapshot;
+        let rows = project_tree_rows(&state);
+        assert!(matches!(
+            rows.last(),
+            Some(ProjectTreeRow::Thin {
+                project_key,
+                count: 1
+            }) if project_key == "p1"
+        ));
+        assert!(matches!(
+            rows.last().and_then(ProjectTreeRow::action),
+            Some(ProjectTreeAction::ToggleThin { ref project_key }) if project_key == "p1"
+        ));
+
+        state.projects.expanded_thin_keys.insert("p1".into());
+        let expanded = project_tree_rows(&state);
+        assert_eq!(
+            expanded
+                .iter()
+                .filter(|row| matches!(row, ProjectTreeRow::Session(_)))
+                .count(),
+            2
+        );
+        assert!(!expanded
+            .iter()
+            .any(|row| matches!(row, ProjectTreeRow::Thin { .. })));
     }
 
     #[test]

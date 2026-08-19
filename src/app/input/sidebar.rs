@@ -1574,6 +1574,27 @@ mod tests {
     }
 
     #[test]
+    fn dragging_sidebar_divider_from_projects_view_sets_manual_width() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_view = crate::app::state::SidebarView::Projects;
+        crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 106, 20));
+        let divider_col = app.state.view.sidebar_rect.x + app.state.view.sidebar_rect.width - 1;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            divider_col,
+            8,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            divider_col + 5,
+            8,
+        ));
+
+        assert_eq!(app.state.sidebar_width, 31);
+    }
+
+    #[test]
     fn dragging_sidebar_divider_sets_manual_width() {
         let mut app = app_for_mouse_test();
 

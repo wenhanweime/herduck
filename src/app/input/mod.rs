@@ -361,6 +361,12 @@ impl App {
                 self.state.mark_session_dirty();
                 self.normalize_project_selection();
             }
+            crate::app::state::ProjectTreeAction::ToggleThin { project_key } => {
+                if !self.state.projects.expanded_thin_keys.remove(&project_key) {
+                    self.state.projects.expanded_thin_keys.insert(project_key);
+                }
+                self.normalize_project_selection();
+            }
             crate::app::state::ProjectTreeAction::Activate(activation) => {
                 self.activate_project_session(activation)
             }
