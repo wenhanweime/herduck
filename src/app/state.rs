@@ -819,6 +819,8 @@ pub struct ProjectsViewState {
     pub scroll: usize,
     pub history_session_key: Option<String>,
     pub history_scroll: usize,
+    /// Why the session could not be resumed, shown on the read-only card when set.
+    pub history_fallback_reason: Option<String>,
     /// Identity of the tab that was focused when history opened. `root_pane` is stable across
     /// pane exits, so the Esc fallback can still find the tab after its pane is gone.
     pub history_return_tab: Option<(String, crate::layout::PaneId)>,
@@ -838,6 +840,7 @@ impl Default for ProjectsViewState {
             scroll: 0,
             history_session_key: None,
             history_scroll: 0,
+            history_fallback_reason: None,
             history_return_tab: None,
             expanded_thin_keys: HashSet::new(),
         }

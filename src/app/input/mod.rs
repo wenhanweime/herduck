@@ -410,16 +410,21 @@ impl App {
                     self.state.projects.history_session_key = None;
                     self.focus_pane_internal_via_api(ws_idx, pane_id);
                     self.state.mode = Mode::Terminal;
-                } else if !self.resume_or_focus_catalog_session(&session_key) {
-                    self.open_project_history(session_key);
+                } else if let Some(reason) = self.resume_or_focus_catalog_session(&session_key) {
+                    self.open_project_history_with_reason(session_key, reason);
                 }
             }
             crate::app::state::ProjectSessionActivation::History { session_key } => {
-                if !self.resume_or_focus_catalog_session(&session_key) {
-                    self.open_project_history(session_key);
+                if let Some(reason) = self.resume_or_focus_catalog_session(&session_key) {
+                    self.open_project_history_with_reason(session_key, reason);
                 }
             }
         }
+    }
+
+    fn open_project_history_with_reason(&mut self, session_key: String, reason: String) {
+        self.state.projects.history_fallback_reason = Some(reason);
+        self.open_project_history(session_key);
     }
 
     fn indexed_catalog_session(
@@ -485,15 +490,18 @@ impl App {
         None
     }
 
-    fn resume_or_focus_catalog_session(&mut self, session_key: &str) -> bool {
+    /// Tries to activate a catalog session. Returns `None` when the session was focused or
+    /// resumed, and `Some(reason)` when it could not be resumed and read-only history is the
+    /// fallback.
+    fn resume_or_focus_catalog_session(&mut self, session_key: &str) -> Option<String> {
         let Some(session) = self.indexed_catalog_session(session_key) else {
-            return false;
+            return Some("This session is no longer available in the current snapshot.".into());
         };
         if let Some((ws_idx, pane_id)) = self.pane_for_catalog_session(&session) {
             self.state.projects.history_session_key = None;
             self.focus_pane_internal_via_api(ws_idx, pane_id);
             self.state.mode = Mode::Terminal;
-            return true;
+            return None;
         }
         self.spawn_catalog_session_resume(&session)
     }
@@ -501,9 +509,13 @@ impl App {
     fn spawn_catalog_session_resume(
         &mut self,
         session: &crate::projects::IndexedSessionSummary,
-    ) -> bool {
+    ) -> Option<String> {
         let Some(plan) = Self::resume_plan_for_catalog_session(session) else {
-            return false;
+            return Some(
+                "No resume command is available for this session (missing native session id \
+                 or unsupported agent)."
+                    .into(),
+            );
         };
         let cwd = session
             .cwd
@@ -574,7 +586,11 @@ impl App {
         };
 
         let Some((ws_idx, pane_id)) = spawned else {
-            return false;
+            return Some(
+                "Failed to start the resume command in a new tab. The session is available \
+                 read-only below."
+                    .into(),
+            );
         };
         if let Some(terminal_id) = self.state.workspaces[ws_idx]
             .terminal_id(pane_id)
@@ -606,7 +622,7 @@ impl App {
         self.focus_pane_internal_via_api(ws_idx, pane_id);
         self.sync_project_runtime_for_pane(pane_id, true);
         self.schedule_session_save();
-        true
+        None
     }
 
     fn open_project_history(&mut self, session_key: String) {

@@ -189,6 +189,16 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:grok", "grok", AgentSessionRefKind::Path) => {
+            // Grok's `--resume` takes the session id, not a path. The catalog stores the
+            // session directory; its leaf name is the native id used by the Grok CLI.
+            let id = std::path::Path::new(&session_ref.value)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or(&session_ref.value);
+            vec!["grok".into(), "--resume".into(), id.to_string()]
+        }
         _ => return None,
     };
 
@@ -415,6 +425,23 @@ mod tests {
             .unwrap()
             .argv,
             vec!["grok", "--resume", "grok-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:grok",
+                "grok",
+                &AgentSessionRef::path(
+                    "/Users/pot/.grok/sessions/%2FUsers%2Fpot%2FWorkspace/01a01578-b311-7013-93bb-5cf870ffea47"
+                )
+                .unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec![
+                "grok",
+                "--resume",
+                "01a01578-b311-7013-93bb-5cf870ffea47"
+            ]
         );
     }
 

@@ -1,6 +1,15 @@
 # SPEC：Projects/Clusters 点击后续上会话
 
-> 状态：v0.1 · 已实施
+> 状态：v0.2 · 已实施
+
+## 5. round2 增量（2026-08-20）
+
+- Grok 的 Catalog 身份是 **Path**（session 目录），resume 用目录叶名（native id）：
+  `grok --resume <id>`。
+- 只读卡文案按 fallback 原因区分：无 native id / 不支持该 agent / spawn 失败 / 会话消失，
+  不再统一显示「No process was created」。
+- 交互：左键点击 = 激活（live 聚焦 → 有 plan 则新 tab resume → 否则只读卡说明原因）。
+  右键菜单保留为后续增强（不做）。
 > 日期：2026-08-20
 > 关系：替换 `SPEC-2026-08-19-sidebar-interaction.md` F4（当时标 P2 不做）。
 > 用户主诉：点 session 无法切进去、无法继续对话。

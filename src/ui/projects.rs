@@ -564,14 +564,22 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
         ),
         |session| {
             let cwd = session.cwd.as_deref().unwrap_or("unknown cwd");
+            let reason = app
+                .projects
+                .history_fallback_reason
+                .as_deref()
+                .unwrap_or(
+                    "No resume command was run. Press Esc to return to your previous session.",
+                );
             (
                 session.title.clone(),
                 format!(
-                    "Read-only history\n\nAgent: {}\nWorking directory: {}\nFirst activity: {}\nLast activity: {}\n\nNo process was created and no resume command was run. Press Esc to return.",
+                    "Read-only history\n\nAgent: {}\nWorking directory: {}\nFirst activity: {}\nLast activity: {}\n\n{}\n\nPress Esc to return.",
                     session.backend,
                     cwd,
                     session.first_activity_at,
-                    session.last_activity_at
+                    session.last_activity_at,
+                    reason
                 ),
             )
         },
