@@ -255,6 +255,7 @@ impl App {
                 format!("tab {} could not be closed", target.tab_id),
             );
         }
+        self.clear_project_runtime_for_panes(pane_ids.iter().copied());
         self.state.remove_plugin_pane_records(pane_ids);
         self.state.remove_unattached_terminal_ids(terminal_ids);
         self.shutdown_detached_terminal_runtimes();
@@ -266,6 +267,10 @@ impl App {
                 workspace_id,
             },
         });
+        if self.project_service.is_available() {
+            self.state.projects.snapshot = self.project_service.snapshot();
+            self.normalize_project_selection();
+        }
 
         encode_success(id, ResponseResult::Ok {})
     }

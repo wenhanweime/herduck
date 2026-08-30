@@ -1544,6 +1544,10 @@ impl App {
                 "closing this pane would close a worktree group",
             ));
         }
+        // A pane close is a normal runtime teardown path (for example, Ctrl-b x), not
+        // necessarily a terminal-exit event. Clear the Catalog lease before removing the
+        // pane so Project/Cluster immediately stop presenting this session as live.
+        self.clear_project_runtime_for_pane(pane_id);
         let workspace_snapshot = self.workspace_info(ws_idx);
         let terminal_id = self.state.terminal_id_for_pane(ws_idx, pane_id);
         let should_close_workspace = {
@@ -1585,6 +1589,14 @@ impl App {
             if let Some((ws_idx, tab_idx)) = layout_update_target {
                 self.emit_layout_updated_event(ws_idx, tab_idx);
             }
+        }
+
+        // `clear_runtime_mapping` is serviced synchronously, but the client snapshot is
+        // otherwise refreshed on the scheduler tick. Refresh it now so the just-closed row
+        // loses its green light/highlight in the same interaction.
+        if self.project_service.is_available() {
+            self.state.projects.snapshot = self.project_service.snapshot();
+            self.normalize_project_selection();
         }
 
         Ok(())

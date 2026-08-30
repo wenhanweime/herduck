@@ -793,6 +793,13 @@ pub enum ProjectGrouping {
     Topics,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProjectHistoryView {
+    #[default]
+    Preview,
+    Full,
+}
+
 impl SidebarView {
     pub(crate) fn is_project_browser(self) -> bool {
         matches!(self, Self::Projects | Self::Clusters)
@@ -819,6 +826,12 @@ pub struct ProjectsViewState {
     pub scroll: usize,
     pub history_session_key: Option<String>,
     pub history_scroll: usize,
+    /// The first activation is a compact transcript preview. A second activation enters the full
+    /// conversation without starting the agent process.
+    pub history_view: ProjectHistoryView,
+    /// Text composed against a historical session. It remains client presentation state until a
+    /// non-empty submission explicitly starts the resume process.
+    pub history_draft: String,
     /// Why the session could not be resumed, shown on the read-only card when set.
     pub history_fallback_reason: Option<String>,
     /// Identity of the tab that was focused when history opened. `root_pane` is stable across
@@ -840,6 +853,8 @@ impl Default for ProjectsViewState {
             scroll: 0,
             history_session_key: None,
             history_scroll: 0,
+            history_view: ProjectHistoryView::Preview,
+            history_draft: String::new(),
             history_fallback_reason: None,
             history_return_tab: None,
             expanded_thin_keys: HashSet::new(),
@@ -872,6 +887,12 @@ pub enum ProjectTreeAction {
 pub struct ProjectRowHitArea {
     pub rect: Rect,
     pub action: ProjectTreeAction,
+    /// Index of this row in the full tree.
+    ///
+    /// Carried rather than derived from the click's row offset: the current session's row is two
+    /// lines tall, so offset arithmetic silently selects a neighbour once any expanded row is
+    /// above the click.
+    pub row_index: usize,
 }
 
 pub struct ViewState {

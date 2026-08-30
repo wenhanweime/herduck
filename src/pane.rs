@@ -62,6 +62,27 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", PANE_COLORTERM);
 }
 
+fn apply_interactive_agent_color_env(cmd: &mut CommandBuilder, program: &str) {
+    if !is_claude_program(program) {
+        return;
+    }
+
+    // Claude Code honors NO_COLOR (and the companion CLICOLOR/FORCE_COLOR flags) inherited
+    // from the host shell. That made every Claude pane in Herdr render as undifferentiated
+    // white even though the PTY and Ghostty color pipeline support truecolor. Herdr owns the
+    // child terminal presentation, so an interactive Claude pane must opt back into color.
+    cmd.env_remove("NO_COLOR");
+    cmd.env("CLICOLOR", "1");
+    cmd.env("FORCE_COLOR", "1");
+}
+
+fn is_claude_program(program: &str) -> bool {
+    std::path::Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "claude" | "claude.exe"))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PaneLaunchEnv {
     extra: Vec<(String, String)>,
@@ -1671,6 +1692,7 @@ impl PaneRuntime {
         cmd.cwd(cwd);
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
+        apply_interactive_agent_color_env(&mut cmd, program);
         Self::spawn_command_builder(
             pane_id,
             rows,
@@ -2817,6 +2839,15 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_program_detection_handles_direct_and_absolute_commands() {
+        assert!(is_claude_program("claude"));
+        assert!(is_claude_program("claude.exe"));
+        assert!(is_claude_program("/opt/homebrew/bin/claude"));
+        assert!(!is_claude_program("codex"));
+        assert!(!is_claude_program("node"));
+    }
 
     #[test]
     fn shutdown_liveness_treats_reaped_direct_child_as_gone() {

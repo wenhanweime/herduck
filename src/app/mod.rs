@@ -105,6 +105,9 @@ pub struct App {
     pub(crate) project_roots: crate::projects::adapters::AdapterRootSet,
     pub(crate) project_runtime_leases:
         HashMap<crate::layout::PaneId, crate::projects::runtime::RuntimeLease>,
+    /// A historical-session submission waiting for the resumed agent to expose an idle prompt.
+    /// Merely previewing or entering history never adds an entry here and never starts a runtime.
+    pub(crate) pending_catalog_submissions: HashMap<crate::layout::PaneId, String>,
     pub(crate) next_project_runtime_generation: u64,
     pub(crate) loaded_projects_config: crate::config::ProjectsConfig,
     pub(crate) last_focus: Option<(usize, crate::layout::PaneId)>,
@@ -740,6 +743,8 @@ impl App {
             // path-based grouping immediately, then regroups as classification lands.
             project_service
                 .start_semantic_classification(crate::projects::semantic::SemanticConfig::default());
+            project_service
+                .start_title_generation(crate::projects::semantic::SemanticConfig::default());
         }
         state.projects.snapshot = project_service.snapshot();
 
@@ -786,6 +791,7 @@ impl App {
             project_service,
             project_roots,
             project_runtime_leases: HashMap::new(),
+            pending_catalog_submissions: HashMap::new(),
             next_project_runtime_generation: 1,
             loaded_projects_config: config.projects.clone(),
             last_focus,

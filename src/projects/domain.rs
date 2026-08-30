@@ -11,6 +11,7 @@ const PROJECT_KEY_DOMAIN: &[u8] = b"herdr-projects-project-v1\0";
 /// `last_activity_at` but not this fingerprint, so it is not reclassified.
 const SEMANTIC_FINGERPRINT_DOMAIN: &[u8] = b"ork3-semantic-v1\0";
 const SEMANTIC_TOPIC_DOMAIN: &[u8] = b"ork3-semantic-topic-v1\0";
+const TITLE_FINGERPRINT_DOMAIN: &[u8] = b"ork3-title-v1\0";
 
 /// Fingerprint of the metadata sent to a classifier.
 ///
@@ -33,6 +34,23 @@ pub(crate) fn semantic_topic_key(label: &str) -> String {
         SEMANTIC_TOPIC_DOMAIN,
         &[normalize_topic_label(label).as_bytes()],
     )
+}
+
+/// Fingerprint of the cleaned semantic envelope used for title generation.
+pub(crate) fn title_input_fingerprint(
+    backend: &str,
+    folder: Option<&str>,
+    intents: &[String],
+    outcome: Option<&str>,
+) -> String {
+    let mut parts = vec![
+        backend.as_bytes().to_vec(),
+        folder.unwrap_or_default().as_bytes().to_vec(),
+    ];
+    parts.extend(intents.iter().map(|value| value.as_bytes().to_vec()));
+    parts.push(outcome.unwrap_or_default().as_bytes().to_vec());
+    let refs = parts.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    versioned_key(TITLE_FINGERPRINT_DOMAIN, &refs)
 }
 
 /// Stable identity for repeated session templates.
@@ -479,6 +497,42 @@ pub struct IndexedSessionSummary {
     /// Server-owned classification. Additive/defaulted so v1 clients remain compatible.
     #[serde(default)]
     pub session_class: SessionClass,
+    /// Semantic topic this session was classified into, when one exists.
+    ///
+    /// The classifier already computes this for grouping; carrying it per-session lets a client
+    /// show what a session is about without re-deriving it. Additive and defaulted, like
+    /// `ref_value` and `session_class`, so v1 clients keep working.
+    #[serde(default)]
+    pub topic_label: Option<String>,
+    /// Path to the agent's own transcript, when the scanner recorded one.
+    ///
+    /// Needed to preview a historical conversation read-only. Additive and defaulted.
+    #[serde(default)]
+    pub transcript_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingTitleSession {
+    pub stable_key: String,
+    pub backend: String,
+    pub native_title: String,
+    pub cwd: Option<String>,
+    pub transcript_ref: Option<String>,
+    pub stored_fingerprint: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionTitleUpdate {
+    pub stable_key: String,
+    pub title: String,
+    pub source: String,
+    pub status: String,
+    pub error: Option<String>,
+    pub backend: Option<String>,
+    pub model: Option<String>,
+    pub fingerprint: String,
+    pub generated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

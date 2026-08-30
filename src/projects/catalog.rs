@@ -8,12 +8,38 @@ use super::classifier;
 use super::domain::{
     normalize_session_title, AdapterScanStatus, AutomationTemplateSummary, CandidateField,
     IndexedSessionSummary, InheritedSemanticTopic, PendingSemanticDuplicate,
-    PendingSemanticSession, ProjectClassification, ProjectKind, ProjectSummary, ProjectsSnapshot,
-    SemanticAssignment, SemanticTopicMerge, SessionCandidate, SessionClass, SessionCursor,
-    SessionIdentity, SessionRefKind, PROJECTS_SCHEMA_VERSION,
+    PendingSemanticSession, PendingTitleSession, ProjectClassification, ProjectKind,
+    ProjectSummary, ProjectsSnapshot, SemanticAssignment, SemanticTopicMerge, SessionCandidate,
+    SessionClass, SessionCursor, SessionIdentity, SessionRefKind, SessionTitleUpdate,
+    PROJECTS_SCHEMA_VERSION,
 };
 
-const CATALOG_SCHEMA_VERSION: u32 = 4;
+const CATALOG_SCHEMA_VERSION: u32 = 6;
+
+/// Columns added by the v6 migration and present in a freshly created schema.
+///
+/// Declared once so the migration and the `CREATE TABLE` cannot drift apart.
+const TITLE_COLUMNS: [(&str, &str); 10] = [
+    ("generated_title", "generated_title TEXT"),
+    ("custom_title", "custom_title TEXT"),
+    (
+        "title_source",
+        "title_source TEXT NOT NULL DEFAULT 'heuristic'",
+    ),
+    (
+        "title_status",
+        "title_status TEXT NOT NULL DEFAULT 'pending'",
+    ),
+    ("title_error", "title_error TEXT"),
+    ("title_backend", "title_backend TEXT"),
+    ("title_model", "title_model TEXT"),
+    ("title_generated_at", "title_generated_at INTEGER"),
+    ("title_input_fingerprint", "title_input_fingerprint TEXT"),
+    (
+        "title_schema_version",
+        "title_schema_version INTEGER NOT NULL DEFAULT 1",
+    ),
+];
 
 /// Keyset page over one project's sessions.
 ///
@@ -21,14 +47,16 @@ const CATALOG_SCHEMA_VERSION: u32 = 4;
 /// `sessions_total_order`. Letting SQLite drive from `assignments` instead makes every page
 /// re-sort the whole project in a temp B-tree, which is what
 /// `sessions_page_query_uses_the_total_order_index` guards against.
-const SESSIONS_PAGE_SQL: &str =
-    "SELECT s.stable_key, s.backend, s.ref_kind, s.ref_value, s.title, s.cwd,
+const SESSIONS_PAGE_SQL: &str = "SELECT s.stable_key, s.backend, s.ref_kind, s.ref_value,
+            COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title), s.cwd,
             s.first_activity_at, s.last_activity_at,
             r.workspace_id, r.pane_id, r.generation, s.session_class,
-            s.user_weight_known, s.user_turns, s.user_chars
+            s.user_weight_known, s.user_turns, s.user_chars, sa.topic_label,
+            s.transcript_ref
      FROM sessions s
      CROSS JOIN assignments a ON a.session_key = s.stable_key
      LEFT JOIN runtime_mappings r ON r.session_key = s.stable_key
+     LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
      WHERE a.project_id = ?1
        AND (s.session_class = 'interactive' OR a.locked = 1)
        AND (?2 IS NULL OR s.last_activity_at < ?2
@@ -40,11 +68,12 @@ const SESSIONS_PAGE_SQL: &str =
 ///
 /// Topic membership is deliberately read from `semantic_assignments`; directory ownership stays
 /// in `assignments` and is never replaced by an inferred topic.
-const TOPIC_SESSIONS_PAGE_SQL: &str =
-    "SELECT s.stable_key, s.backend, s.ref_kind, s.ref_value, s.title, s.cwd,
+const TOPIC_SESSIONS_PAGE_SQL: &str = "SELECT s.stable_key, s.backend, s.ref_kind, s.ref_value,
+            COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title), s.cwd,
             s.first_activity_at, s.last_activity_at,
             r.workspace_id, r.pane_id, r.generation, s.session_class,
-            s.user_weight_known, s.user_turns, s.user_chars
+            s.user_weight_known, s.user_turns, s.user_chars, sa.topic_label,
+            s.transcript_ref
      FROM sessions s
      CROSS JOIN semantic_assignments sa ON sa.session_key = s.stable_key
      LEFT JOIN runtime_mappings r ON r.session_key = s.stable_key
@@ -217,7 +246,15 @@ impl ProjectCatalog {
         }
         if version == 3 {
             self.migrate_v3_to_v4()?;
-            return Ok(());
+            version = 4;
+        }
+        if version == 4 {
+            self.migrate_v4_to_v5()?;
+            version = 5;
+        }
+        if version == 5 {
+            self.migrate_v5_to_v6()?;
+            version = 6;
         }
         if version == CATALOG_SCHEMA_VERSION {
             return Ok(());
@@ -271,6 +308,16 @@ impl ProjectCatalog {
                     CHECK (user_weight_known IN (0, 1)),
                 session_class TEXT NOT NULL DEFAULT 'interactive'
                     CHECK (session_class IN ('interactive', 'automation', 'ephemeral')),
+                generated_title TEXT,
+                custom_title TEXT,
+                title_source TEXT NOT NULL DEFAULT 'heuristic',
+                title_status TEXT NOT NULL DEFAULT 'pending',
+                title_error TEXT,
+                title_backend TEXT,
+                title_model TEXT,
+                title_generated_at INTEGER,
+                title_input_fingerprint TEXT,
+                title_schema_version INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 UNIQUE(backend, ref_kind, ref_value)
@@ -368,7 +415,7 @@ impl ProjectCatalog {
             CREATE INDEX semantic_fingerprint
                 ON semantic_assignments(fingerprint);
 
-            PRAGMA user_version = 4;
+            PRAGMA user_version = 6;
             "#,
         )?;
         transaction.commit()?;
@@ -467,6 +514,64 @@ impl ProjectCatalog {
 
     /// Distinguishes a successfully measured empty session from a legacy row whose adapter did
     /// not expose weight yet. Codex was the only measured backend before v4.
+    /// Replaces OpenCode's `New session - <ISO timestamp>` placeholder with the same fallback the
+    /// adapter now produces.
+    ///
+    /// The adapter learned to reject that placeholder, but rejecting it yields `title: None`, and
+    /// the upsert only writes a title when the candidate carries one — so 89 rows kept the
+    /// placeholder no matter how often they were rescanned. Only a migration can clear them.
+    /// Adds the generated-title columns.
+    ///
+    /// `title` keeps holding the raw observed title — it is part of the source-merge contract and
+    /// is never overwritten by title generation. The generated title lives beside it so a failed
+    /// or disabled generator always leaves a readable row.
+    fn migrate_v5_to_v6(&mut self) -> Result<(), CatalogError> {
+        // A catalog upgraded from v1 reaches this step before `sessions` exists in its final
+        // shape; adding columns to a missing table would fail the whole chain.
+        if !table_has_column(&self.connection, "sessions", "stable_key")? {
+            let transaction = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            transaction.pragma_update(None, "user_version", 6)?;
+            transaction.commit()?;
+            return Ok(());
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (column, definition) in TITLE_COLUMNS {
+            if !table_has_column(&transaction, "sessions", column)? {
+                transaction
+                    .execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {definition};"))?;
+            }
+        }
+        transaction.pragma_update(None, "user_version", 6)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn migrate_v4_to_v5(&mut self) -> Result<(), CatalogError> {
+        // A v1 catalog reaches this step before its `sessions` table has the columns this update
+        // reads, so the rewrite is skipped rather than failing the whole upgrade chain. Such a
+        // catalog has no OpenCode placeholder rows to clean either.
+        let can_rewrite = table_has_column(&self.connection, "sessions", "title")?
+            && table_has_column(&self.connection, "sessions", "stable_key")?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if can_rewrite {
+            transaction.execute(
+                "UPDATE sessions
+                    SET title = 'Opencode session · ' || substr(stable_key, 1, 8)
+                  WHERE title LIKE 'New session - %'",
+                [],
+            )?;
+        }
+        transaction.pragma_update(None, "user_version", 5)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     fn migrate_v3_to_v4(&mut self) -> Result<(), CatalogError> {
         let has_weight_known = table_has_column(&self.connection, "sessions", "user_weight_known")?;
         let has_legacy_weight_columns = table_has_column(&self.connection, "sessions", "backend")?
@@ -866,7 +971,9 @@ impl ProjectCatalog {
         limit: usize,
     ) -> Result<Vec<PendingSemanticSession>, CatalogError> {
         let mut statement = self.connection.prepare(
-            "SELECT s.stable_key, s.title, s.cwd, s.backend, sa.fingerprint,
+            "SELECT s.stable_key,
+                    COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
+                    s.cwd, s.backend, sa.fingerprint,
                     sa.topic_key, sa.topic_label, sa.backend_used, sa.model_used
              FROM sessions s
              JOIN assignments a ON a.session_key = s.stable_key
@@ -999,6 +1106,104 @@ impl ProjectCatalog {
             .query_map(params![limit as i64], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Sessions whose title has not been generated for the current transcript envelope.
+    pub(crate) fn pending_title_sessions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<PendingTitleSession>, CatalogError> {
+        let mut statement = self.connection.prepare(
+            "SELECT stable_key, backend, title, cwd, transcript_ref,
+                    title_input_fingerprint, title_status
+             FROM sessions
+             WHERE session_class = 'interactive'
+               AND custom_title IS NULL
+               AND (title_status IN ('pending', 'failed')
+                    OR title_input_fingerprint IS NULL)
+             ORDER BY last_activity_at DESC, stable_key ASC
+             LIMIT ?1",
+        )?;
+        let rows = statement
+            .query_map([limit.clamp(1, 500) as i64], |row| {
+                Ok(PendingTitleSession {
+                    stable_key: row.get(0)?,
+                    backend: row.get(1)?,
+                    native_title: row.get(2)?,
+                    cwd: row.get(3)?,
+                    transcript_ref: row.get(4)?,
+                    stored_fingerprint: row.get(5)?,
+                    status: row.get(6)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CatalogError::from);
+        rows
+    }
+
+    /// Marks in-flight title work as pending so an interrupted process can retry it safely.
+    pub(crate) fn reset_running_titles(&mut self) -> Result<(), CatalogError> {
+        self.connection.execute(
+            "UPDATE sessions SET title_status = 'pending'
+             WHERE title_status = 'running'",
+            [],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn claim_title_batch(&mut self, keys: &[String]) -> Result<u64, CatalogError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for key in keys {
+            transaction.execute(
+                "UPDATE sessions SET title_status = 'running' WHERE stable_key = ?1",
+                [key],
+            )?;
+        }
+        let revision = bump_revision(&transaction)?;
+        transaction.commit()?;
+        Ok(revision)
+    }
+
+    /// Applies title results atomically. A failed item keeps a readable fallback in
+    /// `generated_title`, while preserving the provider's original `title` column.
+    pub(crate) fn apply_title_batch(
+        &mut self,
+        updates: &[SessionTitleUpdate],
+    ) -> Result<u64, CatalogError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for update in updates {
+            transaction.execute(
+                "UPDATE sessions
+                    SET generated_title = ?2,
+                        title_source = ?3,
+                        title_status = ?4,
+                        title_error = ?5,
+                        title_backend = ?6,
+                        title_model = ?7,
+                        title_generated_at = ?8,
+                        title_input_fingerprint = ?9,
+                        updated_at = MAX(updated_at, ?8)
+                  WHERE stable_key = ?1 AND custom_title IS NULL",
+                params![
+                    update.stable_key,
+                    update.title,
+                    update.source,
+                    update.status,
+                    update.error,
+                    update.backend,
+                    update.model,
+                    update.generated_at,
+                    update.fingerprint,
+                ],
+            )?;
+        }
+        let revision = bump_revision(&transaction)?;
+        transaction.commit()?;
+        Ok(revision)
     }
 
     /// Reserves the daily topic-merge maintenance window and returns the current labels.
@@ -1500,6 +1705,8 @@ impl ProjectCatalog {
                             .get::<_, Option<i64>>(10)?
                             .map(|value| value as u64),
                         session_class: parse_session_class(&row.get::<_, String>(11)?),
+                        topic_label: row.get(15)?,
+                        transcript_ref: row.get(16)?,
                     };
                     let thin = row.get::<_, i64>(12)? == 0
                         || row.get::<_, i64>(14)? < super::adapters::MIN_ANY_CHARS as i64
@@ -1566,6 +1773,8 @@ impl ProjectCatalog {
                             .get::<_, Option<i64>>(10)?
                             .map(|value| value as u64),
                         session_class: parse_session_class(&row.get::<_, String>(11)?),
+                        topic_label: row.get(15)?,
+                        transcript_ref: row.get(16)?,
                     };
                     let thin = row.get::<_, i64>(12)? == 0
                         || row.get::<_, i64>(14)? < super::adapters::MIN_ANY_CHARS as i64
@@ -2053,17 +2262,18 @@ fn update_string_field(
         _ => return Ok(()),
     };
     let query = format!(
-        "SELECT COALESCE({observed_column}, -1), COALESCE({priority_column}, -1),
-                COALESCE({source_column}, '')
+        "SELECT COALESCE({field_name}, ''), COALESCE({observed_column}, -1),
+                COALESCE({priority_column}, -1), COALESCE({source_column}, '')
          FROM sessions WHERE stable_key = ?1"
     );
-    let existing: (i64, i64, String) = transaction.query_row(&query, [stable_key], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-    })?;
-    let same_source_reparse = candidate.observed_at == existing.0
-        && candidate.priority as i64 == existing.1
-        && candidate.source_key == existing.2;
-    if !candidate.outranks(existing.0, existing.1, &existing.2) && !same_source_reparse {
+    let existing: (String, i64, i64, String) =
+        transaction.query_row(&query, [stable_key], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+    let same_source_reparse = candidate.observed_at == existing.1
+        && candidate.priority as i64 == existing.2
+        && candidate.source_key == existing.3;
+    if !candidate.outranks(existing.1, existing.2, &existing.3) && !same_source_reparse {
         return Ok(());
     }
     let update = format!(
@@ -2081,6 +2291,13 @@ fn update_string_field(
             candidate.source_key
         ],
     )?;
+    if existing.0 != candidate.value && matches!(field_name, "title" | "cwd" | "transcript_ref") {
+        transaction.execute(
+            "UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL
+             WHERE stable_key = ?1 AND custom_title IS NULL",
+            [stable_key],
+        )?;
+    }
     Ok(())
 }
 
@@ -2342,6 +2559,125 @@ mod tests {
             )
             .expect("session class index");
         assert_eq!(class_index, 1);
+    }
+
+    /// The adapter learned to reject `New session - <ISO>`, but rejecting it yields no title at
+    /// all, and the upsert only writes a title when the candidate carries one — so rows already in
+    /// the Catalog kept the placeholder through every rescan. Only a migration clears them.
+    #[test]
+    fn migration_replaces_the_opencode_placeholder_title() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let item = candidate("opencode", "placeholder-session", 10);
+        let key = item.identity.stable_key.clone();
+        catalog.upsert_candidate(&item).expect("session");
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET title = 'New session - 2026-04-10T19:01:55.556Z'",
+                [],
+            )
+            .expect("plant the legacy title");
+        // Rewind so `migrate` runs the step under test against the planted row.
+        catalog
+            .connection
+            .pragma_update(None, "user_version", 4)
+            .expect("rewind");
+
+        catalog.migrate().expect("migrate");
+
+        let title: String = catalog
+            .connection
+            .query_row("SELECT title FROM sessions", [], |row| row.get(0))
+            .expect("title");
+        assert!(
+            !title.starts_with("New session - "),
+            "the placeholder must be gone: {title}"
+        );
+        assert_eq!(title, format!("Opencode session · {}", &key[..8]));
+        let version: u32 = catalog
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, CATALOG_SCHEMA_VERSION);
+    }
+
+    /// A fresh schema and a migrated one must end up with the same title columns, or generated
+    /// titles work on one machine and silently vanish on another.
+    #[test]
+    fn fresh_and_migrated_schemas_agree_on_the_title_columns() {
+        let fresh = ProjectCatalog::open_in_memory().expect("fresh catalog");
+        for (column, _) in TITLE_COLUMNS {
+            assert!(
+                table_has_column(&fresh.connection, "sessions", column).expect("probe"),
+                "a fresh schema is missing {column}"
+            );
+        }
+
+        let mut migrated = ProjectCatalog::open_in_memory().expect("catalog");
+        for (column, _) in TITLE_COLUMNS {
+            migrated
+                .connection
+                .execute_batch(&format!("ALTER TABLE sessions DROP COLUMN {column};"))
+                .expect("drop to simulate a v5 catalog");
+        }
+        migrated
+            .connection
+            .pragma_update(None, "user_version", 5)
+            .expect("rewind");
+
+        migrated.migrate().expect("migrate");
+
+        for (column, _) in TITLE_COLUMNS {
+            assert!(
+                table_has_column(&migrated.connection, "sessions", column).expect("probe"),
+                "the migration is missing {column}"
+            );
+        }
+        let version: u32 = migrated
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, CATALOG_SCHEMA_VERSION);
+    }
+
+    /// Running the migration twice must not fail on already-present columns.
+    #[test]
+    fn title_migration_is_idempotent() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        catalog
+            .connection
+            .pragma_update(None, "user_version", 5)
+            .expect("rewind");
+        catalog.migrate().expect("first");
+        catalog
+            .connection
+            .pragma_update(None, "user_version", 5)
+            .expect("rewind again");
+        catalog.migrate().expect("second run must be a no-op");
+    }
+
+    /// A real title must survive the migration untouched.
+    #[test]
+    fn migration_leaves_genuine_titles_alone() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let item = candidate("opencode", "real-session", 10);
+        catalog.upsert_candidate(&item).expect("session");
+        catalog
+            .connection
+            .execute("UPDATE sessions SET title = '看下 mihomo 的分流规则'", [])
+            .expect("plant a real title");
+        catalog
+            .connection
+            .pragma_update(None, "user_version", 4)
+            .expect("rewind");
+
+        catalog.migrate().expect("migrate");
+
+        let title: String = catalog
+            .connection
+            .query_row("SELECT title FROM sessions", [], |row| row.get(0))
+            .expect("title");
+        assert_eq!(title, "看下 mihomo 的分流规则");
     }
 
     #[test]

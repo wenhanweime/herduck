@@ -7,6 +7,7 @@ use ratatui::{
 
 mod dialogs;
 mod keybind_help;
+mod markdown;
 mod menus;
 mod mobile;
 mod navigator;
@@ -15,6 +16,7 @@ mod panes;
 mod projects;
 mod release_notes;
 mod scrollbar;
+mod session_label;
 mod settings;
 mod sidebar;
 mod status;

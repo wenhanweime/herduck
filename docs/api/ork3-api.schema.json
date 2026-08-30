@@ -6791,6 +6791,22 @@
             "title": {
               "type": "string"
             },
+            "topic_label": {
+              "default": null,
+              "description": "Semantic topic this session was classified into, when one exists.\n\nThe classifier already computes this for grouping; carrying it per-session lets a client\nshow what a session is about without re-deriving it. Additive and defaulted, like\n`ref_value` and `session_class`, so v1 clients keep working.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "transcript_ref": {
+              "default": null,
+              "description": "Path to the agent's own transcript, when the scanner recorded one.\n\nNeeded to preview a historical conversation read-only. Additive and defaulted.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "workspace_id": {
               "type": [
                 "string",

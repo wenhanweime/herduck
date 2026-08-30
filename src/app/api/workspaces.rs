@@ -244,6 +244,7 @@ impl App {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        self.clear_project_runtime_for_panes(pane_ids.iter().copied());
         self.state.selected = index;
         self.state.close_selected_workspace();
         self.state.remove_plugin_pane_records(pane_ids);
@@ -255,6 +256,10 @@ impl App {
                 workspace: Some(workspace),
             },
         });
+        if self.project_service.is_available() {
+            self.state.projects.snapshot = self.project_service.snapshot();
+            self.normalize_project_selection();
+        }
 
         encode_success(id, ResponseResult::Ok {})
     }

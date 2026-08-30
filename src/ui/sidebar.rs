@@ -27,6 +27,7 @@ pub(crate) struct AgentPanelEntry {
     pub primary_label: String,
     pub primary_tab_label: Option<String>,
     pub pane_label: Option<String>,
+    pub session_title: Option<String>,
     pub terminal_title: Option<String>,
     pub terminal_title_stripped: Option<String>,
     pub agent_label: Option<String>,
@@ -138,6 +139,9 @@ fn agent_panel_entries_with_runtimes(
                             .tabs
                             .get(detail.tab_idx)
                             .is_some_and(|tab| !tab.is_auto_named());
+                    let session_title = catalog_session_title_for_pane(app, ws_idx, detail.pane_id)
+                        .or_else(|| detail.pane_label.clone())
+                        .or_else(|| detail.terminal_title_stripped.clone());
                     AgentPanelEntry {
                         ws_idx,
                         tab_idx: detail.tab_idx,
@@ -145,6 +149,7 @@ fn agent_panel_entries_with_runtimes(
                         primary_label: workspace_label.clone(),
                         primary_tab_label: show_tab.then_some(detail.tab_label),
                         pane_label: detail.pane_label,
+                        session_title,
                         terminal_title: detail.terminal_title,
                         terminal_title_stripped: detail.terminal_title_stripped,
                         agent_label: Some(detail.agent_label),
@@ -169,6 +174,55 @@ fn agent_panel_entries_with_runtimes(
     }
 
     entries
+}
+
+/// Finds the Catalog title belonging to the native session currently attached to a pane.
+///
+/// The native reference (backend + kind + value) is the stable identity shared by the runtime
+/// and Catalog. Matching it here keeps the Agents panel from inventing a second title for the
+/// same session shown in Projects/Clusters.
+fn catalog_session_title_for_pane(
+    app: &AppState,
+    ws_idx: usize,
+    pane_id: crate::layout::PaneId,
+) -> Option<String> {
+    let workspace = app.workspaces.get(ws_idx)?;
+    let pane = workspace.pane_state(pane_id)?;
+    let terminal = app.terminals.get(&pane.attached_terminal_id)?;
+    let persisted = terminal.persisted_agent_session.as_ref()?;
+    let pane_key = workspace
+        .public_pane_number(pane_id)
+        .map(|number| crate::workspace::public_pane_id_for_number(&workspace.id, number))?;
+    let session = app
+        .projects
+        .snapshot
+        .projects
+        .iter()
+        .chain(app.projects.snapshot.topics.iter())
+        .flat_map(|group| group.sessions.iter())
+        .find(|session| {
+            // Runtime mappings are the strongest identity available for a live pane. They are
+            // written by the server when the pane is attached and avoid falling back to the
+            // provider's original first-message label when a provider changes ref formatting.
+            (session.workspace_id.as_deref() == Some(workspace.id.as_str())
+                && session.pane_id.as_deref() == Some(pane_key.as_str()))
+                || (session.backend == persisted.agent
+                    && session.ref_value == persisted.session_ref.value
+                    && matches!(
+                        (session.ref_kind, persisted.session_ref.kind),
+                        (
+                            crate::projects::SessionRefKind::Id,
+                            crate::agent_resume::AgentSessionRefKind::Id
+                        ) | (
+                            crate::projects::SessionRefKind::Path,
+                            crate::agent_resume::AgentSessionRefKind::Path
+                        )
+                    ))
+        })?;
+    Some(
+        crate::ui::session_label::session_label(&session.title, session.topic_label.as_deref())
+            .task,
+    )
 }
 
 pub(super) fn agent_panel_status_key(state: AgentState, seen: bool) -> &'static str {
@@ -899,6 +953,7 @@ fn resolved_token_spans(
     state_text_style: Style,
     workspace_style: Style,
     secondary_style: Style,
+    session_title_style: Style,
     custom_style: Style,
     p: &Palette,
     max_width: usize,
@@ -923,6 +978,7 @@ fn resolved_token_spans(
             | ResolvedToken::Tab(text)
             | ResolvedToken::Pane(text)
             | ResolvedToken::Agent(text)
+            | ResolvedToken::SessionTitle(text)
             | ResolvedToken::TerminalTitle(text)
             | ResolvedToken::Branch(text)
             | ResolvedToken::Custom(text) => display_width(text),
@@ -1030,6 +1086,12 @@ fn resolved_token_spans(
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),
                     secondary_style,
+                ));
+            }
+            ResolvedToken::SessionTitle(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    session_title_style,
                 ));
             }
             ResolvedToken::Branch(text) => {
@@ -1215,6 +1277,7 @@ fn render_workspace_list(
                 name_style,
                 branch_style,
                 branch_style,
+                branch_style,
                 p,
                 card.rect.width.saturating_sub(prefix_width) as usize,
             ));
@@ -1323,7 +1386,7 @@ fn render_agent_detail(
 
         let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
         let row_style = if is_active {
-            Style::default().bg(p.surface_dim)
+            Style::default().bg(p.surface1)
         } else {
             Style::default()
         };
@@ -1332,6 +1395,7 @@ fn render_agent_detail(
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
         };
+        let workspace_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
         let status_style = if is_active {
             Style::default().fg(label_color)
         } else {
@@ -1346,8 +1410,9 @@ fn render_agent_detail(
                 resolved,
                 state_icon,
                 status_style,
-                name_style,
+                workspace_style,
                 agent_style,
+                name_style,
                 agent_style,
                 p,
                 body.width
@@ -1357,6 +1422,11 @@ fn render_agent_detail(
                 Paragraph::new(Line::from(spans)).style(row_style),
                 Rect::new(body.x, row_y + row_index as u16, body.width, 1),
             );
+        }
+        if is_active && body.width > 0 {
+            frame.buffer_mut()[(body.x, row_y)]
+                .set_symbol("▎")
+                .set_fg(p.accent);
         }
         row_y = row_y
             .saturating_add(height)
@@ -1442,6 +1512,7 @@ mod tests {
         let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
         terminal_state.detected_agent = Some(Agent::Pi);
         terminal_state.state = AgentState::Working;
+        terminal_state.set_terminal_title(Some("review auth".into()));
 
         let area = Rect::new(0, 0, 26, 20);
         let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
@@ -1454,8 +1525,9 @@ mod tests {
 
         let first = row_text(buffer, body.y, 25);
         let second = row_text(buffer, body.y + 1, 25);
-        assert!(first.contains("one"));
-        assert_eq!(second, "   pi");
+        assert!(first.contains("review auth"));
+        assert!(first.contains("pi"));
+        assert!(second.contains("one"));
         assert!(!first.contains("working"));
         assert!(!second.contains("working"));
     }
@@ -1512,9 +1584,16 @@ mod tests {
         let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
         let body = agent_panel_body_rect(agent_area, false);
         let first = row_text(buffer, body.y, 17);
+        let second = row_text(buffer, body.y + 1, 17);
 
-        assert!(first.contains("logs"), "rendered row: {first:?}");
-        assert!(first.contains('·'), "rendered row: {first:?}");
+        assert!(
+            first.contains("logs") || second.contains("logs"),
+            "rendered rows: {first:?} / {second:?}"
+        );
+        assert!(
+            first.contains('·') || second.contains('·'),
+            "rendered rows: {first:?} / {second:?}"
+        );
     }
 
     #[test]
@@ -1549,6 +1628,7 @@ mod tests {
         let spans = resolved_token_spans(
             &[ResolvedToken::TerminalTitle("修复🙂标题很长".into())],
             ("", Style::default()),
+            Style::default(),
             Style::default(),
             Style::default(),
             Style::default(),
@@ -1767,6 +1847,65 @@ mod tests {
             .collect();
 
         assert_eq!(labels, ["four", "two", "one", "three"]);
+    }
+
+    #[test]
+    fn agents_panel_uses_catalog_session_title_for_matching_native_ref() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("repo")];
+        app.ensure_test_terminals();
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("native-42").unwrap(),
+        });
+
+        app.projects.snapshot.projects = vec![crate::projects::ProjectSummary {
+            canonical_key: "repo".into(),
+            kind: crate::projects::ProjectKind::Cwd,
+            display_name: "repo".into(),
+            canonical_path: "/tmp/repo".into(),
+            sessions: vec![crate::projects::IndexedSessionSummary {
+                stable_key: "stable-42".into(),
+                backend: "claude".into(),
+                ref_kind: crate::projects::SessionRefKind::Id,
+                ref_value: "native-42".into(),
+                title: "claude --resume old-id 继续修复标题一致性。更多上下文".into(),
+                cwd: Some("/tmp/repo".into()),
+                first_activity_at: 1,
+                last_activity_at: 2,
+                live: true,
+                workspace_id: None,
+                pane_id: None,
+                runtime_generation: None,
+                session_class: crate::projects::SessionClass::Interactive,
+                topic_label: None,
+                transcript_ref: None,
+            }],
+            automation: Vec::new(),
+            thin_count: 0,
+            next_cursor: None,
+        }];
+
+        let entries = agent_panel_entries(&app);
+        assert_eq!(
+            entries[0].session_title.as_deref(),
+            Some("继续修复标题一致性")
+        );
+        assert_eq!(
+            tokens::agent_rows(&app.sidebar_agents, &entries[0], "working")[0],
+            vec![
+                ResolvedToken::StateIcon,
+                ResolvedToken::SessionTitle("继续修复标题一致性".into()),
+                ResolvedToken::Agent("claude".into()),
+            ]
+        );
     }
 
     #[test]

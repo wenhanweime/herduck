@@ -67,6 +67,7 @@ impl App {
         };
         if let AppEvent::PaneDied { pane_id } = &ev {
             self.clear_project_runtime_for_pane(*pane_id);
+            self.pending_catalog_submissions.remove(pane_id);
         }
 
         if let AppEvent::ClipboardWrite { content } = ev {
@@ -287,6 +288,7 @@ impl App {
             self.render_notify.notify_one();
         }
         for update in &pane_updates {
+            self.flush_pending_catalog_submission(update);
             self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
         }
@@ -331,6 +333,59 @@ impl App {
 
         self.sync_toast_deadline(previous_toast);
         self.shutdown_detached_terminal_runtimes();
+    }
+
+    /// Delivers the first user message only after the resumed agent has rendered an idle prompt.
+    /// The paste payload and Enter key are queued as one write, so a full channel cannot leave a
+    /// half-delivered submission that would be duplicated on retry.
+    fn flush_pending_catalog_submission(&mut self, update: &crate::app::actions::PaneStateUpdate) {
+        if update.state != crate::detect::AgentState::Idle {
+            return;
+        }
+        let Some(draft) = self
+            .pending_catalog_submissions
+            .get(&update.pane_id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some((ws_idx, _)) = self.find_pane(update.pane_id) else {
+            return;
+        };
+        let send_result = {
+            let Some(runtime) = self.state.runtime_for_pane_in_workspace(
+                &self.terminal_runtimes,
+                ws_idx,
+                update.pane_id,
+            ) else {
+                return;
+            };
+            let bracketed = runtime
+                .input_state()
+                .is_some_and(|input| input.bracketed_paste);
+            let mut payload = if bracketed {
+                format!("\x1b[200~{draft}\x1b[201~").into_bytes()
+            } else {
+                draft.into_bytes()
+            };
+            payload.extend(runtime.encode_terminal_key(crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::empty(),
+            )));
+            runtime.try_send_bytes(bytes::Bytes::from(payload))
+        };
+        match send_result {
+            Ok(()) => {
+                self.pending_catalog_submissions.remove(&update.pane_id);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    pane = update.pane_id.raw(),
+                    err = %err,
+                    "failed to deliver pending catalog submission"
+                );
+            }
+        }
     }
 
     fn reset_agent_detection_for_agents(&self, agents: &[crate::detect::Agent]) {
@@ -1390,6 +1445,56 @@ pub(super) mod test_support {
 mod tests {
     use super::*;
     use crate::detect::{Agent, AgentState};
+
+    #[tokio::test]
+    async fn idle_resumed_agent_receives_pending_catalog_submission_once() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("history")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.state.insert_test_runtime(pane_id, runtime);
+        app.pending_catalog_submissions
+            .insert(pane_id, "continue here".into());
+
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Claude),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+
+        assert_eq!(
+            receiver.recv().await.expect("pending submission"),
+            bytes::Bytes::from_static(b"continue here\r")
+        );
+        assert!(!app.pending_catalog_submissions.contains_key(&pane_id));
+
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Claude),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert!(
+            receiver.try_recv().is_err(),
+            "submission must not be duplicated"
+        );
+    }
 
     #[cfg(unix)]
     fn init_repo(path: &std::path::Path) {

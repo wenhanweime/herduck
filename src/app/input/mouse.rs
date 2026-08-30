@@ -419,6 +419,15 @@ impl AppState {
                     return None;
                 }
 
+                // The transcript card is the second stage of historical navigation. Entering it
+                // reveals the complete JSONL-backed conversation and composer, but remains a
+                // pure client-state transition: no pane, terminal, or agent runtime is created.
+                if self.mode == Mode::ProjectHistory && !in_sidebar {
+                    self.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+                    self.projects.history_scroll = 0;
+                    return None;
+                }
+
                 if in_sidebar && !self.sidebar_collapsed {
                     if rect_contains(self.view.project_sidebar_tabs[0], mouse.column, mouse.row) {
                         self.sidebar_view = SidebarView::SpacesAgents;
@@ -487,9 +496,10 @@ impl AppState {
                         .find(|hit| rect_contains(hit.rect, mouse.column, mouse.row))
                         .cloned()
                     {
-                        self.projects.selected_row = self.projects.scroll.saturating_add(
-                            usize::from(mouse.row.saturating_sub(self.view.project_tree_rect.y)),
-                        );
+                        // The hit area knows which row it is. Deriving the index from the click's
+                        // row offset broke once the current session's row became two lines tall:
+                        // every row below an expanded one selected its neighbour.
+                        self.projects.selected_row = hit.row_index;
                         self.projects.search_focused = false;
                         return match hit.action {
                             ProjectTreeAction::ToggleProject { project_key } => {
@@ -4011,6 +4021,8 @@ mod tests {
                     pane_id: None,
                     runtime_generation: None,
                     session_class: crate::projects::SessionClass::Interactive,
+                    topic_label: None,
+                    transcript_ref: None,
                 }],
                 automation: Vec::new(),
                 thin_count: 0,
@@ -4029,7 +4041,9 @@ mod tests {
             .find(|hit| {
                 matches!(
                     hit.action,
-                    ProjectTreeAction::Activate(crate::app::state::ProjectSessionActivation::History { .. })
+                    ProjectTreeAction::Activate(
+                        crate::app::state::ProjectSessionActivation::History { .. }
+                    )
                 )
             })
             .cloned()

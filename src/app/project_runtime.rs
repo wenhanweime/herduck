@@ -124,6 +124,15 @@ impl App {
         }
     }
 
+    pub(crate) fn clear_project_runtime_for_panes(
+        &mut self,
+        pane_ids: impl IntoIterator<Item = crate::layout::PaneId>,
+    ) {
+        for pane_id in pane_ids {
+            self.clear_project_runtime_for_pane(pane_id);
+        }
+    }
+
     #[cfg(unix)]
     pub(crate) fn activate_project_service_after_handoff(&mut self) {
         if self.project_service.is_available() {
@@ -135,6 +144,8 @@ impl App {
             self.loaded_projects_config.automation_title_threshold,
         );
         service.start_background_scan(self.project_roots.roots());
+        service.start_semantic_classification(crate::projects::semantic::SemanticConfig::default());
+        service.start_title_generation(crate::projects::semantic::SemanticConfig::default());
         self.project_service = service;
         self.project_runtime_leases.clear();
         self.next_project_runtime_generation = 1;
@@ -153,6 +164,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::detect::AgentState;
     use crate::events::AppEvent;
 
     fn app_with_project_runtime() -> (App, crate::layout::PaneId) {
@@ -247,5 +259,171 @@ mod tests {
         assert_eq!(session.runtime_generation, Some(1));
         assert_eq!(session.cwd.as_deref(), cwd.to_str());
         let _ = std::fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn api_pane_close_clears_live_mapping_for_every_agent_state() {
+        for (index, agent_state) in [AgentState::Working, AgentState::Idle, AgentState::Blocked]
+            .into_iter()
+            .enumerate()
+        {
+            let (mut app, pane_id) = app_with_project_runtime();
+            let terminal_id = app
+                .state
+                .terminal_id_for_pane(0, pane_id)
+                .expect("test pane terminal");
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .expect("test terminal")
+                .state = agent_state;
+            report(
+                &mut app,
+                pane_id,
+                &format!("close-state-{index}"),
+                1,
+                "startup",
+            );
+
+            let public_pane_id = app.public_pane_id(0, pane_id).expect("public pane id");
+            let response = app.dispatch_api_request(
+                "close",
+                crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
+                    pane_id: public_pane_id,
+                }),
+            );
+            assert!(response.contains("\"ok\""), "close failed: {response}");
+
+            let snapshot = app.project_service.snapshot();
+            let session = snapshot.projects[0]
+                .sessions
+                .first()
+                .expect("closed session");
+            assert!(!session.live, "session remained live for {agent_state:?}");
+            assert_eq!(session.workspace_id, None);
+            assert_eq!(session.pane_id, None);
+            assert_eq!(session.runtime_generation, None);
+            assert!(app.project_runtime_leases.is_empty());
+            assert_eq!(app.state.projects.snapshot, snapshot);
+        }
+    }
+
+    #[test]
+    fn api_pane_close_only_clears_the_closed_pane_in_a_multi_pane_workspace() {
+        let (mut app, first_pane) = app_with_project_runtime();
+        let second_pane =
+            app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        report(&mut app, first_pane, "multi-first", 1, "startup");
+        report(&mut app, second_pane, "multi-second", 1, "startup");
+
+        let first_public = app.public_pane_id(0, first_pane).expect("first pane id");
+        let response = app.dispatch_api_request(
+            "close-first",
+            crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
+                pane_id: first_public,
+            }),
+        );
+        assert!(response.contains("\"ok\""), "close failed: {response}");
+
+        let snapshot = app.project_service.snapshot();
+        let sessions = snapshot.projects[0].sessions.as_slice();
+        let first = sessions
+            .iter()
+            .find(|session| session.ref_value == "multi-first")
+            .unwrap_or_else(|| panic!("first session missing: {sessions:?}"));
+        let second = sessions
+            .iter()
+            .find(|session| session.ref_value == "multi-second")
+            .unwrap_or_else(|| panic!("second session missing: {sessions:?}"));
+        assert!(!first.live);
+        assert!(second.live);
+        assert_eq!(
+            second.pane_id.as_deref(),
+            app.public_pane_id(0, second_pane).as_deref()
+        );
+        assert_eq!(app.project_runtime_leases.len(), 1);
+
+        let second_public = app.public_pane_id(0, second_pane).expect("second pane id");
+        let response = app.dispatch_api_request(
+            "close-second",
+            crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
+                pane_id: second_public,
+            }),
+        );
+        assert!(response.contains("\"ok\""), "close failed: {response}");
+        assert!(app.project_runtime_leases.is_empty());
+        assert!(app.state.workspaces.is_empty());
+        assert_eq!(app.state.projects.snapshot, app.project_service.snapshot());
+    }
+
+    #[test]
+    fn tab_and_workspace_close_clear_every_removed_runtime_mapping() {
+        let (mut app, first_pane) = app_with_project_runtime();
+        let second_tab = app.state.workspaces[0].test_add_tab(Some("second"));
+        app.state.ensure_test_terminals();
+        let second_pane = app.state.workspaces[0].tabs[second_tab].root_pane;
+        report(&mut app, first_pane, "tab-first", 1, "startup");
+        report(&mut app, second_pane, "tab-second", 1, "startup");
+
+        let first_tab_id = app.public_tab_id(0, 0).expect("first tab id");
+        let response = app.dispatch_api_request(
+            "close-tab",
+            crate::api::schema::Method::TabClose(crate::api::schema::TabTarget {
+                tab_id: first_tab_id,
+            }),
+        );
+        assert!(response.contains("\"ok\""), "tab close failed: {response}");
+        let snapshot = app.project_service.snapshot();
+        let sessions = snapshot.projects[0].sessions.as_slice();
+        assert!(
+            !sessions
+                .iter()
+                .find(|session| session.ref_value == "tab-first")
+                .expect("closed tab session")
+                .live
+        );
+        assert!(
+            sessions
+                .iter()
+                .find(|session| session.ref_value == "tab-second")
+                .expect("surviving tab session")
+                .live
+        );
+        assert_eq!(app.project_runtime_leases.len(), 1);
+
+        let workspace_id = app.public_workspace_id(0);
+        let response = app.dispatch_api_request(
+            "close-workspace",
+            crate::api::schema::Method::WorkspaceClose(crate::api::schema::WorkspaceTarget {
+                workspace_id,
+            }),
+        );
+        assert!(
+            response.contains("\"ok\""),
+            "workspace close failed: {response}"
+        );
+        assert!(app.project_runtime_leases.is_empty());
+        assert!(app.project_service.snapshot().projects[0]
+            .sessions
+            .iter()
+            .all(|session| !session.live));
+        assert_eq!(app.state.projects.snapshot, app.project_service.snapshot());
+    }
+
+    #[test]
+    fn rejected_last_tab_close_keeps_runtime_mapping_live() {
+        let (mut app, pane_id) = app_with_project_runtime();
+        report(&mut app, pane_id, "last-tab", 1, "startup");
+        let tab_id = app.public_tab_id(0, 0).expect("tab id");
+
+        let response = app.dispatch_api_request(
+            "close-last-tab",
+            crate::api::schema::Method::TabClose(crate::api::schema::TabTarget { tab_id }),
+        );
+
+        assert!(response.contains("tab_close_failed"));
+        assert_eq!(app.project_runtime_leases.len(), 1);
+        assert!(app.project_service.snapshot().projects[0].sessions[0].live);
     }
 }

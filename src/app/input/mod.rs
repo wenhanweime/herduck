@@ -72,11 +72,11 @@ use super::App;
 
 impl App {
     pub(super) async fn handle_key(&mut self, key: TerminalKey) {
+        let key_event = key.as_key_event();
         if self.state.popup_pane.is_some() {
             self.handle_terminal_key(key).await;
             return;
         }
-        let key_event = key.as_key_event();
         if modal_paste_target_active(&self.state) && is_modal_paste_shortcut(&key_event) {
             if let Some(text) = crate::platform::read_clipboard_text() {
                 self.paste_into_active_text_input(&text);
@@ -181,6 +181,16 @@ impl App {
                 self.normalize_project_selection();
                 true
             }
+            Mode::ProjectHistory
+                if self.state.projects.history_view
+                    == crate::app::state::ProjectHistoryView::Full =>
+            {
+                self.state
+                    .projects
+                    .history_draft
+                    .extend(text.chars().filter(|character| *character != '\r'));
+                true
+            }
             Mode::Copy => {
                 let Some(prompt) = self
                     .state
@@ -200,17 +210,52 @@ impl App {
     }
 
     pub(super) fn handle_project_history_key(&mut self, key: KeyEvent) {
+        // Crossterm can report a key release separately when enhanced keyboard reporting is
+        // enabled. A release must never submit the draft a second time (or leak an Enter into the
+        // freshly resumed agent after the mode switches to Terminal).
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return;
+        }
+        let full_context =
+            self.state.projects.history_view == crate::app::state::ProjectHistoryView::Full;
         match key.code {
             KeyCode::Esc => {
                 self.state.projects.history_session_key = None;
                 self.state.projects.history_scroll = 0;
+                self.state.projects.history_view = crate::app::state::ProjectHistoryView::Preview;
+                self.state.projects.history_draft.clear();
                 self.restore_focus_after_project_history();
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Enter if !full_context => self.enter_project_history_full_context(),
+            KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.state.projects.history_draft.push('\n');
+            }
+            KeyCode::Enter => self.submit_project_history_draft(),
+            KeyCode::Backspace if full_context => {
+                self.state.projects.history_draft.pop();
+            }
+            KeyCode::Char(character)
+                if full_context
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && !character.is_control() =>
+            {
+                self.state.projects.history_draft.push(character);
+            }
+            KeyCode::Up | KeyCode::Char('k') if !full_context => {
                 self.state.projects.history_scroll =
                     self.state.projects.history_scroll.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Up => {
+                self.state.projects.history_scroll =
+                    self.state.projects.history_scroll.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if !full_context => {
+                self.state.projects.history_scroll =
+                    self.state.projects.history_scroll.saturating_add(1);
+            }
+            KeyCode::Down => {
                 self.state.projects.history_scroll =
                     self.state.projects.history_scroll.saturating_add(1);
             }
@@ -223,6 +268,41 @@ impl App {
                     self.state.projects.history_scroll.saturating_add(10);
             }
             _ => {}
+        }
+    }
+
+    fn enter_project_history_full_context(&mut self) {
+        if self.state.projects.history_session_key.is_none() {
+            return;
+        }
+        self.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+        self.state.projects.history_scroll = 0;
+    }
+
+    /// Starts the historical agent only after the user submits non-empty content. The content is
+    /// held until detection confirms that the resumed CLI has reached its idle prompt.
+    fn submit_project_history_draft(&mut self) {
+        if self.state.projects.history_draft.trim().is_empty() {
+            return;
+        }
+        let Some(session) = self
+            .state
+            .projects
+            .history_session_key
+            .clone()
+            .and_then(|key| self.indexed_catalog_session(&key))
+        else {
+            return;
+        };
+        let draft = self.state.projects.history_draft.clone();
+        match self.spawn_catalog_session_resume(&session) {
+            Ok((_ws_idx, pane_id)) => {
+                self.pending_catalog_submissions.insert(pane_id, draft);
+                self.state.projects.history_draft.clear();
+            }
+            Err(reason) => {
+                self.state.projects.history_fallback_reason = Some(reason);
+            }
         }
     }
 
@@ -415,6 +495,13 @@ impl App {
                 }
             }
             crate::app::state::ProjectSessionActivation::History { session_key } => {
+                if self.state.mode == Mode::ProjectHistory
+                    && self.state.projects.history_session_key.as_deref()
+                        == Some(session_key.as_str())
+                {
+                    self.enter_project_history_full_context();
+                    return;
+                }
                 if let Some(reason) = self.resume_or_focus_catalog_session(&session_key) {
                     self.open_project_history_with_reason(session_key, reason);
                 }
@@ -493,6 +580,12 @@ impl App {
     /// Tries to activate a catalog session. Returns `None` when the session was focused or
     /// resumed, and `Some(reason)` when it could not be resumed and read-only history is the
     /// fallback.
+    /// Decides what activating a Catalog session does.
+    ///
+    /// A session whose pane is still alive focuses that pane. Everything else opens the read-only
+    /// preview; it deliberately does *not* spawn a resume. Clicking a row to see what a session was
+    /// about should never start an agent process as a side effect — resuming is a separate,
+    /// explicit action.
     fn resume_or_focus_catalog_session(&mut self, session_key: &str) -> Option<String> {
         let Some(session) = self.indexed_catalog_session(session_key) else {
             return Some("This session is no longer available in the current snapshot.".into());
@@ -503,15 +596,15 @@ impl App {
             self.state.mode = Mode::Terminal;
             return None;
         }
-        self.spawn_catalog_session_resume(&session)
+        Some("Read-only preview. This session is not running.".into())
     }
 
     fn spawn_catalog_session_resume(
         &mut self,
         session: &crate::projects::IndexedSessionSummary,
-    ) -> Option<String> {
+    ) -> Result<(usize, crate::layout::PaneId), String> {
         let Some(plan) = Self::resume_plan_for_catalog_session(session) else {
-            return Some(
+            return Err(
                 "No resume command is available for this session (missing native session id \
                  or unsupported agent)."
                     .into(),
@@ -563,8 +656,10 @@ impl App {
         } else {
             let ws_idx = self.state.active.unwrap_or(0);
             let created = self.state.workspaces.get_mut(ws_idx).and_then(|ws| {
-                ws.create_tab_argv_command(rows, cols, cwd, &plan.argv, extra_env, scrollback, theme)
-                    .ok()
+                ws.create_tab_argv_command(
+                    rows, cols, cwd, &plan.argv, extra_env, scrollback, theme,
+                )
+                .ok()
             });
             match created {
                 Some((tab_idx, terminal, runtime)) => {
@@ -586,19 +681,21 @@ impl App {
         };
 
         let Some((ws_idx, pane_id)) = spawned else {
-            return Some(
+            return Err(
                 "Failed to start the resume command in a new tab. The session is available \
                  read-only below."
                     .into(),
             );
         };
-        if let Some(terminal_id) = self.state.workspaces[ws_idx]
-            .terminal_id(pane_id)
-            .cloned()
-        {
+        if let Some(terminal_id) = self.state.workspaces[ws_idx].terminal_id(pane_id).cloned() {
             if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
                 terminal.set_agent_name(plan.agent.clone());
                 terminal.set_manual_label(session.title.clone());
+                // Mark the newly launched resume as working immediately. Detection will refine
+                // this to idle/blocked once the CLI paints its prompt, but the Catalog row must
+                // become visibly active in the same frame as the new runtime.
+                terminal.state = crate::detect::AgentState::Working;
+                terminal.fallback_state = crate::detect::AgentState::Working;
                 if let Some(session_ref) = match session.ref_kind {
                     crate::projects::SessionRefKind::Id => {
                         crate::agent_resume::AgentSessionRef::id(session.ref_value.clone())
@@ -621,19 +718,38 @@ impl App {
         self.state.mode = Mode::Terminal;
         self.focus_pane_internal_via_api(ws_idx, pane_id);
         self.sync_project_runtime_for_pane(pane_id, true);
+        // Runtime reports update the SQLite Catalog immediately, while the in-memory snapshot is
+        // normally refreshed on the next scheduler tick. Refresh now so Project and Cluster views
+        // show this exact resumed Session as live/highlighted without a redraw race.
+        if self.project_service.is_available() {
+            self.state.projects.snapshot = self.project_service.snapshot();
+            self.normalize_project_selection();
+        }
         self.schedule_session_save();
-        None
+        Ok((ws_idx, pane_id))
     }
 
     fn open_project_history(&mut self, session_key: String) {
-        self.state.previous_pane_focus = self.state.current_pane_focus_target();
-        self.state.projects.history_return_tab = self.state.active.and_then(|ws_idx| {
-            let ws = self.state.workspaces.get(ws_idx)?;
-            let tab = ws.tabs.get(ws.active_tab)?;
-            Some((ws.id.clone(), tab.root_pane))
-        });
+        // Switching from one preview to another must not re-capture the return anchor: the
+        // "current" pane is already whatever was focused when the first preview opened, so
+        // recapturing it on every click walks the anchor forward and Esc stops going back where
+        // the user started.
+        if self.state.mode != Mode::ProjectHistory {
+            self.state.previous_pane_focus = self.state.current_pane_focus_target();
+            self.state.projects.history_return_tab = self.state.active.and_then(|ws_idx| {
+                let ws = self.state.workspaces.get(ws_idx)?;
+                let tab = ws.tabs.get(ws.active_tab)?;
+                Some((ws.id.clone(), tab.root_pane))
+            });
+        }
+        let switching_session =
+            self.state.projects.history_session_key.as_deref() != Some(session_key.as_str());
         self.state.projects.history_session_key = Some(session_key);
         self.state.projects.history_scroll = 0;
+        if switching_session {
+            self.state.projects.history_view = crate::app::state::ProjectHistoryView::Preview;
+            self.state.projects.history_draft.clear();
+        }
         self.state.mode = Mode::ProjectHistory;
     }
 
@@ -1174,6 +1290,9 @@ pub(crate) fn modal_paste_target_active(state: &AppState) -> bool {
             .as_ref()
             .is_some_and(|open| open.search_focused),
         Mode::Navigator => state.navigator.search_focused,
+        Mode::ProjectHistory => {
+            state.projects.history_view == crate::app::state::ProjectHistoryView::Full
+        }
         Mode::Copy => state
             .copy_mode
             .as_ref()
@@ -1388,6 +1507,8 @@ mod tests {
             pane_id: Some(public_pane_id.clone()),
             runtime_generation: Some(9),
             session_class: crate::projects::SessionClass::Interactive,
+            topic_label: None,
+            transcript_ref: None,
         };
         app.state.projects.snapshot = crate::projects::ProjectsSnapshot {
             projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
@@ -1431,6 +1552,8 @@ mod tests {
             pane_id: None,
             runtime_generation: None,
             session_class: crate::projects::SessionClass::Interactive,
+            topic_label: None,
+            transcript_ref: None,
         };
         let plan = App::resume_plan_for_catalog_session(&session).expect("codex plan");
         assert_eq!(plan.argv, vec!["codex", "resume", "abc"]);
@@ -1439,6 +1562,155 @@ mod tests {
         assert_eq!(plan.argv, vec!["grok", "--resume", "abc"]);
         session.ref_value.clear();
         assert!(App::resume_plan_for_catalog_session(&session).is_none());
+    }
+
+    /// Switching between previews must not walk the return anchor forward.
+    ///
+    /// `open_project_history` re-captured `previous_pane_focus` on every call. Once a preview was
+    /// open the "current" pane was already the one the first preview had left focused, so each
+    /// further click overwrote the anchor and Esc stopped returning where the user started.
+    #[tokio::test]
+    async fn switching_previews_keeps_the_original_return_anchor() {
+        let (mut app, _activation, _receiver) = app_with_project_runtime();
+        app.state.mode = Mode::Navigate;
+        let session = &mut app.state.projects.snapshot.projects[0].sessions[0];
+        session.live = false;
+        session.workspace_id = None;
+        session.pane_id = None;
+        session.runtime_generation = None;
+
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::Activate(
+            crate::app::state::ProjectSessionActivation::History {
+                session_key: "session-live".into(),
+            },
+        ));
+        let anchor = app.state.previous_pane_focus.clone();
+        let return_tab = app.state.projects.history_return_tab.clone();
+        assert!(anchor.is_some(), "the first preview must capture an anchor");
+
+        // A second preview, opened while the first is still showing.
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::Activate(
+            crate::app::state::ProjectSessionActivation::History {
+                session_key: "session-live".into(),
+            },
+        ));
+
+        assert_eq!(
+            app.state.previous_pane_focus, anchor,
+            "the return anchor must survive a preview switch"
+        );
+        assert_eq!(app.state.projects.history_return_tab, return_tab);
+    }
+
+    /// Clicking a historical row previews it. It must not spawn an agent as a side effect:
+    /// opening history to see what a session was about should never start work.
+    #[tokio::test]
+    async fn activating_a_historical_session_previews_without_spawning_an_agent() {
+        let (mut app, _activation, _receiver) = app_with_project_runtime();
+        app.state.mode = Mode::Navigate;
+        // Break the runtime mapping so the session is history rather than a live pane.
+        let session = &mut app.state.projects.snapshot.projects[0].sessions[0];
+        session.live = false;
+        session.workspace_id = None;
+        session.pane_id = None;
+        session.runtime_generation = None;
+        session.ref_value = "abc".into();
+        let panes_before = app.state.workspaces[0].tabs.len();
+
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::Activate(
+            crate::app::state::ProjectSessionActivation::History {
+                session_key: "session-live".into(),
+            },
+        ));
+
+        assert_eq!(
+            app.state.mode,
+            Mode::ProjectHistory,
+            "must open the preview"
+        );
+        assert_eq!(
+            app.state.workspaces[0].tabs.len(),
+            panes_before,
+            "previewing history must not spawn a resume tab"
+        );
+        assert_eq!(
+            app.state.projects.history_session_key.as_deref(),
+            Some("session-live")
+        );
+        assert_eq!(
+            app.state.projects.history_view,
+            crate::app::state::ProjectHistoryView::Preview
+        );
+    }
+
+    #[tokio::test]
+    async fn activating_the_same_history_twice_enters_full_context_without_spawning() {
+        let (mut app, _activation, _receiver) = app_with_project_runtime();
+        app.state.mode = Mode::Navigate;
+        let session = &mut app.state.projects.snapshot.projects[0].sessions[0];
+        session.live = false;
+        session.workspace_id = None;
+        session.pane_id = None;
+        session.runtime_generation = None;
+        session.ref_value = "abc".into();
+        let tabs_before = app.state.workspaces[0].tabs.len();
+        let activation = crate::app::state::ProjectSessionActivation::History {
+            session_key: "session-live".into(),
+        };
+
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::Activate(
+            activation.clone(),
+        ));
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::Activate(activation));
+
+        assert_eq!(
+            app.state.projects.history_view,
+            crate::app::state::ProjectHistoryView::Full
+        );
+        assert_eq!(app.state.workspaces[0].tabs.len(), tabs_before);
+        assert!(app.pending_catalog_submissions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn composing_in_full_history_does_not_activate_until_non_empty_enter() {
+        let (mut app, _activation, mut receiver) = app_with_project_runtime();
+        app.state.mode = Mode::ProjectHistory;
+        app.state.projects.history_session_key = Some("session-live".into());
+        app.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+        let tabs_before = app.state.workspaces[0].tabs.len();
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('你'), KeyModifiers::empty()))
+            .await;
+        app.handle_paste("好\n吗".into()).await;
+
+        assert_eq!(app.state.projects.history_draft, "你好\n吗");
+        assert_eq!(app.state.workspaces[0].tabs.len(), tabs_before);
+        assert!(app.pending_catalog_submissions.is_empty());
+        assert!(receiver.try_recv().is_err());
+
+        app.state.projects.history_draft = "   ".into();
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
+            .await;
+        assert_eq!(app.state.workspaces[0].tabs.len(), tabs_before);
+        assert!(app.pending_catalog_submissions.is_empty());
+    }
+
+    #[test]
+    fn headless_client_character_input_reaches_the_history_composer() {
+        let mut app = test_app();
+        app.state.mode = Mode::ProjectHistory;
+        app.state.projects.history_session_key = Some("session-live".into());
+        app.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+
+        app.route_client_events(
+            vec![crate::raw_input::RawInputEvent::Key(TerminalKey::new(
+                KeyCode::Char('中'),
+                KeyModifiers::empty(),
+            ))],
+            false,
+        );
+
+        assert_eq!(app.state.projects.history_draft, "中");
     }
 
     #[tokio::test]
@@ -1644,6 +1916,12 @@ mod tests {
         state.navigator.search_focused = false;
         assert!(!modal_paste_target_active(&state));
         state.navigator.search_focused = true;
+        assert!(modal_paste_target_active(&state));
+
+        state.mode = Mode::ProjectHistory;
+        state.projects.history_view = crate::app::state::ProjectHistoryView::Preview;
+        assert!(!modal_paste_target_active(&state));
+        state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
         assert!(modal_paste_target_active(&state));
 
         state.mode = Mode::ConfirmClose;

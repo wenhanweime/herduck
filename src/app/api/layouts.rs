@@ -164,6 +164,7 @@ impl App {
                 return encode_error(id, "tab_not_found", "tab not found");
             };
             if ws.close_tab(target_tab_idx) {
+                self.clear_project_runtime_for_panes(plugin_pane_ids.iter().copied());
                 self.state.remove_plugin_pane_records(plugin_pane_ids);
                 self.state.remove_unattached_terminal_ids(terminal_ids);
                 self.shutdown_detached_terminal_runtimes();
@@ -174,6 +175,10 @@ impl App {
                         workspace_id: self.public_workspace_id(target_ws_idx),
                     },
                 });
+                if self.project_service.is_available() {
+                    self.state.projects.snapshot = self.project_service.snapshot();
+                    self.normalize_project_selection();
+                }
             }
         }
 

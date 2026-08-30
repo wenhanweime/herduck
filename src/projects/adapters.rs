@@ -1122,7 +1122,10 @@ fn system_time_ms(value: std::time::SystemTime) -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-fn visit_json_lines(path: &Path, mut visitor: impl FnMut(&Value) -> Option<()>) -> Result<(), ()> {
+pub(crate) fn visit_json_lines(
+    path: &Path,
+    mut visitor: impl FnMut(&Value) -> Option<()>,
+) -> Result<(), ()> {
     let file = File::open(path).map_err(|_| ())?;
     let mut reader = BufReader::new(file);
     let mut line = Vec::new();
@@ -1361,7 +1364,7 @@ fn safe_title(value: &str) -> Option<String> {
 ///
 /// Returns an empty string when the message is nothing but preamble, so the caller falls through
 /// to the next title candidate instead of storing boilerplate.
-fn strip_injected_preamble(value: &str) -> &str {
+pub(crate) fn strip_injected_preamble(value: &str) -> &str {
     let mut rest = value.trim();
 
     // Drop leading XML-ish instruction blocks, including unclosed ones.

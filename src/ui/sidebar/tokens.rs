@@ -12,6 +12,7 @@ pub(super) enum ResolvedToken {
     Tab(String),
     Pane(String),
     Agent(String),
+    SessionTitle(String),
     TerminalTitle(String),
     Branch(String),
     GitStatus { ahead: usize, behind: usize },
@@ -42,6 +43,9 @@ pub(super) fn agent_rows(
                     }
                     AgentSidebarToken::Pane => entry.pane_label.clone().map(ResolvedToken::Pane),
                     AgentSidebarToken::Agent => entry.agent_label.clone().map(ResolvedToken::Agent),
+                    AgentSidebarToken::SessionTitle => {
+                        entry.session_title.clone().map(ResolvedToken::SessionTitle)
+                    }
                     AgentSidebarToken::TerminalTitle => entry
                         .terminal_title
                         .clone()
@@ -131,6 +135,7 @@ mod tests {
             pane_label: None,
             terminal_title: None,
             terminal_title_stripped: None,
+            session_title: None,
             agent_label: Some("pi".into()),
             agent: Some(crate::detect::Agent::Pi),
             state: AgentState::Working,

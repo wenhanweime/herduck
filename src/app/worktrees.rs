@@ -969,6 +969,8 @@ impl App {
     }
 
     pub(crate) fn close_removed_linked_worktree_workspace(&mut self, ws_idx: usize) {
+        let pane_ids = self.state.pane_ids_for_workspace(ws_idx);
+        self.clear_project_runtime_for_panes(pane_ids);
         let parent_key = self
             .state
             .workspaces

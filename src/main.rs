@@ -313,16 +313,16 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # "workspaces" is accepted as an alias for "spaces".
 # agent_panel_sort = "spaces"
 
-# Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
+# Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent, session_title,
 # terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.
 # [ui.sidebar.agents]
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
-# rows = [["state_icon", "workspace", "tab"], ["agent"]]
+# rows = [["state_icon", "session_title", "agent"], ["workspace", "tab"]]
 # Optional canonical agent IDs replace the default rows for matching agents.
 # [ui.sidebar.agents.rows_by_agent]
-# claude = [["state_icon", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]
+# claude = [["state_icon", "session_title", "agent"], ["workspace", "tab"]]
 
 # Expanded space rows. Built-ins are state_icon, state_text, workspace, branch, and git_status.
 # Custom values reported through workspace metadata use a $name token, for example $jj_status.

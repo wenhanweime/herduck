@@ -2,15 +2,25 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use super::catalog::{CatalogError, ScanCompletion};
-use super::domain::{PendingSemanticSession, SemanticAssignment, SemanticTopicMerge};
+use super::domain::{
+    PendingSemanticSession, PendingTitleSession, SemanticAssignment, SemanticTopicMerge,
+    SessionTitleUpdate,
+};
 use super::{
     ProjectCatalog, ProjectSessionsPage, ProjectsSnapshot, SessionCandidate, SessionCursor,
 };
 
 const PROJECT_PAGE_SIZE: usize = 50;
 const SCAN_WRITE_BATCH_SIZE: usize = 256;
+/// How often a live server checks provider history for newly-created sessions.
+///
+/// Adapter scanners keep per-root watermarks and return a reused cache when nothing changed, so
+/// this refresh is cheap in the steady state while ensuring a long-lived TUI does not show a
+/// stale Projects/Clusters tree indefinitely.
+const BACKGROUND_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectServiceError {
@@ -108,6 +118,18 @@ pub(crate) enum ProjectCommand {
         observed_at: i64,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
     },
+    PendingTitles {
+        limit: usize,
+        reply: mpsc::Sender<Result<Vec<PendingTitleSession>, ProjectServiceError>>,
+    },
+    ClaimTitles {
+        keys: Vec<String>,
+        reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
+    },
+    ApplyTitles {
+        updates: Vec<SessionTitleUpdate>,
+        reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
+    },
     Shutdown,
 }
 
@@ -177,6 +199,12 @@ impl ProjectService {
     }
 
     fn from_catalog(mut catalog: ProjectCatalog, event_hub: crate::api::EventHub) -> Self {
+        if let Err(error) = catalog.reset_running_titles() {
+            tracing::warn!(
+                category = "title_runtime_reset",
+                "Title state reset failed: {error}"
+            );
+        }
         if let Err(error) = catalog.clear_all_runtime_mappings() {
             tracing::warn!(
                 category = "catalog_runtime_reset",
@@ -233,16 +261,37 @@ impl ProjectService {
         let roots = roots.to_vec();
         let scans_in_progress = Arc::clone(&self.scans_in_progress);
         let shutdown = Arc::clone(&self.shutdown);
-        scans_in_progress.fetch_add(1, Ordering::Release);
         match std::thread::Builder::new()
             .name("ork3-project-scan".to_string())
             .spawn(move || {
-                run_background_scan(sender, scanner, roots, &shutdown);
-                scans_in_progress.fetch_sub(1, Ordering::Release);
+                loop {
+                    if shutdown.load(Ordering::Acquire) {
+                        return;
+                    }
+                    scans_in_progress.fetch_add(1, Ordering::Release);
+                    run_background_scan(
+                        sender.clone(),
+                        Arc::clone(&scanner),
+                        roots.clone(),
+                        &shutdown,
+                    );
+                    scans_in_progress.fetch_sub(1, Ordering::Release);
+
+                    // Sleep in short slices so shutdown and live handoff do not have to wait for
+                    // the entire refresh interval.
+                    let mut remaining = BACKGROUND_SCAN_INTERVAL;
+                    while remaining > Duration::ZERO {
+                        if shutdown.load(Ordering::Acquire) {
+                            return;
+                        }
+                        let pause = remaining.min(Duration::from_millis(250));
+                        std::thread::sleep(pause);
+                        remaining = remaining.saturating_sub(pause);
+                    }
+                }
             }) {
             Ok(worker) => self.scan_workers.push(worker),
             Err(error) => {
-                self.scans_in_progress.fetch_sub(1, Ordering::Release);
                 tracing::warn!(
                     category = "adapter_worker_start",
                     "Project adapter worker failed to start: {error}"
@@ -328,6 +377,36 @@ impl ProjectService {
             Err(error) => tracing::warn!(
                 category = "semantic_worker_start",
                 "Project semantic worker failed to start: {error}"
+            ),
+        }
+    }
+
+    /// Starts the asynchronous title generator after the adapter scan has populated the Catalog.
+    pub(crate) fn start_title_generation(&mut self, config: super::semantic::SemanticConfig) {
+        if !config.enabled {
+            return;
+        }
+        let Some(sender) = self.sender.clone() else {
+            return;
+        };
+        let scans_in_progress = Arc::clone(&self.scans_in_progress);
+        let shutdown = Arc::clone(&self.shutdown);
+        match std::thread::Builder::new()
+            .name("ork3-session-titles".to_string())
+            .spawn(move || {
+                while scans_in_progress.load(Ordering::Acquire) > 0
+                    && !shutdown.load(Ordering::Acquire)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if !shutdown.load(Ordering::Acquire) {
+                    super::title::run_title_generation_worker(&sender, &config, &shutdown);
+                }
+            }) {
+            Ok(worker) => self.scan_workers.push(worker),
+            Err(error) => tracing::warn!(
+                category = "title_worker_start",
+                "Session title worker failed to start: {error}"
             ),
         }
     }
@@ -424,6 +503,15 @@ fn run_background_scan(
                 continue;
             }
         };
+        tracing::debug!(
+            adapter = scan.adapter,
+            root = %scan.root_key,
+            reused_cache = scan.reused_cache,
+            candidates = scan.candidates.len(),
+            excluded = scan.excluded_source_keys.len(),
+            completion = ?scan.completion,
+            "Project adapter scan completed"
+        );
         if shutdown.load(Ordering::Acquire) {
             return;
         }
@@ -533,6 +621,39 @@ pub(crate) fn request_apply_semantic(
     })
 }
 
+pub(crate) fn request_pending_titles(
+    sender: &mpsc::Sender<ProjectCommand>,
+    limit: usize,
+) -> Result<Vec<PendingTitleSession>, ProjectServiceError> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    sender
+        .send(ProjectCommand::PendingTitles {
+            limit,
+            reply: reply_tx,
+        })
+        .map_err(|_| ProjectServiceError::unavailable())?;
+    reply_rx
+        .recv()
+        .map_err(|_| ProjectServiceError::unavailable())?
+}
+
+pub(crate) fn request_apply_titles(
+    sender: &mpsc::Sender<ProjectCommand>,
+    updates: Vec<SessionTitleUpdate>,
+) -> Result<u64, ProjectServiceError> {
+    request_on_sender(sender, |reply| ProjectCommand::ApplyTitles {
+        updates,
+        reply,
+    })
+}
+
+pub(crate) fn request_claim_titles(
+    sender: &mpsc::Sender<ProjectCommand>,
+    keys: Vec<String>,
+) -> Result<u64, ProjectServiceError> {
+    request_on_sender(sender, |reply| ProjectCommand::ClaimTitles { keys, reply })
+}
+
 pub(crate) fn request_begin_topic_merge(
     sender: &mpsc::Sender<ProjectCommand>,
     now: i64,
@@ -627,6 +748,22 @@ fn process_command(
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.apply_semantic_batch(&batch, observed_at)
         }),
+        ProjectCommand::PendingTitles { limit, reply } => {
+            let result = catalog
+                .pending_title_sessions(limit)
+                .map_err(ProjectServiceError::catalog);
+            let _ = reply.send(result);
+        }
+        ProjectCommand::ClaimTitles { keys, reply } => {
+            finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
+                catalog.claim_title_batch(&keys)
+            });
+        }
+        ProjectCommand::ApplyTitles { updates, reply } => {
+            finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
+                catalog.apply_title_batch(&updates)
+            });
+        }
         ProjectCommand::SessionsPage {
             project_key,
             cursor,

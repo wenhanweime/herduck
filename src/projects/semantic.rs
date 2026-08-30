@@ -194,6 +194,11 @@ pub(crate) fn backend_command(backend: &str, model: Option<&str>, prompt: &str) 
             "--skip-git-repo-check".to_string(),
             prompt.to_string(),
         ],
+        "hermes" => vec![
+            "-z".to_string(),
+            prompt.to_string(),
+            "--ignore-rules".to_string(),
+        ],
         _ => vec![prompt.to_string()],
     }
 }
@@ -817,22 +822,18 @@ pub(crate) fn run_classification_worker(
     config: &SemanticConfig,
     shutdown: &std::sync::atomic::AtomicBool,
 ) {
-    let mut idle_rounds = 0usize;
     while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
         let classified = run_classification_pass(sender, config, shutdown);
+        // Keep the worker alive for the lifetime of the server. Adapter scans can discover new
+        // sessions long after startup; exiting after two idle rounds would leave those sessions
+        // permanently outside Clusters until the next restart. The pass itself is bounded and
+        // the configured backoff prevents idle polling from consuming CPU.
         if classified == 0 {
-            // Either everything is classified, or no backend is answering. Either way, back off
-            // rather than spinning; a later pass retries after the idle interval.
-            idle_rounds += 1;
-            if idle_rounds >= 2 {
-                break;
-            }
-        } else {
-            idle_rounds = 0;
+            tracing::debug!(category = "semantic_idle", "No sessions awaiting classification");
+            run_topic_merge_maintenance(sender, config);
         }
         std::thread::sleep(config.idle_backfill);
     }
-    run_topic_merge_maintenance(sender, config);
 }
 
 fn now_ms() -> i64 {
