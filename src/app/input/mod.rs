@@ -644,7 +644,7 @@ impl App {
         let scrollback = self.state.pane_scrollback_limit_bytes;
 
         let spawned = if self.state.workspaces.is_empty() {
-            match crate::workspace::Workspace::new_argv_command_with_extra_env(
+            match crate::workspace::Workspace::new_argv_command_with_agent_colors(
                 cwd,
                 rows,
                 cols,
@@ -677,7 +677,7 @@ impl App {
         } else {
             let ws_idx = self.state.active.unwrap_or(0);
             let created = self.state.workspaces.get_mut(ws_idx).and_then(|ws| {
-                ws.create_tab_argv_command(
+                ws.create_tab_argv_command_with_agent_colors(
                     rows, cols, cwd, &plan.argv, extra_env, scrollback, theme,
                 )
                 .ok()

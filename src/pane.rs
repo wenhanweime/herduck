@@ -73,6 +73,7 @@ fn apply_interactive_agent_color_env(cmd: &mut CommandBuilder, program: &str) {
     // child terminal presentation, so an interactive Claude pane must opt back into color.
     cmd.env_remove("NO_COLOR");
     cmd.env("CLICOLOR", "1");
+    cmd.env("CLICOLOR_FORCE", "1");
     cmd.env("FORCE_COLOR", "1");
 }
 
@@ -131,8 +132,8 @@ impl PaneLaunchEnv {
     }
 
     /// Let an interactive agent emit its own terminal styling instead of inheriting a host-wide
-    /// `NO_COLOR`/`CLICOLOR=0` preference. This is used for the shell that launches a deferred
-    /// native resume; ordinary user shells keep their inherited color policy.
+    /// `NO_COLOR`/`CLICOLOR=0` preference. This is used only for native agent resumes; ordinary
+    /// user shells and command panes keep their inherited color policy.
     pub(crate) fn with_interactive_agent_colors(mut self) -> Self {
         self.interactive_agent_colors = true;
         self
@@ -3216,6 +3217,41 @@ mod tests {
             cmd.get_env("FORCE_COLOR").and_then(std::ffi::OsStr::to_str),
             Some("1")
         );
+    }
+
+    #[test]
+    fn direct_claude_launch_restores_native_color_output() {
+        let mut cmd = CommandBuilder::new("claude");
+        apply_interactive_agent_color_env(&mut cmd, "claude");
+
+        assert_eq!(cmd.get_env("NO_COLOR"), None);
+        assert_eq!(
+            cmd.get_env("CLICOLOR").and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
+        assert_eq!(
+            cmd.get_env("CLICOLOR_FORCE")
+                .and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
+        assert_eq!(
+            cmd.get_env("FORCE_COLOR").and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn direct_non_claude_launch_keeps_inherited_color_policy() {
+        let mut cmd = CommandBuilder::new("codex");
+        let inherited = ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE", "FORCE_COLOR"]
+            .into_iter()
+            .map(|name| (name, cmd.get_env(name).map(|value| value.to_os_string())))
+            .collect::<Vec<_>>();
+        apply_interactive_agent_color_env(&mut cmd, "codex");
+
+        for (name, value) in inherited {
+            assert_eq!(cmd.get_env(name).map(|value| value.to_os_string()), value);
+        }
     }
 
     #[cfg(unix)]

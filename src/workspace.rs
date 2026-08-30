@@ -283,6 +283,7 @@ impl Workspace {
             render_dirty,
             None,
             extra_env,
+            false,
         )
     }
 
@@ -338,6 +339,39 @@ impl Workspace {
             render_dirty,
             Some(argv),
             extra_env,
+            false,
+        )
+    }
+
+    /// Starts an argv command with the environment required by interactive agents to retain
+    /// their native terminal colours. This is intentionally separate from ordinary argv panes:
+    /// user commands must keep their inherited `NO_COLOR`/`CLICOLOR` policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_argv_command_with_agent_colors(
+        initial_cwd: PathBuf,
+        rows: u16,
+        cols: u16,
+        argv: &[String],
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<AtomicBool>,
+        extra_env: Vec<(String, String)>,
+    ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
+        Self::new_with_tab(
+            initial_cwd,
+            rows,
+            cols,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            events,
+            render_notify,
+            render_dirty,
+            Some(argv),
+            extra_env,
+            true,
         )
     }
 
@@ -354,6 +388,7 @@ impl Workspace {
         render_dirty: Arc<AtomicBool>,
         argv: Option<&[String]>,
         extra_env: Vec<(String, String)>,
+        interactive_agent_colors: bool,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         let id = generate_workspace_id();
         let launch_env = PaneLaunchEnv::from_extra(extra_env).with_identity(
@@ -361,6 +396,11 @@ impl Workspace {
             public_tab_id_for_number(&id, 1),
             public_pane_id_for_number(&id, 1),
         );
+        let launch_env = if interactive_agent_colors {
+            launch_env.with_interactive_agent_colors()
+        } else {
+            launch_env
+        };
         let (tab, terminal, runtime) = if let Some(argv) = argv {
             Tab::new_argv_command(
                 1,
@@ -471,6 +511,7 @@ impl Workspace {
             shell_config,
             None,
             extra_env,
+            false,
         )
     }
 
@@ -493,6 +534,33 @@ impl Workspace {
             crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
             Some(argv),
             extra_env,
+            false,
+        )
+    }
+
+    /// Creates an argv tab with the environment required by interactive agents to retain their
+    /// native terminal colours. Ordinary command tabs keep the inherited colour policy.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_tab_argv_command_with_agent_colors(
+        &mut self,
+        rows: u16,
+        cols: u16,
+        cwd: PathBuf,
+        argv: &[String],
+        extra_env: Vec<(String, String)>,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+    ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
+        self.create_tab_with_runtime(
+            rows,
+            cols,
+            cwd,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            Some(argv),
+            extra_env,
+            true,
         )
     }
 
@@ -506,11 +574,13 @@ impl Workspace {
         shell_config: crate::pane::PaneShellConfig<'_>,
         argv: Option<&[String]>,
         extra_env: Vec<(String, String)>,
+        interactive_agent_colors: bool,
     ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
         let number = self.next_public_tab_number;
         self.next_public_tab_number += 1;
         let pane_number = self.next_public_pane_number;
-        let launch_env = self.launch_env_for_new_pane(number, pane_number, extra_env);
+        let launch_env =
+            self.launch_env_for_new_pane(number, pane_number, extra_env, interactive_agent_colors);
         let events = self
             .active_tab()
             .map(|tab| tab.events.clone())
@@ -621,7 +691,7 @@ impl Workspace {
             .active_tab()
             .map(|tab| tab.number)
             .expect("workspace must always have at least one tab");
-        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
+        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env, false);
         let new_pane = self
             .active_tab_mut()
             .expect("workspace must always have at least one tab")
@@ -656,7 +726,7 @@ impl Workspace {
             .active_tab()
             .map(|tab| tab.number)
             .expect("workspace must always have at least one tab");
-        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
+        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env, false);
         let new_pane = self
             .active_tab_mut()
             .expect("workspace must always have at least one tab")
@@ -814,7 +884,7 @@ impl Workspace {
         let tab_idx = self.find_tab_index_for_pane(pane_id)?;
         let pane_number = self.next_public_pane_number;
         let tab_number = self.tabs[tab_idx].number;
-        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env);
+        let launch_env = self.launch_env_for_new_pane(tab_number, pane_number, extra_env, false);
         let tab = &mut self.tabs[tab_idx];
         let previous_focus = tab.layout.focused();
         tab.layout.focus_pane(pane_id);
@@ -1014,12 +1084,18 @@ impl Workspace {
         tab_number: usize,
         pane_number: usize,
         extra_env: Vec<(String, String)>,
+        interactive_agent_colors: bool,
     ) -> PaneLaunchEnv {
-        PaneLaunchEnv::from_extra(extra_env).with_identity(
+        let launch_env = PaneLaunchEnv::from_extra(extra_env).with_identity(
             self.id.clone(),
             public_tab_id_for_number(&self.id, tab_number),
             public_pane_id_for_number(&self.id, pane_number),
-        )
+        );
+        if interactive_agent_colors {
+            launch_env.with_interactive_agent_colors()
+        } else {
+            launch_env
+        }
     }
 
     pub fn public_tab_number(&self, tab_idx: usize) -> Option<usize> {
@@ -1454,6 +1530,22 @@ mod tests {
             second.len() <= 3,
             "unexpectedly long workspace id: {second}"
         );
+    }
+
+    #[test]
+    fn native_agent_color_launch_env_is_opt_in() {
+        let workspace = Workspace::test_new("test");
+        let inherited = PaneLaunchEnv::from_extra(Vec::new()).with_identity(
+            workspace.id.clone(),
+            public_tab_id_for_number(&workspace.id, 1),
+            public_pane_id_for_number(&workspace.id, 1),
+        );
+
+        let ordinary = workspace.launch_env_for_new_pane(1, 1, Vec::new(), false);
+        assert_eq!(ordinary, inherited);
+
+        let agent = workspace.launch_env_for_new_pane(1, 1, Vec::new(), true);
+        assert_eq!(agent, inherited.with_interactive_agent_colors());
     }
 
     #[test]
