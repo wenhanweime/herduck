@@ -1141,15 +1141,10 @@ fn resolved_token_spans(
 /// renderer, so it must apply that identity colour explicitly to the Agent token instead of
 /// treating it as generic secondary metadata.
 fn agent_identity_style(agent: Option<crate::detect::Agent>, p: &Palette) -> Style {
-    let color = match agent {
-        Some(crate::detect::Agent::Codex) => p.blue,
-        Some(crate::detect::Agent::Claude) => p.peach,
-        Some(crate::detect::Agent::Grok) => p.teal,
-        Some(crate::detect::Agent::Pi) => p.mauve,
-        Some(crate::detect::Agent::OpenCode) => p.yellow,
-        _ => return Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
-    };
-    Style::default().fg(color)
+    super::agent_identity_color(agent, p).map_or_else(
+        || Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+        |color| Style::default().fg(color),
+    )
 }
 
 fn render_workspace_list(
