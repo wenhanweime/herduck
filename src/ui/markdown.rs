@@ -22,18 +22,6 @@ const LIST_INDENT: usize = 2;
 
 /// Renders one Markdown document into styled lines.
 pub(crate) fn markdown_lines<'a>(body: &str, palette: &Palette) -> Vec<Line<'a>> {
-    markdown_lines_with_base(body, palette, Style::default().fg(palette.text))
-}
-
-/// Render Markdown with a caller-selected prose colour.
-///
-/// History views use this for assistant turns so long stretches of ordinary agent output remain
-/// visually distinct even when the text contains little Markdown syntax.
-pub(crate) fn markdown_lines_with_base<'a>(
-    body: &str,
-    palette: &Palette,
-    base_style: Style,
-) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let mut in_fence = false;
 
@@ -65,7 +53,7 @@ pub(crate) fn markdown_lines_with_base<'a>(
             continue;
         }
 
-        if let Some(line) = heading_line(trimmed, palette, base_style) {
+        if let Some(line) = heading_line(trimmed, palette) {
             lines.push(line);
             continue;
         }
@@ -79,19 +67,23 @@ pub(crate) fn markdown_lines_with_base<'a>(
             continue;
         }
 
-        if let Some(line) = list_line(trimmed_end, palette, base_style) {
+        if let Some(line) = list_line(trimmed_end, palette) {
             lines.push(line);
             continue;
         }
 
-        lines.push(Line::from(inline_spans(trimmed_end, base_style, palette)));
+        lines.push(Line::from(inline_spans(
+            trimmed_end,
+            Style::default().fg(palette.text),
+            palette,
+        )));
     }
 
     lines
 }
 
 /// `#` through `######`, rendered as a weight ladder rather than literal hashes.
-fn heading_line<'a>(trimmed: &str, palette: &Palette, base_style: Style) -> Option<Line<'a>> {
+fn heading_line<'a>(trimmed: &str, palette: &Palette) -> Option<Line<'a>> {
     let hashes = trimmed.chars().take_while(|c| *c == '#').count();
     if hashes == 0 || hashes > 6 {
         return None;
@@ -103,7 +95,9 @@ fn heading_line<'a>(trimmed: &str, palette: &Palette, base_style: Style) -> Opti
     }
 
     let style = match hashes {
-        1 | 2 => base_style.add_modifier(Modifier::BOLD),
+        1 | 2 => Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
         3 => Style::default()
             .fg(palette.accent)
             .add_modifier(Modifier::BOLD),
@@ -119,7 +113,7 @@ fn heading_line<'a>(trimmed: &str, palette: &Palette, base_style: Style) -> Opti
 }
 
 /// Bulleted and ordered list items, preserving nesting depth.
-fn list_line<'a>(raw: &str, palette: &Palette, base_style: Style) -> Option<Line<'a>> {
+fn list_line<'a>(raw: &str, palette: &Palette) -> Option<Line<'a>> {
     let indent_columns = raw.len() - raw.trim_start().len();
     let trimmed = raw.trim_start();
     let depth = indent_columns / LIST_INDENT;
@@ -145,7 +139,11 @@ fn list_line<'a>(raw: &str, palette: &Palette, base_style: Style) -> Option<Line
         Span::raw(pad),
         Span::styled(format!("{marker} "), Style::default().fg(palette.accent)),
     ];
-    spans.extend(inline_spans(rest, base_style, palette));
+    spans.extend(inline_spans(
+        rest,
+        Style::default().fg(palette.text),
+        palette,
+    ));
     Some(Line::from(spans))
 }
 
