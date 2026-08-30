@@ -953,6 +953,7 @@ fn resolved_token_spans(
     state_text_style: Style,
     workspace_style: Style,
     secondary_style: Style,
+    agent_style: Style,
     session_title_style: Style,
     custom_style: Style,
     p: &Palette,
@@ -1082,10 +1083,16 @@ fn resolved_token_spans(
                     workspace_style,
                 ));
             }
-            ResolvedToken::Tab(text) | ResolvedToken::Pane(text) | ResolvedToken::Agent(text) => {
+            ResolvedToken::Tab(text) | ResolvedToken::Pane(text) => {
                 spans.push(Span::styled(
                     truncate_end(text, budgets[index]),
                     secondary_style,
+                ));
+            }
+            ResolvedToken::Agent(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    agent_style,
                 ));
             }
             ResolvedToken::SessionTitle(text) => {
@@ -1126,6 +1133,23 @@ fn resolved_token_spans(
         }
     }
     spans
+}
+
+/// Keep agent identities visually distinct in the default Spaces/Agents panel.
+///
+/// Projects and Sessions use the same stable backend palette. The Spaces panel has its own
+/// renderer, so it must apply that identity colour explicitly to the Agent token instead of
+/// treating it as generic secondary metadata.
+fn agent_identity_style(agent: Option<crate::detect::Agent>, p: &Palette) -> Style {
+    let color = match agent {
+        Some(crate::detect::Agent::Codex) => p.blue,
+        Some(crate::detect::Agent::Claude) => p.peach,
+        Some(crate::detect::Agent::Grok) => p.teal,
+        Some(crate::detect::Agent::Pi) => p.mauve,
+        Some(crate::detect::Agent::OpenCode) => p.yellow,
+        _ => return Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+    };
+    Style::default().fg(color)
 }
 
 fn render_workspace_list(
@@ -1278,6 +1302,7 @@ fn render_workspace_list(
                 branch_style,
                 branch_style,
                 branch_style,
+                branch_style,
                 p,
                 card.rect.width.saturating_sub(prefix_width) as usize,
             ));
@@ -1401,7 +1426,7 @@ fn render_agent_detail(
         } else {
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
-        let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
+        let agent_style = agent_identity_style(detail.agent, p);
         let state_icon = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
@@ -1411,6 +1436,7 @@ fn render_agent_detail(
                 state_icon,
                 status_style,
                 workspace_style,
+                agent_style,
                 agent_style,
                 name_style,
                 agent_style,
@@ -1533,6 +1559,58 @@ mod tests {
     }
 
     #[test]
+    fn default_agent_identity_styles_match_backend_palette() {
+        let palette = crate::app::state::Palette::catppuccin();
+        let cases = [
+            (Agent::Claude, palette.peach),
+            (Agent::Codex, palette.blue),
+            (Agent::Grok, palette.teal),
+            (Agent::Pi, palette.mauve),
+            (Agent::OpenCode, palette.yellow),
+        ];
+
+        for (agent, expected) in cases {
+            assert_eq!(
+                agent_identity_style(Some(agent), &palette).fg,
+                Some(expected)
+            );
+        }
+
+        let fallback = agent_identity_style(None, &palette);
+        assert_eq!(fallback.fg, Some(palette.overlay0));
+        assert!(fallback.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn default_agents_sidebar_renders_claude_label_with_identity_color() {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal_state.detected_agent = Some(Agent::Claude);
+        terminal_state.set_terminal_title(Some("review auth".into()));
+
+        let area = Rect::new(0, 0, 30, 20);
+        let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        let buffer = terminal.backend().buffer();
+        let claude_x = (0..body.width)
+            .find(|x| buffer[(body.x + *x, body.y)].symbol() == "c")
+            .expect("claude label should be visible");
+
+        assert_eq!(buffer[(body.x + claude_x, body.y)].fg, app.palette.peach);
+    }
+
+    #[test]
     fn default_agent_row_gap_packs_rendering_and_scroll_geometry() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
@@ -1628,6 +1706,7 @@ mod tests {
         let spans = resolved_token_spans(
             &[ResolvedToken::TerminalTitle("修复🙂标题很长".into())],
             ("", Style::default()),
+            Style::default(),
             Style::default(),
             Style::default(),
             Style::default(),
