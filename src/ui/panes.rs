@@ -318,7 +318,6 @@ pub(super) fn render_panes(
                 && !pane_is_scrolled_back(rt)
                 && app.pane_exposes_host_cursor(ws_idx, info.id);
             rt.render(frame, info.inner_rect, show_cursor);
-            colorize_agent_default_foreground(app, ws, info, frame);
             render_pane_scrollbar(app, frame, info, rt);
 
             let should_dim = !info.is_focused && multi_pane && !terminal_active;
@@ -367,50 +366,6 @@ pub(super) fn render_panes(
     }
 
     render_pane_borders(app, ws, frame);
-}
-
-/// Apply the agent identity colour to otherwise unstyled terminal prose.
-///
-/// Agent CLIs commonly emit their transcript body with the terminal's default foreground (or an
-/// explicit white foreground). That is indistinguishable from Herdr's surrounding UI, so the
-/// Spaces/Agents view loses the visual identity that the sidebar already provides. Preserve any
-/// deliberate non-default ANSI colours and only replace the host/default foreground.
-fn colorize_agent_default_foreground(
-    app: &AppState,
-    ws: &crate::workspace::Workspace,
-    info: &PaneInfo,
-    frame: &mut Frame,
-) {
-    let Some(terminal) = ws
-        .pane_state(info.id)
-        .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
-    else {
-        return;
-    };
-    let Some(agent_color) =
-        super::agent_identity_color(terminal.effective_known_agent(), &app.palette)
-    else {
-        return;
-    };
-    let host_foreground = app
-        .host_terminal_theme
-        .foreground
-        .map(|color| Color::Rgb(color.r, color.g, color.b));
-    let buf = frame.buffer_mut();
-    for y in info.inner_rect.y..info.inner_rect.bottom() {
-        for x in info.inner_rect.x..info.inner_rect.right() {
-            let cell = &mut buf[(x, y)];
-            if cell.symbol() == " " {
-                continue;
-            }
-            let is_default = matches!(cell.fg, Color::Reset | Color::White)
-                || cell.fg == Color::Rgb(255, 255, 255)
-                || host_foreground == Some(cell.fg);
-            if is_default {
-                cell.set_fg(agent_color);
-            }
-        }
-    }
 }
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
@@ -1034,51 +989,6 @@ mod tests {
 
         assert_eq!(title, " 1 模块… ");
         assert!(display_width(title.as_str()) <= 10);
-    }
-
-    #[tokio::test]
-    async fn agent_terminal_default_foreground_uses_identity_colour() {
-        let mut app = AppState::test_new();
-        let mut workspace = Workspace::test_new("test");
-        let pane_id = workspace.tabs[0].root_pane;
-        let terminal_id = workspace.tabs[0].panes[&pane_id]
-            .attached_terminal_id
-            .clone();
-        workspace.tabs[0].runtimes.insert(
-            pane_id,
-            TerminalRuntime::test_with_screen_bytes(30, 6, b"agent output\n"),
-        );
-        app.workspaces = vec![workspace];
-        app.active = Some(0);
-        app.ensure_test_terminals();
-        app.terminals
-            .get_mut(&terminal_id)
-            .expect("test terminal should exist")
-            .detected_agent = Some(crate::detect::Agent::Claude);
-
-        let area = Rect::new(0, 0, 30, 6);
-        app.view.pane_infos = compute_pane_infos(
-            &app,
-            &TerminalRuntimeRegistry::new(),
-            area,
-            false,
-            crate::kitty_graphics::HostCellSize::default(),
-        );
-        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(30, 6))
-            .expect("test terminal should initialize");
-        terminal
-            .draw(|frame| render_panes(&app, &TerminalRuntimeRegistry::new(), frame, area))
-            .expect("pane render should succeed");
-
-        let buffer = terminal.backend().buffer();
-        let output_x = (0..area.width)
-            .find(|x| buffer[(*x, area.y)].symbol() == "a")
-            .expect("agent output should be visible");
-        assert_eq!(
-            buffer[(output_x, area.y)].fg,
-            app.palette.peach,
-            "unstyled agent output should use the Claude identity colour"
-        );
     }
 
     #[test]

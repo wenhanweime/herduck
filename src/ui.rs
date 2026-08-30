@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Span,
     Frame,
 };
@@ -102,21 +102,6 @@ pub(crate) use self::{
 use crate::app::state::ViewLayout;
 use crate::app::{AppState, Mode};
 use crate::terminal::TerminalRuntimeRegistry;
-
-/// Stable identity colours shared by sidebar labels and agent terminal output.
-pub(crate) fn agent_identity_color(
-    agent: Option<crate::detect::Agent>,
-    palette: &crate::app::state::Palette,
-) -> Option<Color> {
-    match agent {
-        Some(crate::detect::Agent::Codex) => Some(palette.blue),
-        Some(crate::detect::Agent::Claude) => Some(palette.peach),
-        Some(crate::detect::Agent::Grok) => Some(palette.teal),
-        Some(crate::detect::Agent::Pi) => Some(palette.mauve),
-        Some(crate::detect::Agent::OpenCode) => Some(palette.yellow),
-        _ => None,
-    }
-}
 
 const COLLAPSED_WIDTH: u16 = 4; // num + space + dot + separator
 
