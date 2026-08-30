@@ -436,7 +436,7 @@ impl AppState {
                         return None;
                     }
                     if rect_contains(self.view.project_sidebar_tabs[1], mouse.column, mouse.row) {
-                        self.sidebar_view = SidebarView::Projects;
+                        self.sidebar_view = SidebarView::Sessions;
                         self.projects.grouping = ProjectGrouping::Directories;
                         self.projects.search_focused = false;
                         self.projects.selected_row = 0;
@@ -445,6 +445,15 @@ impl AppState {
                         return None;
                     }
                     if rect_contains(self.view.project_sidebar_tabs[2], mouse.column, mouse.row) {
+                        self.sidebar_view = SidebarView::Projects;
+                        self.projects.grouping = ProjectGrouping::Directories;
+                        self.projects.search_focused = false;
+                        self.projects.selected_row = 0;
+                        self.projects.scroll = 0;
+                        self.mode = Mode::Navigate;
+                        return None;
+                    }
+                    if rect_contains(self.view.project_sidebar_tabs[3], mouse.column, mouse.row) {
                         self.sidebar_view = SidebarView::Clusters;
                         self.projects.grouping = ProjectGrouping::Topics;
                         if self.projects.filter == ProjectFilter::Unclassified {
@@ -4073,7 +4082,7 @@ mod tests {
         app.state.projects.filter = ProjectFilter::Unclassified;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
-        let clusters = app.state.view.project_sidebar_tabs[2];
+        let clusters = app.state.view.project_sidebar_tabs[3];
         assert!(clusters.width > 0, "clusters tab should be laid out");
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -4084,6 +4093,29 @@ mod tests {
         assert_eq!(app.state.sidebar_view, SidebarView::Clusters);
         assert_eq!(app.state.projects.grouping, ProjectGrouping::Topics);
         assert_eq!(app.state.projects.filter, ProjectFilter::All);
+        assert_eq!(app.state.projects.selected_row, 0);
+        assert_eq!(app.state.projects.scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn clicking_sessions_top_level_tab_keeps_spaces_agents_separate() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_view = SidebarView::Projects;
+        app.state.mode = Mode::Navigate;
+        app.state.projects.filter = ProjectFilter::Unclassified;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+
+        let sessions = app.state.view.project_sidebar_tabs[1];
+        assert!(sessions.width > 0, "sessions tab should be laid out");
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sessions.x,
+            sessions.y,
+        ));
+
+        assert_eq!(app.state.sidebar_view, SidebarView::Sessions);
+        assert_eq!(app.state.projects.grouping, ProjectGrouping::Directories);
+        assert_eq!(app.state.projects.filter, ProjectFilter::Unclassified);
         assert_eq!(app.state.projects.selected_row, 0);
         assert_eq!(app.state.projects.scroll, 0);
     }

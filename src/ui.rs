@@ -415,7 +415,7 @@ fn compute_mobile_view(
         toast_hit_area,
         pane_infos,
         split_borders,
-        project_sidebar_tabs: [Rect::default(); 3],
+        project_sidebar_tabs: [Rect::default(); 4],
         project_filter_tabs: [Rect::default(); 3],
         project_search_rect: Rect::default(),
         project_tree_rect: Rect::default(),

@@ -595,7 +595,7 @@ impl App {
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
                 split_borders: Vec::new(),
-                project_sidebar_tabs: [Rect::default(); 3],
+                project_sidebar_tabs: [Rect::default(); 4],
                 project_filter_tabs: [Rect::default(); 3],
                 project_search_rect: Rect::default(),
                 project_tree_rect: Rect::default(),

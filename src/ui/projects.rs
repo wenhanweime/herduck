@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
@@ -75,7 +77,7 @@ impl ProjectTreeRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectSidebarGeometry {
-    pub sidebar_tabs: [Rect; 3],
+    pub sidebar_tabs: [Rect; 4],
     pub filter_tabs: [Rect; 3],
     pub search: Rect,
     pub tree: Rect,
@@ -92,6 +94,49 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
 
     let query = app.projects.query.trim().to_lowercase();
     let mut rows = Vec::new();
+    if app.sidebar_view == crate::app::state::SidebarView::Sessions {
+        let mut seen = HashSet::new();
+        let mut sessions = app
+            .projects
+            .snapshot
+            .projects
+            .iter()
+            .flat_map(|project| project.sessions.iter())
+            .filter(|session| seen.insert(session.stable_key.clone()))
+            .filter(|session| {
+                (app.projects.filter != ProjectFilter::Live || session.live)
+                    && (app.projects.filter != ProjectFilter::Unclassified
+                        || session.topic_label.is_none())
+            })
+            .filter(|session| {
+                query.is_empty()
+                    || format!(
+                        "{} {} {}",
+                        session.title,
+                        session.backend,
+                        session.cwd.as_deref().unwrap_or_default()
+                    )
+                    .to_lowercase()
+                    .contains(&query)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            right
+                .last_activity_at
+                .cmp(&left.last_activity_at)
+                .then_with(|| left.stable_key.cmp(&right.stable_key))
+        });
+        rows.extend(sessions.into_iter().map(ProjectTreeRow::Session));
+        if rows.is_empty() {
+            rows.push(ProjectTreeRow::Empty(if query.is_empty() {
+                "No sessions yet".to_string()
+            } else {
+                "No matching sessions".to_string()
+            }));
+        }
+        return rows;
+    }
     let grouping = app
         .sidebar_view
         .project_grouping()
@@ -307,7 +352,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.width == 0 || content.height == 0 {
         return ProjectSidebarGeometry {
-            sidebar_tabs: [Rect::default(); 3],
+            sidebar_tabs: [Rect::default(); 4],
             filter_tabs: [Rect::default(); 3],
             search: Rect::default(),
             tree: Rect::default(),
@@ -317,10 +362,21 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
     }
 
     let tab_gap = u16::from(content.width >= 5);
-    let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(2));
-    let first_width = tab_inner / 3;
-    let second_width = tab_inner.saturating_sub(first_width) / 2;
-    let third_width = tab_inner.saturating_sub(first_width.saturating_add(second_width));
+    let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(3));
+    // Give the longer Spaces / Agents label a proportionally wider hit area while keeping the
+    // three peer browser tabs balanced. At the normal sidebar width this fits the full label;
+    // narrower sidebars still retain a distinct clickable rect for every tab.
+    let first_width = tab_inner.saturating_mul(13) / 37;
+    let second_width = tab_inner.saturating_sub(first_width).saturating_mul(8) / 24;
+    let third_width = tab_inner
+        .saturating_sub(first_width.saturating_add(second_width))
+        .saturating_mul(8)
+        / 16;
+    let fourth_width = tab_inner.saturating_sub(
+        first_width
+            .saturating_add(second_width)
+            .saturating_add(third_width),
+    );
     let sidebar_tabs = [
         Rect::new(content.x, content.y, first_width, 1),
         Rect::new(
@@ -333,6 +389,12 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
             content.x + first_width + tab_gap + second_width + tab_gap,
             content.y,
             third_width,
+            1,
+        ),
+        Rect::new(
+            content.x + first_width + tab_gap + second_width + tab_gap + third_width + tab_gap,
+            content.y,
+            fourth_width,
             1,
         ),
     ];
@@ -399,8 +461,8 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
     }
 }
 
-pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 3]) {
-    let labels = ["Sessions", "Projects", "Clusters"];
+pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 4]) {
+    let labels = ["Spaces / Agents", "Sessions", "Projects", "Clusters"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 {
             continue;
@@ -408,8 +470,9 @@ pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect
         let active = matches!(
             (index, app.sidebar_view),
             (0, crate::app::state::SidebarView::SpacesAgents)
-                | (1, crate::app::state::SidebarView::Projects)
-                | (2, crate::app::state::SidebarView::Clusters)
+                | (1, crate::app::state::SidebarView::Sessions)
+                | (2, crate::app::state::SidebarView::Projects)
+                | (3, crate::app::state::SidebarView::Clusters)
         );
         let style = if active {
             Style::default()
@@ -1109,7 +1172,7 @@ mod tests {
         let geometry = project_sidebar_geometry(&state, Rect::new(0, 0, 30, 12));
         assert!(geometry.sidebar_tabs.iter().all(|rect| rect.height == 1));
         assert_eq!(geometry.sidebar_tabs[0].y, geometry.filter_tabs[0].y - 1);
-        assert_eq!(geometry.sidebar_tabs[2].right(), 29);
+        assert_eq!(geometry.sidebar_tabs[3].right(), 29);
         assert!(
             geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
             "Sessions/Projects/Clusters tabs must not abut"
@@ -1124,11 +1187,107 @@ mod tests {
             "all/live/unclass chips paint backgrounds and must not abut"
         );
         assert!(
-            geometry.filter_tabs[2].right() <= geometry.sidebar_tabs[2].right(),
+            geometry.filter_tabs[2].right() <= geometry.sidebar_tabs[3].right(),
             "filter chips must stay inside the sidebar content column"
         );
         assert_eq!(geometry.row_hits.len(), 2);
         assert_eq!(geometry.row_hits[0].rect.height, 1);
+    }
+
+    #[test]
+    fn sessions_tab_is_a_flat_activity_sorted_session_list() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Sessions;
+        let mut snapshot = snapshot();
+        let mut newer = snapshot.projects[0].sessions[0].clone();
+        newer.stable_key = "s-newer".into();
+        newer.ref_value = "s-newer".into();
+        newer.title = "Newer session".into();
+        newer.last_activity_at = 30;
+        newer.live = false;
+        newer.workspace_id = None;
+        newer.pane_id = None;
+        newer.runtime_generation = None;
+
+        let mut duplicate = newer.clone();
+        duplicate.title = "Duplicate copy".into();
+        duplicate.last_activity_at = 40;
+
+        let mut other_project = snapshot.projects[0].clone();
+        other_project.canonical_key = "p2".into();
+        other_project.display_name = "other".into();
+        other_project.canonical_path = "/tmp/other".into();
+        other_project.sessions = vec![duplicate, newer];
+        snapshot.projects[0].sessions.push(newer_session());
+        snapshot.projects.push(other_project);
+        state.projects.snapshot = snapshot;
+
+        let rows = project_tree_rows(&state);
+        assert!(rows
+            .iter()
+            .all(|row| matches!(row, ProjectTreeRow::Session(_))));
+        let sessions = rows
+            .iter()
+            .filter_map(|row| match row {
+                ProjectTreeRow::Session(session) => Some(session),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sessions.len(), 3, "duplicate stable keys must be collapsed");
+        assert_eq!(sessions[0].stable_key, "s-newer");
+        assert_eq!(sessions[0].last_activity_at, 40);
+        assert_eq!(sessions[1].stable_key, "s2");
+        assert_eq!(sessions[1].last_activity_at, 10);
+        assert_eq!(sessions[2].stable_key, "s1");
+    }
+
+    fn newer_session() -> IndexedSessionSummary {
+        IndexedSessionSummary {
+            stable_key: "s2".into(),
+            backend: "claude".into(),
+            ref_kind: SessionRefKind::Id,
+            ref_value: "s2".into(),
+            title: "Older session".into(),
+            cwd: Some("/tmp/ait".into()),
+            first_activity_at: 1,
+            last_activity_at: 10,
+            live: false,
+            workspace_id: None,
+            pane_id: None,
+            runtime_generation: None,
+            session_class: crate::projects::SessionClass::Interactive,
+            topic_label: None,
+            transcript_ref: None,
+        }
+    }
+
+    #[test]
+    fn sessions_tab_applies_live_unclassified_and_search_filters() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Sessions;
+        let mut snapshot = snapshot();
+        let mut historical = newer_session();
+        historical.topic_label = Some("topic".into());
+        historical.title = "Historical topic".into();
+        snapshot.projects[0].sessions.push(historical);
+        state.projects.snapshot = snapshot;
+
+        state.projects.filter = ProjectFilter::Live;
+        assert!(project_tree_rows(&state)
+            .iter()
+            .all(|row| { matches!(row, ProjectTreeRow::Session(session) if session.live) }));
+
+        state.projects.filter = ProjectFilter::Unclassified;
+        assert!(project_tree_rows(&state).iter().all(|row| {
+            matches!(row, ProjectTreeRow::Session(session) if session.topic_label.is_none())
+        }));
+
+        state.projects.filter = ProjectFilter::All;
+        state.projects.query = "historical".into();
+        let rows = project_tree_rows(&state);
+        assert!(
+            matches!(&rows[..], [ProjectTreeRow::Session(session)] if session.title == "Historical topic")
+        );
     }
 
     /// Builds a state whose single session is genuinely mapped to the focused pane, so `Open` is

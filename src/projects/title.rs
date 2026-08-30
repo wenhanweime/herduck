@@ -403,7 +403,11 @@ pub(crate) fn fallback_title(envelope: &TitleEnvelope) -> String {
             let clause = first_clause(intent);
             (clause.chars().count() >= 6).then_some((
                 information_score(intent)
-                    - if is_likely_pasted_answer(intent) { 8 } else { 0 },
+                    - if is_likely_pasted_answer(intent) {
+                        8
+                    } else {
+                        0
+                    },
                 position,
                 clause,
             ))
@@ -570,7 +574,10 @@ pub(crate) fn run_title_generation_worker(
             // Keep polling for sessions discovered by later adapter refreshes. This worker used
             // to exit after two idle rounds, so titles for sessions created while Herdr stayed
             // open were never generated until the next restart.
-            tracing::debug!(category = "title_idle", "No sessions awaiting title generation");
+            tracing::debug!(
+                category = "title_idle",
+                "No sessions awaiting title generation"
+            );
             std::thread::sleep(config.idle_backfill);
             continue;
         }

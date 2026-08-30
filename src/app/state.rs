@@ -776,6 +776,7 @@ pub enum ViewLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarView {
     SpacesAgents,
+    Sessions,
     Projects,
     Clusters,
 }
@@ -802,12 +803,13 @@ pub enum ProjectHistoryView {
 
 impl SidebarView {
     pub(crate) fn is_project_browser(self) -> bool {
-        matches!(self, Self::Projects | Self::Clusters)
+        matches!(self, Self::Sessions | Self::Projects | Self::Clusters)
     }
 
     pub(crate) fn project_grouping(self) -> Option<ProjectGrouping> {
         match self {
             Self::Projects => Some(ProjectGrouping::Directories),
+            Self::Sessions => Some(ProjectGrouping::Directories),
             Self::Clusters => Some(ProjectGrouping::Topics),
             Self::SpacesAgents => None,
         }
@@ -910,7 +912,7 @@ pub struct ViewState {
     pub toast_hit_area: Rect,
     pub pane_infos: Vec<PaneInfo>,
     pub split_borders: Vec<SplitBorder>,
-    pub project_sidebar_tabs: [Rect; 3],
+    pub project_sidebar_tabs: [Rect; 4],
     pub project_filter_tabs: [Rect; 3],
     pub project_search_rect: Rect,
     pub project_tree_rect: Rect,
@@ -1929,7 +1931,7 @@ impl AppState {
                 toast_hit_area: Rect::default(),
                 pane_infos: Vec::new(),
                 split_borders: Vec::new(),
-                project_sidebar_tabs: [Rect::default(); 3],
+                project_sidebar_tabs: [Rect::default(); 4],
                 project_filter_tabs: [Rect::default(); 3],
                 project_search_rect: Rect::default(),
                 project_tree_rect: Rect::default(),

@@ -348,20 +348,41 @@ impl App {
 
         match key.code {
             KeyCode::Left if key.modifiers.is_empty() => {
-                if self.state.sidebar_view == crate::app::state::SidebarView::Clusters {
-                    self.state.sidebar_view = crate::app::state::SidebarView::Projects;
-                } else {
-                    self.state.sidebar_view = crate::app::state::SidebarView::SpacesAgents;
-                    self.state.projects.search_focused = false;
-                }
+                self.state.sidebar_view = match self.state.sidebar_view {
+                    crate::app::state::SidebarView::Clusters => {
+                        crate::app::state::SidebarView::Projects
+                    }
+                    crate::app::state::SidebarView::Projects => {
+                        crate::app::state::SidebarView::Sessions
+                    }
+                    crate::app::state::SidebarView::Sessions => {
+                        crate::app::state::SidebarView::SpacesAgents
+                    }
+                    crate::app::state::SidebarView::SpacesAgents => return true,
+                };
+                self.state.projects.search_focused = false;
                 self.state.projects.grouping = crate::app::state::ProjectGrouping::Directories;
                 self.state.projects.selected_row = 0;
                 self.state.projects.scroll = 0;
                 true
             }
             KeyCode::Right if key.modifiers.is_empty() => {
-                self.state.sidebar_view = crate::app::state::SidebarView::Clusters;
-                self.state.projects.grouping = crate::app::state::ProjectGrouping::Topics;
+                self.state.sidebar_view = match self.state.sidebar_view {
+                    crate::app::state::SidebarView::Sessions => {
+                        crate::app::state::SidebarView::Projects
+                    }
+                    crate::app::state::SidebarView::Projects => {
+                        crate::app::state::SidebarView::Clusters
+                    }
+                    crate::app::state::SidebarView::Clusters
+                    | crate::app::state::SidebarView::SpacesAgents => return true,
+                };
+                self.state.projects.grouping =
+                    if self.state.sidebar_view == crate::app::state::SidebarView::Clusters {
+                        crate::app::state::ProjectGrouping::Topics
+                    } else {
+                        crate::app::state::ProjectGrouping::Directories
+                    };
                 if self.state.projects.filter == crate::app::state::ProjectFilter::Unclassified {
                     self.state.projects.filter = crate::app::state::ProjectFilter::All;
                 }
@@ -1951,6 +1972,14 @@ mod tests {
         assert_eq!(
             app.state.sidebar_view,
             crate::app::state::SidebarView::Projects
+        );
+
+        assert!(
+            app.handle_projects_navigate_key(KeyEvent::new(KeyCode::Left, KeyModifiers::empty()))
+        );
+        assert_eq!(
+            app.state.sidebar_view,
+            crate::app::state::SidebarView::Sessions
         );
 
         assert!(

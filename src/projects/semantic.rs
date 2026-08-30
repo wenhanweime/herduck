@@ -829,7 +829,10 @@ pub(crate) fn run_classification_worker(
         // permanently outside Clusters until the next restart. The pass itself is bounded and
         // the configured backoff prevents idle polling from consuming CPU.
         if classified == 0 {
-            tracing::debug!(category = "semantic_idle", "No sessions awaiting classification");
+            tracing::debug!(
+                category = "semantic_idle",
+                "No sessions awaiting classification"
+            );
             run_topic_merge_maintenance(sender, config);
         }
         std::thread::sleep(config.idle_backfill);
