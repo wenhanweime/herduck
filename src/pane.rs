@@ -87,6 +87,7 @@ fn is_claude_program(program: &str) -> bool {
 pub(crate) struct PaneLaunchEnv {
     extra: Vec<(String, String)>,
     identity: PaneLaunchIdentity,
+    interactive_agent_colors: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -106,6 +107,7 @@ impl PaneLaunchEnv {
         Self {
             extra,
             identity: PaneLaunchIdentity::Inherit,
+            interactive_agent_colors: false,
         }
     }
 
@@ -127,6 +129,14 @@ impl PaneLaunchEnv {
         self.identity = PaneLaunchIdentity::OmitPane;
         self
     }
+
+    /// Let an interactive agent emit its own terminal styling instead of inheriting a host-wide
+    /// `NO_COLOR`/`CLICOLOR=0` preference. This is used for the shell that launches a deferred
+    /// native resume; ordinary user shells keep their inherited color policy.
+    pub(crate) fn with_interactive_agent_colors(mut self) -> Self {
+        self.interactive_agent_colors = true;
+        self
+    }
 }
 
 fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
@@ -137,6 +147,12 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     // Keep the upstream marker during the integration compatibility window.
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
+    if launch_env.interactive_agent_colors {
+        cmd.env_remove("NO_COLOR");
+        cmd.env("CLICOLOR", "1");
+        cmd.env("CLICOLOR_FORCE", "1");
+        cmd.env("FORCE_COLOR", "1");
+    }
     match &launch_env.identity {
         PaneLaunchIdentity::Inherit => {}
         PaneLaunchIdentity::Managed {
@@ -3178,6 +3194,28 @@ mod tests {
         .unwrap();
         assert!(!cmd.is_default_prog());
         assert_eq!(cmd.get_argv(), &[std::ffi::OsString::from("/bin/sh")]);
+    }
+
+    #[test]
+    fn interactive_agent_launch_env_restores_native_color_output() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        let launch_env = PaneLaunchEnv::default().with_interactive_agent_colors();
+        apply_pane_launch_env(&mut cmd, &launch_env);
+
+        assert_eq!(cmd.get_env("NO_COLOR"), None);
+        assert_eq!(
+            cmd.get_env("CLICOLOR").and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
+        assert_eq!(
+            cmd.get_env("CLICOLOR_FORCE")
+                .and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
+        assert_eq!(
+            cmd.get_env("FORCE_COLOR").and_then(std::ffi::OsStr::to_str),
+            Some("1")
+        );
     }
 
     #[cfg(unix)]

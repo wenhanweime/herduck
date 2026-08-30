@@ -231,6 +231,7 @@ impl App {
         else {
             return false;
         };
+        let launch_env = launch_env.with_interactive_agent_colors();
 
         let runtime = match crate::terminal::TerminalRuntime::spawn(
             pane_id,
