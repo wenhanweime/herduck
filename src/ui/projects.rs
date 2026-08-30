@@ -937,15 +937,31 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
     match transcript {
         Ok(transcript) => {
             for message in &transcript.messages {
-                // A session that is mostly plain prose has almost no Markdown to colour, so the
-                // speaker labels carry the visual rhythm. A filled chip reads at a glance where a
-                // coloured glyph inside monospace prose did not.
+                // Keep the speaker marker and the body on the same visual track. Plain assistant
+                // prose is common, so relying only on Markdown syntax would make the whole reply
+                // look like unstyled white text again.
                 let (marker, accent) = match message.role {
                     crate::projects::transcript::TranscriptRole::User => {
                         (" you ", app.palette.accent)
                     }
                     crate::projects::transcript::TranscriptRole::Assistant => {
                         (" agent ", app.palette.green)
+                    }
+                };
+                let body_style = match message.role {
+                    crate::projects::transcript::TranscriptRole::User => {
+                        Style::default().fg(app.palette.text)
+                    }
+                    crate::projects::transcript::TranscriptRole::Assistant => {
+                        Style::default().fg(app.palette.green)
+                    }
+                };
+                let render_body = |text: &str| match message.role {
+                    crate::projects::transcript::TranscriptRole::User => {
+                        super::markdown::markdown_lines(text, &app.palette)
+                    }
+                    crate::projects::transcript::TranscriptRole::Assistant => {
+                        super::markdown::markdown_lines_with_base(text, &app.palette, body_style)
                     }
                 };
                 lines.push(Line::from(vec![
@@ -965,11 +981,11 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
                     // Entering history is intentionally read-only until submission, but it must
                     // preserve the complete readable conversation rather than the preview's
                     // three-line summary.
-                    lines.extend(super::markdown::markdown_lines(&message.text, &app.palette));
+                    lines.extend(render_body(&message.text));
                 } else {
                     let (excerpt, elided) =
                         crate::projects::transcript::preview_excerpt(&message.text, message.role);
-                    lines.extend(super::markdown::markdown_lines(&excerpt, &app.palette));
+                    lines.extend(render_body(&excerpt));
                     if elided {
                         lines.push(Line::from(Span::styled(
                             "  …",
@@ -1974,6 +1990,15 @@ mod tests {
         assert!(
             text.contains("stays stopped"),
             "preview must explain that navigation is process-free:\n{text}"
+        );
+        let assistant_cell = (area.y..area.bottom()).find_map(|y| {
+            (area.x..area.right())
+                .find_map(|x| (buffer[(x, y)].symbol() == "今").then_some(buffer[(x, y)].fg))
+        });
+        assert_eq!(
+            assistant_cell,
+            Some(state.palette.green),
+            "assistant prose should use the agent body colour"
         );
     }
 
