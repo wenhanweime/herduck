@@ -2,7 +2,11 @@ use std::path::Path;
 
 use super::{ProjectClassification, ProjectKind};
 
-const TEMP_RUNNER_PREFIXES: [&str; 2] = ["paseo-multica-agent-", "ork-direct-accept."];
+const TEMP_RUNNER_PREFIXES: [&str; 3] = [
+    "paseo-multica-agent-",
+    "paseo-topics-agent-",
+    "ork-direct-accept.",
+];
 const RUNTIME_STATE_DIR: &str = "general";
 
 pub(crate) fn classify(cwd: Option<&Path>) -> ProjectClassification {
@@ -52,12 +56,12 @@ pub(crate) fn is_ephemeral_agent_cwd(cwd: &Path) -> bool {
 }
 
 fn is_temp_runner_path(cwd: &Path) -> bool {
-    let temp_roots = [
+    let direct_temp_roots = [
         std::env::temp_dir(),
         Path::new("/tmp").to_path_buf(),
         Path::new("/private/tmp").to_path_buf(),
     ];
-    temp_roots.iter().any(|root| {
+    if direct_temp_roots.iter().any(|root| {
         cwd.strip_prefix(root).ok().is_some_and(|relative| {
             relative
                 .components()
@@ -69,7 +73,30 @@ fn is_temp_runner_path(cwd: &Path) -> bool {
                         .any(|prefix| name.starts_with(prefix))
                 })
         })
-    })
+    }) {
+        return true;
+    }
+
+    // macOS stores OpenCode's working directory as `/private/var/folders/.../T/<runner>`, while
+    // `temp_dir()` commonly returns the equivalent `/var/folders/.../T` spelling. Only accept the
+    // generated runner directly below the `T` component so a user project nested in /tmp remains
+    // valid.
+    [Path::new("/var/folders"), Path::new("/private/var/folders")]
+        .iter()
+        .any(|root| {
+            let Some(relative) = cwd.strip_prefix(root).ok() else {
+                return false;
+            };
+            let components = relative.components().collect::<Vec<_>>();
+            components.windows(2).any(|window| {
+                window[0].as_os_str() == "T"
+                    && window[1].as_os_str().to_str().is_some_and(|name| {
+                        TEMP_RUNNER_PREFIXES
+                            .iter()
+                            .any(|prefix| name.starts_with(prefix))
+                    })
+            })
+        })
 }
 
 fn is_application_support_scratch(cwd: &Path) -> bool {
@@ -213,6 +240,24 @@ mod tests {
         assert_eq!(project.kind, ProjectKind::Unclassified);
         assert_eq!(project.evidence, "ephemeral-agent-cwd");
         assert_eq!(project.display_name, "Ephemeral agent sessions");
+    }
+
+    #[test]
+    fn paseo_topics_agent_temp_cwd_is_ephemeral() {
+        let cwd = std::env::temp_dir().join("paseo-topics-agent-test-session");
+        let _ = std::fs::remove_dir_all(&cwd);
+
+        let project = classify(Some(&cwd));
+
+        assert_eq!(project.kind, ProjectKind::Unclassified);
+        assert_eq!(project.evidence, "ephemeral-agent-cwd");
+        assert_eq!(project.display_name, "Ephemeral agent sessions");
+    }
+
+    #[test]
+    fn macos_private_var_topics_agent_path_is_ephemeral() {
+        let cwd = Path::new("/private/var/folders/xx/test/T/paseo-topics-agent-macos-fixture");
+        assert!(is_ephemeral_agent_cwd(cwd));
     }
 
     #[test]

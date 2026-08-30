@@ -363,10 +363,10 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 
     let tab_gap = u16::from(content.width >= 5);
     let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(3));
-    // Give the longer Spaces / Agents label a proportionally wider hit area while keeping the
-    // three peer browser tabs balanced. At the normal sidebar width this fits the full label;
-    // narrower sidebars still retain a distinct clickable rect for every tab.
-    let first_width = tab_inner.saturating_mul(13) / 37;
+    // Keep the four peer tabs balanced while giving the first tab a little room for its label.
+    // At the normal sidebar width this fits every label; narrower sidebars still retain distinct
+    // clickable rects for each tab.
+    let first_width = tab_inner.saturating_mul(7) / 31;
     let second_width = tab_inner.saturating_sub(first_width).saturating_mul(8) / 24;
     let third_width = tab_inner
         .saturating_sub(first_width.saturating_add(second_width))
@@ -462,7 +462,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 }
 
 pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 4]) {
-    let labels = ["Spaces / Agents", "Sessions", "Projects", "Clusters"];
+    let labels = ["Spaces", "Sessions", "Projects", "Clusters"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 {
             continue;

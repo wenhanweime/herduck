@@ -700,6 +700,7 @@ impl ProjectCatalog {
                  WHERE a.locked = 0
                    AND a.evidence != 'ephemeral-agent-cwd'
                    AND (s.cwd LIKE '%paseo-multica-agent-%'
+                        OR s.cwd LIKE '%paseo-topics-agent-%'
                         OR s.cwd LIKE '%-temp-%'
                         OR s.cwd LIKE '%/general'
                         OR s.cwd LIKE '%ork-direct-accept%')
@@ -2202,6 +2203,9 @@ fn can_preserve_existing_assignment(
     let Some(incoming_cwd) = candidate.cwd.as_ref() else {
         return Ok(true);
     };
+    if classifier::is_ephemeral_agent_cwd(&incoming_cwd.value) {
+        return Ok(false);
+    }
     Ok(existing_cwd.as_deref() == incoming_cwd.value.to_str())
 }
 
