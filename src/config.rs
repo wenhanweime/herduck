@@ -21,8 +21,9 @@ pub use self::{
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, ProjectsConfig,
-        ShellModeConfig, SidebarCollapsedModeConfig, ToastClipboardPosition, ToastConfig,
-        ToastDelivery, ToastOrk3Position, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+        ShellModeConfig, SidebarCollapsedModeConfig, SummaryModeConfig, SummaryProviderConfig,
+        SummaryProviderKind, ToastClipboardPosition, ToastConfig, ToastDelivery, ToastOrk3Position,
+        UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
         AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpaceSidebarToken,
@@ -74,6 +75,9 @@ impl Config {
             .chain(self.ui.sound.diagnostics())
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(crate::projects::adapters::configuration_diagnostics(
+                &self.projects,
+            ))
+            .chain(crate::projects::semantic::configuration_diagnostics(
                 &self.projects,
             ))
             .collect()

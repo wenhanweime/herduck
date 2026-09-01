@@ -67,6 +67,43 @@ ORK3_CLIENT_SOCKET_PATH
 Upstream environment variables are not used for ORK3 configuration or socket selection, so ORK3
 cannot accidentally attach to a separately installed upstream runtime.
 
+## Session summaries
+
+ORK3 can create session titles and Cluster topics with no account or API key. The default
+`auto` mode tries the OpenCode Zen public/free endpoint on a best-effort basis, then any
+configured local Agent CLI, and finally the deterministic local algorithm. A 429, missing Agent,
+network error, or malformed response never blocks the TUI.
+
+To force completely offline behavior:
+
+```toml
+[projects.summary]
+mode = "local" # auto | llm | local
+```
+
+To use your own OpenAI-compatible gateway, keep the key in the environment and only reference
+its name from `config.toml`:
+
+```toml
+[projects.summary]
+mode = "llm"
+
+[[projects.summary.providers]]
+id = "openrouter"
+kind = "openai_compatible"
+endpoint = "https://openrouter.ai/api/v1/chat/completions"
+api_key_env = "OPENROUTER_API_KEY"
+models = ["openrouter/free"]
+```
+
+The same provider shape works with LiteLLM, LM Studio, and Ollama (for example,
+`http://localhost:11434/v1/chat/completions`). Local Agent presets for OpenCode, Pi, Codex, and
+Hermes are included by default; remove or reorder them under `[[projects.summary.providers]]` if
+needed. ORK3 never stores or logs the value of an API key.
+
+The complete executable scope, fallback rules, privacy boundaries, and acceptance criteria are in
+[docs/PRD-public-summary-providers.md](docs/PRD-public-summary-providers.md).
+
 ## Build and test
 
 ```bash

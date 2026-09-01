@@ -25,6 +25,7 @@ use super::domain::{title_input_fingerprint, PendingTitleSession, SessionTitleUp
 use super::semantic::{BatchError, SemanticConfig};
 use super::service::{self, ProjectCommand};
 use super::transcript::{Transcript, TranscriptRole};
+use crate::config::SummaryModeConfig;
 
 /// Widest a stored title may be, in characters.
 const TITLE_MAX_CHARS: usize = 72;
@@ -538,19 +539,7 @@ fn extract_transcript_evidence(transcript: &Transcript) -> (Vec<String>, Option<
 }
 
 fn title_backends(config: &SemanticConfig) -> Vec<super::semantic::BackendSpec> {
-    let mut result = config
-        .backends
-        .iter()
-        .filter(|backend| backend.name == "opencode" || backend.name == "pi")
-        .cloned()
-        .collect::<Vec<_>>();
-    if !result.iter().any(|backend| backend.name == "hermes") {
-        result.push(super::semantic::BackendSpec {
-            name: "hermes".to_string(),
-            models: Vec::new(),
-        });
-    }
-    result
+    config.backends.clone()
 }
 
 /// Generates titles in the background without blocking Catalog reads or the TUI input path.
@@ -623,26 +612,30 @@ pub(crate) fn run_title_generation_worker(
                     )
                 })
                 .collect::<Vec<_>>();
-            let generated = title_backends(config).iter().find_map(|backend| {
-                let models = if backend.models.is_empty() {
-                    vec![None]
-                } else {
-                    backend
-                        .models
-                        .iter()
-                        .map(|model| Some(model.as_str()))
-                        .collect()
-                };
-                models.into_iter().find_map(|model| {
-                    let prompt = build_prompt(&envelopes);
-                    let output =
-                        super::semantic::run_backend(&backend.name, model, &prompt, config.timeout)
-                            .ok()?;
-                    parse_response(&output, &envelopes)
-                        .ok()
-                        .map(|items| (backend.name.clone(), model.map(str::to_string), items))
+            let generated = if config.mode == SummaryModeConfig::Local {
+                None
+            } else {
+                title_backends(config).iter().find_map(|backend| {
+                    let models = if backend.models.is_empty() {
+                        vec![None]
+                    } else {
+                        backend
+                            .models
+                            .iter()
+                            .map(|model| Some(model.as_str()))
+                            .collect()
+                    };
+                    models.into_iter().find_map(|model| {
+                        let prompt = build_prompt(&envelopes);
+                        let output =
+                            super::semantic::run_provider(backend, model, &prompt, config.timeout)
+                                .ok()?;
+                        parse_response(&output, &envelopes)
+                            .ok()
+                            .map(|items| (backend.name.clone(), model.map(str::to_string), items))
+                    })
                 })
-            });
+            };
             if let Some((backend, model, items)) = generated {
                 backend_succeeded = true;
                 let titles = items
@@ -673,9 +666,18 @@ pub(crate) fn run_title_generation_worker(
                     updates.push(SessionTitleUpdate {
                         stable_key: session.stable_key.clone(),
                         title: fallback_title(envelope),
-                        source: "heuristic".to_string(),
-                        status: "failed".to_string(),
-                        error: Some("all title backends failed".to_string()),
+                        source: if config.mode == SummaryModeConfig::Local {
+                            "local".to_string()
+                        } else {
+                            "heuristic".to_string()
+                        },
+                        status: if config.mode == SummaryModeConfig::Local {
+                            "done".to_string()
+                        } else {
+                            "failed".to_string()
+                        },
+                        error: (config.mode != SummaryModeConfig::Local)
+                            .then(|| "all title backends failed".to_string()),
                         backend: None,
                         model: None,
                         fingerprint: fingerprint.clone(),

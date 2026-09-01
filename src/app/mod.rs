@@ -741,10 +741,10 @@ impl App {
             project_service.start_background_scan(project_roots.roots());
             // Topic clustering runs after the scan is queued so the tree is usable from
             // path-based grouping immediately, then regroups as classification lands.
-            project_service
-                .start_semantic_classification(crate::projects::semantic::SemanticConfig::default());
-            project_service
-                .start_title_generation(crate::projects::semantic::SemanticConfig::default());
+            let summary_config =
+                crate::projects::semantic::SemanticConfig::from_projects(&config.projects);
+            project_service.start_semantic_classification(summary_config.clone());
+            project_service.start_title_generation(summary_config);
         }
         state.projects.snapshot = project_service.snapshot();
 

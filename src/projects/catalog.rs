@@ -1035,11 +1035,22 @@ impl ProjectCatalog {
     /// Sessions whose topic is missing or stale, most recently active first.
     ///
     /// A session is pending when it has no semantic row, or its stored fingerprint no longer
-    /// matches its current metadata. Manually locked sessions are excluded outright: the user
-    /// already decided where they belong, so spending a classifier call on them is wasted.
+    /// matches its current metadata. When requested, a local fallback row is also retried so a
+    /// later provider recovery can replace it. Manually locked sessions are excluded outright:
+    /// the user already decided where they belong, so spending a classifier call on them is
+    /// wasted.
+    #[cfg(test)]
     pub(crate) fn pending_semantic_sessions(
         &self,
         limit: usize,
+    ) -> Result<Vec<PendingSemanticSession>, CatalogError> {
+        self.pending_semantic_sessions_with_retry(limit, false)
+    }
+
+    pub(crate) fn pending_semantic_sessions_with_retry(
+        &self,
+        limit: usize,
+        retry_local: bool,
     ) -> Result<Vec<PendingSemanticSession>, CatalogError> {
         let mut statement = self.connection.prepare(
             "SELECT s.stable_key,
@@ -1123,7 +1134,10 @@ impl ProjectCatalog {
                             session.cwd.as_deref(),
                             &session.backend,
                         );
-                        if session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                        let retry = retry_local && backend.as_deref() == Some("local");
+                        if session.stored_fingerprint.as_deref() != Some(fingerprint.as_str())
+                            || retry
+                        {
                             return None;
                         }
                         Some(InheritedSemanticTopic {
@@ -1135,14 +1149,15 @@ impl ProjectCatalog {
                     });
             let mut stale = group
                 .into_iter()
-                .filter_map(|(session, _, _, _, _)| {
+                .filter_map(|(session, _, _, backend, _)| {
                     let fingerprint = super::semantic_fingerprint(
                         &session.title,
                         session.cwd.as_deref(),
                         &session.backend,
                     );
-                    (session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()))
-                        .then_some((session, fingerprint))
+                    (session.stored_fingerprint.as_deref() != Some(fingerprint.as_str())
+                        || (retry_local && backend.as_deref() == Some("local")))
+                    .then_some((session, fingerprint))
                 })
                 .take(limit.saturating_sub(consumed))
                 .collect::<Vec<_>>();

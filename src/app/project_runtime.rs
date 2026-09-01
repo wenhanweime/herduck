@@ -144,8 +144,10 @@ impl App {
             self.loaded_projects_config.automation_title_threshold,
         );
         service.start_background_scan(self.project_roots.roots());
-        service.start_semantic_classification(crate::projects::semantic::SemanticConfig::default());
-        service.start_title_generation(crate::projects::semantic::SemanticConfig::default());
+        let summary_config =
+            crate::projects::semantic::SemanticConfig::from_projects(&self.loaded_projects_config);
+        service.start_semantic_classification(summary_config.clone());
+        service.start_title_generation(summary_config);
         self.project_service = service;
         self.project_runtime_leases.clear();
         self.next_project_runtime_generation = 1;

@@ -308,6 +308,8 @@ pub struct ProjectsConfig {
     pub adapters: ProjectAdaptersConfig,
     /// Repeated normalized titles at or above this count are treated as automation templates.
     pub automation_title_threshold: usize,
+    /// Session title and semantic topic provider configuration.
+    pub summary: SummaryConfig,
 }
 
 impl Default for ProjectsConfig {
@@ -315,6 +317,138 @@ impl Default for ProjectsConfig {
         Self {
             adapters: ProjectAdaptersConfig::default(),
             automation_title_threshold: 20,
+            summary: SummaryConfig::default(),
+        }
+    }
+}
+
+/// Controls how session titles and semantic topics are produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryModeConfig {
+    /// Prefer configured LLM providers and fall back to the deterministic local algorithm.
+    #[default]
+    Auto,
+    /// Never start an Agent process or make a network request.
+    Local,
+    /// Prefer configured LLM providers; local fallback keeps the catalog usable on failure.
+    Llm,
+}
+
+/// Transport used by one summary provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryProviderKind {
+    Cli,
+    #[default]
+    OpenaiCompatible,
+}
+
+/// A CLI Agent or OpenAI-compatible HTTP endpoint used for summaries.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SummaryProviderConfig {
+    /// Stable identifier used in diagnostics and title metadata.
+    pub id: String,
+    pub kind: SummaryProviderKind,
+    /// Executable for `kind = "cli"`; defaults to `id` when omitted.
+    pub command: Option<String>,
+    /// Chat-completions URL for `kind = "openai_compatible"`.
+    pub endpoint: Option<String>,
+    /// Name of the environment variable containing the API key. The key itself is never stored.
+    pub api_key_env: Option<String>,
+    /// Models are tried in order and rotated between passes.
+    pub models: Vec<String>,
+}
+
+impl Default for SummaryProviderConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            kind: SummaryProviderKind::OpenaiCompatible,
+            command: None,
+            endpoint: None,
+            api_key_env: None,
+            models: Vec::new(),
+        }
+    }
+}
+
+impl SummaryProviderConfig {
+    fn opencode_zen() -> Self {
+        Self {
+            id: "opencode_zen".to_string(),
+            kind: SummaryProviderKind::OpenaiCompatible,
+            command: None,
+            endpoint: Some("https://opencode.ai/zen/v1/chat/completions".to_string()),
+            api_key_env: None,
+            models: vec![
+                "big-pickle".to_string(),
+                "mimo-v2.5-free".to_string(),
+                "ling-3.0-flash-free".to_string(),
+            ],
+        }
+    }
+
+    fn cli(id: &str, models: &[&str]) -> Self {
+        Self {
+            id: id.to_string(),
+            kind: SummaryProviderKind::Cli,
+            command: Some(id.to_string()),
+            endpoint: None,
+            api_key_env: None,
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+        }
+    }
+
+    pub(crate) fn default_presets() -> Vec<Self> {
+        vec![
+            Self::opencode_zen(),
+            Self::cli(
+                "opencode",
+                &[
+                    "opencode/deepseek-v4-flash-free",
+                    "opencode/ling-3.0-tiny-free",
+                    "opencode/longcat-2.0-free",
+                    "opencode/mimo-v2.5-free",
+                ],
+            ),
+            Self::cli(
+                "pi",
+                &[
+                    "NewAPIConn/deepseek-v4-flash-free",
+                    "NewAPIConn/glm-4.7-flash",
+                ],
+            ),
+            Self::cli("codex", &[]),
+            Self::cli("hermes", &[]),
+        ]
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct SummaryConfig {
+    pub mode: SummaryModeConfig,
+    /// Ordered provider chain. An empty list disables LLM attempts and uses local fallback.
+    pub providers: Vec<SummaryProviderConfig>,
+    pub batch_size: usize,
+    pub max_sessions_per_run: usize,
+    pub timeout_secs: u64,
+    pub startup_grace_secs: u64,
+    pub idle_backfill_secs: u64,
+}
+
+impl Default for SummaryConfig {
+    fn default() -> Self {
+        Self {
+            mode: SummaryModeConfig::Auto,
+            providers: SummaryProviderConfig::default_presets(),
+            batch_size: 40,
+            max_sessions_per_run: 500,
+            timeout_secs: 120,
+            startup_grace_secs: 120,
+            idle_backfill_secs: 600,
         }
     }
 }
@@ -1317,6 +1451,48 @@ roots = ["~/history/pi"]
             vec![PathBuf::from("~/history/pi")]
         );
         assert!(config.projects.adapters.claude.roots.is_empty());
+    }
+
+    #[test]
+    fn summary_defaults_and_custom_provider_parse() {
+        let defaults = Config::default();
+        assert_eq!(defaults.projects.summary.mode, SummaryModeConfig::Auto);
+        assert_eq!(
+            defaults
+                .projects
+                .summary
+                .providers
+                .first()
+                .map(|provider| provider.id.as_str()),
+            Some("opencode_zen")
+        );
+
+        let config: Config = toml::from_str(
+            r#"
+[projects.summary]
+mode = "local"
+batch_size = 8
+
+[[projects.summary.providers]]
+id = "my-gateway"
+kind = "openai_compatible"
+endpoint = "http://127.0.0.1:1234/v1/chat/completions"
+api_key_env = "MY_GATEWAY_KEY"
+models = ["local-model"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.projects.summary.mode, SummaryModeConfig::Local);
+        assert_eq!(config.projects.summary.batch_size, 8);
+        assert_eq!(config.projects.summary.providers.len(), 1);
+        assert_eq!(
+            config.projects.summary.providers[0].kind,
+            SummaryProviderKind::OpenaiCompatible
+        );
+        assert_eq!(
+            config.projects.summary.providers[0].api_key_env.as_deref(),
+            Some("MY_GATEWAY_KEY")
+        );
     }
 
     #[test]

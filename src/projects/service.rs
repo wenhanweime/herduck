@@ -96,6 +96,7 @@ pub(crate) enum ProjectCommand {
     /// Sessions whose topic is missing or stale, for the classifier worker to pick up.
     PendingSemantic {
         limit: usize,
+        retry_local: bool,
         reply: mpsc::Sender<Result<Vec<PendingSemanticSession>, ProjectServiceError>>,
     },
     /// Topic labels already in use, so later batches can reuse them.
@@ -566,11 +567,13 @@ fn request_on_sender(
 pub(crate) fn request_pending_semantic(
     sender: &mpsc::Sender<ProjectCommand>,
     limit: usize,
+    retry_local: bool,
 ) -> Result<Vec<PendingSemanticSession>, ProjectServiceError> {
     let (reply_tx, reply_rx) = mpsc::channel();
     sender
         .send(ProjectCommand::PendingSemantic {
             limit,
+            retry_local,
             reply: reply_tx,
         })
         .map_err(|_| ProjectServiceError::unavailable())?;
@@ -723,9 +726,13 @@ fn process_command(
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.apply_topic_merges(&merges, observed_at)
         }),
-        ProjectCommand::PendingSemantic { limit, reply } => {
+        ProjectCommand::PendingSemantic {
+            limit,
+            retry_local,
+            reply,
+        } => {
             let result = catalog
-                .pending_semantic_sessions(limit)
+                .pending_semantic_sessions_with_retry(limit, retry_local)
                 .map_err(ProjectServiceError::catalog);
             let _ = reply.send(result);
         }

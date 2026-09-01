@@ -6,8 +6,9 @@
 //!
 //! Two rules shape everything here:
 //!
-//! - Only `title`, `cwd` and `backend` ever leave this process. Transcript bodies, prompts and
-//!   credentials are never sent to a backend (SPEC §3.2).
+//! - The semantic classifier only sends `title`, `cwd` and `backend`; transcript bodies and
+//!   credentials never enter a clustering prompt. Title generation uses its existing bounded
+//!   evidence envelope, never an unbounded transcript.
 //! - A batch is applied whole or not at all. A malformed or partial reply is discarded rather
 //!   than scattering sessions across half-built topics (SPEC §3.4).
 
@@ -21,10 +22,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::config::{
+    ProjectsConfig, SummaryModeConfig, SummaryProviderConfig, SummaryProviderKind,
+};
+
 use super::domain::{PendingSemanticSession, SemanticAssignment, SemanticTopicMerge};
 
-/// How long a single backend invocation may run before the batch is failed over.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// OpenCode may spend most of the configured timeout refreshing its provider/plugin state before
 /// producing any answer. Keep that optional backend from starving the local Pi fallback.
 const OPENCODE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -95,13 +98,54 @@ impl Drop for BackendScratch {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BackendSpec {
     pub name: String,
+    pub kind: BackendKind,
+    /// Executable for CLI providers. Defaults to `name`.
+    pub command: Option<String>,
+    /// OpenAI-compatible chat-completions endpoint.
+    pub endpoint: Option<String>,
+    /// Environment variable containing the key. The key itself is never retained.
+    pub api_key_env: Option<String>,
     /// Models to rotate through, one per batch. Empty means "use the backend's default".
     pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BackendKind {
+    Cli,
+    OpenaiCompatible,
+}
+
+impl BackendSpec {
+    fn from_config(provider: &SummaryProviderConfig) -> Self {
+        Self {
+            name: provider.id.clone(),
+            kind: match provider.kind {
+                SummaryProviderKind::Cli => BackendKind::Cli,
+                SummaryProviderKind::OpenaiCompatible => BackendKind::OpenaiCompatible,
+            },
+            command: provider.command.clone(),
+            endpoint: provider.endpoint.clone(),
+            api_key_env: provider.api_key_env.clone(),
+            models: provider.models.clone(),
+        }
+    }
+
+    fn cli(name: &str, models: &[&str]) -> Self {
+        Self {
+            name: name.to_string(),
+            kind: BackendKind::Cli,
+            command: Some(name.to_string()),
+            endpoint: None,
+            api_key_env: None,
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SemanticConfig {
     pub enabled: bool,
+    pub mode: SummaryModeConfig,
     pub backends: Vec<BackendSpec>,
     pub batch_size: usize,
     pub max_sessions_per_run: usize,
@@ -114,38 +158,91 @@ pub(crate) struct SemanticConfig {
 
 impl Default for SemanticConfig {
     fn default() -> Self {
+        Self::from_projects(&ProjectsConfig::default())
+    }
+}
+
+impl SemanticConfig {
+    pub(crate) fn from_projects(projects: &ProjectsConfig) -> Self {
+        let summary = &projects.summary;
+        let backends = summary
+            .providers
+            .iter()
+            .filter(|provider| !provider.id.trim().is_empty())
+            .map(BackendSpec::from_config)
+            .collect::<Vec<_>>();
         Self {
             enabled: true,
-            // Owner-specified order: free opencode models first, then pi, with codex as backstop.
-            backends: vec![
-                BackendSpec {
-                    name: "opencode".to_string(),
-                    models: vec![
-                        "opencode/deepseek-v4-flash-free".to_string(),
-                        "opencode/ling-3.0-tiny-free".to_string(),
-                        "opencode/longcat-2.0-free".to_string(),
-                        "opencode/mimo-v2.5-free".to_string(),
-                    ],
-                },
-                BackendSpec {
-                    name: "pi".to_string(),
-                    models: vec![
-                        "NewAPIConn/deepseek-v4-flash-free".to_string(),
-                        "NewAPIConn/glm-4.7-flash".to_string(),
-                    ],
-                },
-                BackendSpec {
-                    name: "codex".to_string(),
-                    models: Vec::new(),
-                },
-            ],
-            batch_size: 40,
-            max_sessions_per_run: 500,
-            timeout: DEFAULT_TIMEOUT,
-            startup_grace: Duration::from_secs(120),
-            idle_backfill: Duration::from_secs(600),
+            mode: summary.mode,
+            backends,
+            batch_size: summary.batch_size.max(1),
+            max_sessions_per_run: summary.max_sessions_per_run.max(1),
+            timeout: Duration::from_secs(summary.timeout_secs.max(1)),
+            startup_grace: Duration::from_secs(summary.startup_grace_secs.max(1)),
+            idle_backfill: Duration::from_secs(summary.idle_backfill_secs.max(1)),
         }
     }
+}
+
+/// Validates user-provided summary settings without touching the network or starting a process.
+pub(crate) fn configuration_diagnostics(projects: &ProjectsConfig) -> Vec<String> {
+    let summary = &projects.summary;
+    let mut diagnostics = Vec::new();
+    if summary.batch_size == 0 {
+        diagnostics.push("projects.summary.batch_size must be greater than zero".to_string());
+    }
+    if summary.max_sessions_per_run == 0 {
+        diagnostics
+            .push("projects.summary.max_sessions_per_run must be greater than zero".to_string());
+    }
+    if summary.timeout_secs == 0 {
+        diagnostics.push("projects.summary.timeout_secs must be greater than zero".to_string());
+    }
+    if summary.startup_grace_secs == 0 {
+        diagnostics
+            .push("projects.summary.startup_grace_secs must be greater than zero".to_string());
+    }
+    if summary.idle_backfill_secs == 0 {
+        diagnostics
+            .push("projects.summary.idle_backfill_secs must be greater than zero".to_string());
+    }
+    for (index, provider) in summary.providers.iter().enumerate() {
+        let label = if provider.id.trim().is_empty() {
+            format!("projects.summary.providers[{index}]")
+        } else {
+            format!("projects.summary.providers[{index}] `{}`", provider.id)
+        };
+        if provider.id.trim().is_empty() {
+            diagnostics.push(format!("{label} requires a non-empty id"));
+        }
+        match provider.kind {
+            SummaryProviderKind::Cli => {
+                if provider
+                    .command
+                    .as_deref()
+                    .is_some_and(|command| command.trim().is_empty())
+                {
+                    diagnostics.push(format!("{label} command must not be empty"));
+                }
+            }
+            SummaryProviderKind::OpenaiCompatible => {
+                let valid_endpoint = provider.endpoint.as_deref().is_some_and(|endpoint| {
+                    endpoint.starts_with("http://") || endpoint.starts_with("https://")
+                });
+                if !valid_endpoint {
+                    diagnostics.push(format!("{label} requires an http:// or https:// endpoint"));
+                }
+                if provider
+                    .api_key_env
+                    .as_deref()
+                    .is_some_and(|variable| variable.trim().is_empty())
+                {
+                    diagnostics.push(format!("{label} api_key_env must not be empty"));
+                }
+            }
+        }
+    }
+    diagnostics
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -501,12 +598,113 @@ pub(crate) fn run_backend(
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, BatchError> {
-    let timeout = if backend == "opencode" {
-        timeout.min(OPENCODE_TIMEOUT)
-    } else {
-        timeout
+    let spec = BackendSpec::cli(backend, &[]);
+    run_provider(&spec, model, prompt, timeout)
+}
+
+/// Runs one configured provider. This is the single transport boundary used by both title and
+/// semantic workers, which keeps fallback and secret handling identical for both surfaces.
+pub(crate) fn run_provider(
+    provider: &BackendSpec,
+    model: Option<&str>,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, BatchError> {
+    match provider.kind {
+        BackendKind::Cli => {
+            let timeout = if provider.name == "opencode" {
+                timeout.min(OPENCODE_TIMEOUT)
+            } else {
+                timeout
+            };
+            let command = provider
+                .command
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(provider.name.as_str());
+            run_backend_program(Path::new(command), &provider.name, model, prompt, timeout)
+        }
+        BackendKind::OpenaiCompatible => {
+            let timeout = if provider.name == "opencode_zen" {
+                timeout.min(Duration::from_secs(30))
+            } else {
+                timeout
+            };
+            run_http_provider(provider, model, prompt, timeout)
+        }
+    }
+}
+
+fn run_http_provider(
+    provider: &BackendSpec,
+    model: Option<&str>,
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, BatchError> {
+    let endpoint = provider
+        .endpoint
+        .as_deref()
+        .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
+        .ok_or_else(|| BatchError::Failed("provider endpoint is missing or invalid".to_string()))?;
+    let token = match provider.api_key_env.as_deref() {
+        Some(variable) => std::env::var(variable).map_err(|_| {
+            BatchError::Failed(format!("missing API key environment variable `{variable}`"))
+        })?,
+        None if provider.name == "opencode_zen" => "public".to_string(),
+        None => String::new(),
     };
-    run_backend_program(Path::new(backend), backend, model, prompt, timeout)
+    let request_body = serde_json::json!({
+        "model": model.filter(|value| !value.trim().is_empty()).unwrap_or("default"),
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+    });
+    let client = reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .build()
+        .map_err(|error| BatchError::Failed(format!("HTTP client setup failed: {error}")))?;
+    let mut request = client
+        .post(endpoint)
+        .header(reqwest::header::USER_AGENT, "ork3-summary/1")
+        .json(&request_body);
+    if !token.is_empty() {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .map_err(|error| BatchError::Failed(format!("HTTP request failed: {error}")))?;
+    let status = response.status();
+    let body = response
+        .text()
+        .map_err(|error| BatchError::Failed(format!("HTTP response read failed: {error}")))?;
+    if status.as_u16() == 429 || is_quota_error(&body) {
+        return Err(BatchError::QuotaExceeded);
+    }
+    if !status.is_success() {
+        return Err(BatchError::Failed(format!(
+            "HTTP provider returned {status}"
+        )));
+    }
+    if body.len() > MAX_OUTPUT_BYTES {
+        return Err(BatchError::Failed(
+            "HTTP response exceeded output limit".to_string(),
+        ));
+    }
+    extract_chat_content(&body)
+}
+
+fn extract_chat_content(body: &str) -> Result<String, BatchError> {
+    let parsed: Value = serde_json::from_str(body)
+        .map_err(|error| BatchError::Failed(format!("invalid HTTP response JSON: {error}")))?;
+    let content = parsed
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"))
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .filter(|content| !content.trim().is_empty())
+        .ok_or_else(|| BatchError::Failed("HTTP response has no message content".to_string()))?;
+    Ok(content.to_string())
 }
 
 fn run_backend_program(
@@ -624,6 +822,56 @@ fn is_quota_error(text: &str) -> bool {
         || lowered.contains("too many requests")
 }
 
+/// Produces a stable topic label without a model. Generated titles use `【object】task`, so the
+/// object is the strongest local signal; otherwise the repository/folder basename is used.
+fn local_topic_label(session: &PendingSemanticSession) -> String {
+    let title = session.title.trim();
+    if let Some(subject) = title
+        .strip_prefix('【')
+        .and_then(|value| value.split_once('】').map(|(subject, _)| subject.trim()))
+        .filter(|subject| subject.chars().count() >= 2)
+        .filter(|subject| !is_disallowed_topic(subject))
+    {
+        return subject.chars().take(MAX_TOPIC_LABEL_CHARS).collect();
+    }
+    if let Some(folder) = session
+        .cwd
+        .as_deref()
+        .and_then(|cwd| Path::new(cwd).file_name())
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|folder| !folder.is_empty() && !is_disallowed_topic(folder))
+    {
+        return folder.chars().take(MAX_TOPIC_LABEL_CHARS).collect();
+    }
+    let backend = session.backend.trim();
+    if !backend.is_empty() && !is_disallowed_topic(backend) {
+        return backend.chars().take(MAX_TOPIC_LABEL_CHARS).collect();
+    }
+    "本地摘要".to_string()
+}
+
+fn classify_batch_local(batch: &[PendingSemanticSession]) -> Vec<SemanticAssignment> {
+    batch
+        .iter()
+        .map(|session| {
+            let topic_label = local_topic_label(session);
+            SemanticAssignment {
+                session_key: session.stable_key.clone(),
+                topic_key: super::semantic_topic_key(&topic_label),
+                topic_label,
+                fingerprint: super::semantic_fingerprint(
+                    &session.title,
+                    session.cwd.as_deref(),
+                    &session.backend,
+                ),
+                backend_used: "local".to_string(),
+                model_used: None,
+            }
+        })
+        .collect()
+}
+
 /// Classifies one batch, walking the configured backends until one answers usefully.
 ///
 /// Returns `None` only when every backend and model has been exhausted; the batch then keeps its
@@ -634,6 +882,9 @@ pub(crate) fn classify_batch(
     round: usize,
     known_topics: &[String],
 ) -> Option<Vec<SemanticAssignment>> {
+    if config.mode == SummaryModeConfig::Local {
+        return Some(classify_batch_local(batch));
+    }
     let prompt = build_prompt(batch, known_topics);
     for backend in &config.backends {
         // Rotate models per round so consecutive batches spread across free quotas rather than
@@ -650,7 +901,7 @@ pub(crate) fn classify_batch(
         };
 
         for model in models {
-            match run_backend(&backend.name, model, &prompt, config.timeout) {
+            match run_provider(backend, model, &prompt, config.timeout) {
                 Ok(output) => match parse_response(&output, batch, &backend.name, model) {
                     Ok(assignments) => return Some(assignments),
                     Err(error) => tracing::debug!(
@@ -683,7 +934,10 @@ pub(crate) fn classify_batch(
             }
         }
     }
-    None
+    // Both `auto` and `llm` retain a deterministic result when the provider chain is unavailable;
+    // the worker can retry the LLM on a later pass because the local assignment still carries the
+    // same input fingerprint.
+    Some(classify_batch_local(batch))
 }
 
 /// Runs one classification pass over everything currently stale or unclassified.
@@ -705,7 +959,11 @@ fn run_classification_pass(
         if shutdown.load(std::sync::atomic::Ordering::Acquire) {
             return 0;
         }
-        match super::service::request_pending_semantic(sender, config.max_sessions_per_run) {
+        match super::service::request_pending_semantic(
+            sender,
+            config.max_sessions_per_run,
+            config.mode != SummaryModeConfig::Local,
+        ) {
             Ok(pending) if !pending.is_empty() => break pending,
             Ok(_) => {
                 if Instant::now() >= deadline {
@@ -956,6 +1214,131 @@ mod tests {
         assert_eq!(args.first().map(String::as_str), Some("run"));
         assert!(args.contains(&"--pure".to_string()));
         assert!(args.contains(&"--model".to_string()));
+    }
+
+    #[test]
+    fn local_topics_use_generated_subjects_and_are_stable() {
+        let mut first = session(
+            "local-1",
+            "【Pixel 备份】修复增量同步",
+            Some("/tmp/one"),
+            "claude",
+        );
+        let second = session(
+            "local-2",
+            "【Pixel 备份】检查恢复流程",
+            Some("/tmp/two"),
+            "codex",
+        );
+        first.title = "【Pixel 备份】修复增量同步".to_string();
+        let assignments = classify_batch_local(&[first.clone(), second]);
+        assert_eq!(assignments[0].topic_key, assignments[1].topic_key);
+        assert_eq!(assignments[0].backend_used, "local");
+        assert_eq!(assignments[0].topic_label, "Pixel 备份");
+        assert_eq!(
+            assignments[0].fingerprint,
+            crate::projects::semantic_fingerprint(
+                &first.title,
+                first.cwd.as_deref(),
+                &first.backend
+            )
+        );
+    }
+
+    #[test]
+    fn default_config_exposes_opencode_zen_before_cli_presets() {
+        let config = SemanticConfig::default();
+        assert_eq!(config.mode, SummaryModeConfig::Auto);
+        assert_eq!(
+            config.backends.first().map(|backend| backend.name.as_str()),
+            Some("opencode_zen")
+        );
+        assert_eq!(
+            config.backends.first().map(|backend| backend.kind),
+            Some(BackendKind::OpenaiCompatible)
+        );
+        assert_eq!(
+            config.backends.get(1).map(|backend| backend.name.as_str()),
+            Some("opencode")
+        );
+    }
+
+    #[test]
+    fn openai_compatible_content_is_extracted_without_accepting_empty_choices() {
+        let output = extract_chat_content(
+            r#"{"choices":[{"message":{"role":"assistant","content":"{\"ok\":true}"}}]}"#,
+        )
+        .expect("chat content");
+        assert_eq!(output, r#"{"ok":true}"#);
+
+        let error = extract_chat_content(r#"{"choices":[]}"#).expect_err("empty choices");
+        assert!(
+            matches!(error, BatchError::Failed(message) if message.contains("no message content"))
+        );
+    }
+
+    #[test]
+    fn http_provider_missing_key_fails_before_network_and_does_not_echo_secret() {
+        let provider = BackendSpec {
+            name: "openrouter".to_string(),
+            kind: BackendKind::OpenaiCompatible,
+            command: None,
+            endpoint: Some("http://127.0.0.1:1/v1/chat/completions".to_string()),
+            api_key_env: Some("ORK3_TEST_MISSING_SUMMARY_KEY".to_string()),
+            models: vec!["openrouter/free".to_string()],
+        };
+        let error = run_provider(
+            &provider,
+            Some("openrouter/free"),
+            "classify",
+            Duration::from_secs(1),
+        )
+        .expect_err("missing key");
+        assert!(
+            matches!(error, BatchError::Failed(message) if message.contains("environment variable") && !message.contains("sk-"))
+        );
+    }
+
+    #[test]
+    fn http_provider_accepts_openai_compatible_chat_response() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener");
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().expect("listener address")
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = [0u8; 16 * 1024];
+            let _ = stream.read(&mut request).expect("request body");
+            let body = r#"{"choices":[{"message":{"content":"{\"clusters\":[]}"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("response write");
+        });
+        let provider = BackendSpec {
+            name: "test-gateway".to_string(),
+            kind: BackendKind::OpenaiCompatible,
+            command: None,
+            endpoint: Some(endpoint),
+            api_key_env: None,
+            models: vec!["test-model".to_string()],
+        };
+        let output = run_provider(
+            &provider,
+            Some("test-model"),
+            "classify",
+            Duration::from_secs(5),
+        )
+        .expect("HTTP response");
+        server.join().expect("server thread");
+        assert_eq!(output, r#"{"clusters":[]}"#);
     }
 
     #[cfg(unix)]
