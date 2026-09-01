@@ -26,7 +26,7 @@ ork3 在不依赖任何云端账号时仍能生成可读的会话标题和主题
 - `local / llm / auto` 三种摘要模式；默认 `auto`。
 - 确定性本地标题/主题算法，完全不启动进程、不发网络请求。
 - 统一 provider 描述：CLI Agent 和 OpenAI-compatible HTTP。
-- 内置 provider preset：OpenCode Zen public/free（无密钥 best-effort）、OpenCode CLI、Pi CLI、Codex CLI、Hermes CLI、Ollama 本地 API。
+- 内置 provider preset：OpenCode Zen public/free（无密钥 best-effort）、OpenCode CLI、Pi CLI、Codex CLI、Hermes CLI；Ollama/OpenRouter/LM Studio/LiteLLM 通过同一兼容协议接入。
 - 用户自定义 endpoint、模型列表和 `api_key_env`；只从环境变量读取密钥。
 - provider 顺序、模型轮换、超时、429/配额识别和失败回退。
 - 标题与 Cluster 共用同一 provider 链，保留现有批处理、指纹和持久化语义。
