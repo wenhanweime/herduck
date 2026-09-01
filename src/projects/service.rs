@@ -359,16 +359,10 @@ impl ProjectService {
         let Some(sender) = self.sender.clone() else {
             return;
         };
-        let scans_in_progress = Arc::clone(&self.scans_in_progress);
         let shutdown = Arc::clone(&self.shutdown);
         match std::thread::Builder::new()
             .name("ork3-project-semantic".to_string())
             .spawn(move || {
-                while scans_in_progress.load(Ordering::Acquire) > 0
-                    && !shutdown.load(Ordering::Acquire)
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
                 if !shutdown.load(Ordering::Acquire) {
                     super::semantic::run_classification_worker(&sender, &config, &shutdown);
                 }
@@ -389,16 +383,10 @@ impl ProjectService {
         let Some(sender) = self.sender.clone() else {
             return;
         };
-        let scans_in_progress = Arc::clone(&self.scans_in_progress);
         let shutdown = Arc::clone(&self.shutdown);
         match std::thread::Builder::new()
             .name("ork3-session-titles".to_string())
             .spawn(move || {
-                while scans_in_progress.load(Ordering::Acquire) > 0
-                    && !shutdown.load(Ordering::Acquire)
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
                 if !shutdown.load(Ordering::Acquire) {
                     super::title::run_title_generation_worker(&sender, &config, &shutdown);
                 }

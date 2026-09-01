@@ -225,6 +225,7 @@ impl ProjectCatalog {
         catalog.refresh_automation_classes()?;
         catalog.restore_legacy_semantic_assignments()?;
         catalog.exclude_ephemeral_agent_assignments()?;
+        catalog.reconcile_stale_semantic_assignments()?;
         catalog.purge_junk_semantic_assignments()?;
         Ok(catalog)
     }
@@ -748,6 +749,75 @@ impl ProjectCatalog {
         Ok(())
     }
 
+    /// Removes semantic rows whose input envelope changed while the Catalog was offline.
+    ///
+    /// A title refresh and a semantic classification can finish in either order. Rechecking all
+    /// rows at startup makes the persisted Catalog self-healing, so an old topic cannot survive
+    /// until the next provider scan merely because the process was restarted between the two
+    /// writes.
+    fn reconcile_stale_semantic_assignments(&mut self) -> Result<(), CatalogError> {
+        if !table_has_column(&self.connection, "semantic_assignments", "fingerprint")?
+            || !table_has_column(&self.connection, "sessions", "generated_title")?
+            // A minimal v1 Catalog can legitimately reach the current schema version without
+            // ever having had the legacy `assignments` table. There is no lock state to inspect
+            // in that shape, so defer reconciliation until a later normal scan creates it.
+            || !table_exists(&self.connection, "assignments")?
+        {
+            return Ok(());
+        }
+        let stale_keys = {
+            let mut statement = self.connection.prepare(
+                "SELECT sa.session_key,
+                        COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
+                        s.cwd, s.backend, sa.fingerprint, s.session_class,
+                        COALESCE(a.locked, 0)
+                 FROM semantic_assignments sa
+                 JOIN sessions s ON s.stable_key = sa.session_key
+                 LEFT JOIN assignments a ON a.session_key = sa.session_key
+                 ORDER BY sa.session_key ASC",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    let key = row.get::<_, String>(0)?;
+                    let title = row.get::<_, String>(1)?;
+                    let cwd = row.get::<_, Option<String>>(2)?;
+                    let backend = row.get::<_, String>(3)?;
+                    let stored_fingerprint = row.get::<_, String>(4)?;
+                    let session_class = row.get::<_, String>(5)?;
+                    let locked = row.get::<_, i64>(6)?;
+                    let current_fingerprint =
+                        super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
+                    Ok((stored_fingerprint != current_fingerprint
+                        || (session_class != SessionClass::Interactive.as_str() && locked == 0))
+                        .then_some(key))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            rows
+        };
+        if stale_keys.is_empty() {
+            return Ok(());
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut changed = 0usize;
+        for key in stale_keys {
+            changed += transaction.execute(
+                "DELETE FROM semantic_assignments WHERE session_key = ?1",
+                [key],
+            )?;
+        }
+        if changed > 0 {
+            bump_revision(&transaction)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     fn purge_junk_semantic_assignments(&mut self) -> Result<(), CatalogError> {
         if !table_has_column(&self.connection, "semantic_assignments", "topic_label")?
             || !table_has_column(&self.connection, "sessions", "title")?
@@ -981,6 +1051,9 @@ impl ProjectCatalog {
              LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
              WHERE a.locked = 0
                AND s.session_class = 'interactive'
+               -- Wait for an in-flight title refresh; clustering the provider's stale title
+               -- would immediately create an obsolete topic assignment.
+               AND s.title_status != 'running'
                AND s.title_priority != 0
                -- Skip throwaway sessions, which otherwise become junk Projects like
                -- \"no clear topic\". Either signal alone is enough to be worth classifying:
@@ -1121,7 +1194,12 @@ impl ProjectCatalog {
              WHERE session_class = 'interactive'
                AND custom_title IS NULL
                AND (title_status IN ('pending', 'failed')
-                    OR title_input_fingerprint IS NULL)
+                    OR title_input_fingerprint IS NULL
+                    OR title_generated_at IS NULL
+                    -- A session can keep receiving messages after its title was generated.
+                    -- Re-read its transcript so the title (and therefore its semantic topic)
+                    -- reflects the work that is actually current.
+                    OR last_activity_at > title_generated_at)
              ORDER BY last_activity_at DESC, stable_key ASC
              LIMIT ?1",
         )?;
@@ -1177,30 +1255,75 @@ impl ProjectCatalog {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for update in updates {
-            transaction.execute(
-                "UPDATE sessions
-                    SET generated_title = ?2,
-                        title_source = ?3,
-                        title_status = ?4,
-                        title_error = ?5,
-                        title_backend = ?6,
-                        title_model = ?7,
-                        title_generated_at = ?8,
-                        title_input_fingerprint = ?9,
-                        updated_at = MAX(updated_at, ?8)
-                  WHERE stable_key = ?1 AND custom_title IS NULL",
-                params![
-                    update.stable_key,
-                    update.title,
-                    update.source,
-                    update.status,
-                    update.error,
-                    update.backend,
-                    update.model,
-                    update.generated_at,
-                    update.fingerprint,
-                ],
-            )?;
+            // A transient provider failure must not replace a useful model-generated title with
+            // a much worse heuristic fallback. Preserve the existing title and provenance while
+            // recording the failed attempt so the worker can retry it later.
+            let existing_title: Option<String> = transaction
+                .query_row(
+                    "SELECT COALESCE(generated_title, '')
+                         FROM sessions
+                         WHERE stable_key = ?1 AND custom_title IS NULL",
+                    [&update.stable_key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let preserve_existing = update.status == "failed"
+                && existing_title
+                    .as_deref()
+                    .is_some_and(|title| !title.trim().is_empty());
+            if preserve_existing {
+                transaction.execute(
+                    "UPDATE sessions
+                        SET title_status = ?2,
+                            title_error = ?3,
+                            title_generated_at = ?4,
+                            title_input_fingerprint = ?5,
+                            updated_at = MAX(updated_at, ?4)
+                      WHERE stable_key = ?1 AND custom_title IS NULL",
+                    params![
+                        update.stable_key,
+                        update.status,
+                        update.error,
+                        update.generated_at,
+                        update.fingerprint,
+                    ],
+                )?;
+            } else {
+                transaction.execute(
+                    "UPDATE sessions
+                        SET generated_title = ?2,
+                            title_source = ?3,
+                            title_status = ?4,
+                            title_error = ?5,
+                            title_backend = ?6,
+                            title_model = ?7,
+                            title_generated_at = ?8,
+                            title_input_fingerprint = ?9,
+                            updated_at = MAX(updated_at, ?8)
+                      WHERE stable_key = ?1 AND custom_title IS NULL",
+                    params![
+                        update.stable_key,
+                        update.title,
+                        update.source,
+                        update.status,
+                        update.error,
+                        update.backend,
+                        update.model,
+                        update.generated_at,
+                        update.fingerprint,
+                    ],
+                )?;
+            }
+            // A changed generated title is part of the semantic input. Drop the previous
+            // inference in the same transaction so a title refresh can never leave an old topic
+            // visible until the next periodic scanner pass. A failed retry that preserved the
+            // existing title does not invalidate the topic.
+            if !preserve_existing {
+                transaction.execute(
+                    "DELETE FROM semantic_assignments WHERE session_key = ?1",
+                    [&update.stable_key],
+                )?;
+            }
         }
         let revision = bump_revision(&transaction)?;
         transaction.commit()?;
@@ -1308,21 +1431,37 @@ impl ProjectCatalog {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for item in batch {
-            // Re-check the lock inside the transaction: the user may have locked this session
-            // while the classifier was running.
-            let eligibility: Option<(i64, String)> = transaction
+            // Re-check the lock and the complete semantic envelope inside the transaction: the
+            // user may have locked this session, or the title worker may have refreshed its title,
+            // while the classifier was running. Never write an assignment for an obsolete
+            // fingerprint.
+            let metadata: Option<(i64, String, String, Option<String>, String)> = transaction
                 .query_row(
-                    "SELECT a.locked, s.session_class
+                    "SELECT a.locked, s.session_class,
+                            COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
+                            s.cwd, s.backend
                      FROM assignments a
                      JOIN sessions s ON s.stable_key = a.session_key
                      WHERE a.session_key = ?1",
                     [&item.session_key],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
                 )
                 .optional()?;
-            if eligibility.as_ref().is_none_or(|(locked, session_class)| {
-                *locked != 0 || session_class != SessionClass::Interactive.as_str()
-            }) {
+            let Some((locked, session_class, title, cwd, backend)) = metadata else {
+                continue;
+            };
+            if locked != 0 || session_class != SessionClass::Interactive.as_str() {
+                continue;
+            }
+            let current_fingerprint = super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
+            if item.fingerprint != current_fingerprint {
+                // Remove only the stale row that this invocation could have produced. A newer
+                // assignment (with the current fingerprint) must remain untouched.
+                transaction.execute(
+                    "DELETE FROM semantic_assignments
+                     WHERE session_key = ?1 AND fingerprint = ?2",
+                    params![item.session_key, item.fingerprint],
+                )?;
                 continue;
             }
 
@@ -2212,10 +2351,11 @@ fn can_preserve_existing_assignment(
 fn reconcile_semantic_assignment(
     transaction: &Transaction<'_>,
     stable_key: &str,
-) -> Result<(), CatalogError> {
+) -> Result<bool, CatalogError> {
     let metadata = transaction
         .query_row(
-            "SELECT s.title, s.cwd, s.backend, sa.fingerprint, s.session_class,
+            "SELECT COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
+                    s.cwd, s.backend, sa.fingerprint, s.session_class,
                     COALESCE(a.locked, 0)
              FROM sessions s
              JOIN semantic_assignments sa ON sa.session_key = s.stable_key
@@ -2235,18 +2375,19 @@ fn reconcile_semantic_assignment(
         )
         .optional()?;
     let Some((title, cwd, backend, stored_fingerprint, session_class, locked)) = metadata else {
-        return Ok(());
+        return Ok(false);
     };
     let current_fingerprint = super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
     if stored_fingerprint != current_fingerprint
         || (session_class != SessionClass::Interactive.as_str() && locked == 0)
     {
-        transaction.execute(
+        let deleted = transaction.execute(
             "DELETE FROM semantic_assignments WHERE session_key = ?1",
             [stable_key],
         )?;
+        return Ok(deleted > 0);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn update_string_field(
@@ -2780,6 +2921,232 @@ mod tests {
     }
 
     #[test]
+    fn title_generation_is_requeued_when_a_session_has_new_activity() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let session = candidate("pi", "title-refresh", 200);
+        let session_key = session.identity.stable_key.clone();
+        catalog.upsert_candidate(&session).expect("session");
+
+        catalog
+            .apply_title_batch(&[SessionTitleUpdate {
+                stable_key: session_key.clone(),
+                title: "【Pixel】备份照片".to_string(),
+                source: "model".to_string(),
+                status: "done".to_string(),
+                error: None,
+                backend: Some("pi".to_string()),
+                model: Some("test".to_string()),
+                fingerprint: "title-input".to_string(),
+                generated_at: 100,
+            }])
+            .expect("title result");
+
+        let pending = catalog.pending_title_sessions(10).expect("pending titles");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].stable_key, session_key);
+
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET title_generated_at = last_activity_at
+                 WHERE stable_key = ?1",
+                [&session_key],
+            )
+            .expect("mark title current");
+        assert!(catalog
+            .pending_title_sessions(10)
+            .expect("pending titles")
+            .is_empty());
+    }
+
+    #[test]
+    fn semantic_reconcile_uses_the_effective_generated_title() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let session = candidate("pi", "generated-title-fingerprint", 20);
+        let session_key = session.identity.stable_key.clone();
+        catalog.upsert_candidate(&session).expect("session");
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET generated_title = '【Pixel】备份照片', title_status = 'done'
+                 WHERE stable_key = ?1",
+                [&session_key],
+            )
+            .expect("generated title");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: session_key.clone(),
+                    topic_key: super::super::semantic_topic_key("Pixel 备份"),
+                    topic_label: "Pixel 备份".to_string(),
+                    fingerprint: super::super::semantic_fingerprint(
+                        "【Pixel】备份照片",
+                        None,
+                        "pi",
+                    ),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                30,
+            )
+            .expect("semantic result");
+
+        catalog
+            .upsert_candidate(&session)
+            .expect("reconcile current semantic assignment");
+        let count: i64 = catalog
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM semantic_assignments WHERE session_key = ?1",
+                [&session_key],
+                |row| row.get(0),
+            )
+            .expect("semantic row count");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn stale_semantic_batch_result_is_ignored_after_title_refresh() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let session = candidate("pi", "stale-semantic-result", 20);
+        let session_key = session.identity.stable_key.clone();
+        catalog.upsert_candidate(&session).expect("session");
+        let old_title = session.title.as_ref().expect("title").value.clone();
+        let old_fingerprint = super::super::semantic_fingerprint(&old_title, None, "pi");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: session_key.clone(),
+                    topic_key: super::super::semantic_topic_key("旧主题"),
+                    topic_label: "旧主题".to_string(),
+                    fingerprint: old_fingerprint.clone(),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                30,
+            )
+            .expect("initial semantic result");
+
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET generated_title = '新标题', title_status = 'done'
+                 WHERE stable_key = ?1",
+                [&session_key],
+            )
+            .expect("title refresh");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: session_key.clone(),
+                    topic_key: super::super::semantic_topic_key("旧主题"),
+                    topic_label: "旧主题".to_string(),
+                    fingerprint: old_fingerprint,
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                40,
+            )
+            .expect("stale semantic result");
+
+        let row: Option<(String, String)> = catalog
+            .connection
+            .query_row(
+                "SELECT topic_label, fingerprint FROM semantic_assignments
+                 WHERE session_key = ?1",
+                [&session_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .expect("semantic row");
+        assert!(row.is_none(), "obsolete classification must not survive");
+    }
+
+    #[test]
+    fn failed_title_generation_preserves_existing_model_title() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let session = candidate("pi", "title-failure-preserve", 20);
+        let session_key = session.identity.stable_key.clone();
+        catalog.upsert_candidate(&session).expect("session");
+        catalog
+            .apply_title_batch(&[SessionTitleUpdate {
+                stable_key: session_key.clone(),
+                title: "【Pixel】备份照片".to_string(),
+                source: "model".to_string(),
+                status: "done".to_string(),
+                error: None,
+                backend: Some("pi".to_string()),
+                model: Some("test-model".to_string()),
+                fingerprint: "good-title-input".to_string(),
+                generated_at: 30,
+            }])
+            .expect("good title");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: session_key.clone(),
+                    topic_key: super::super::semantic_topic_key("Pixel 备份"),
+                    topic_label: "Pixel 备份".to_string(),
+                    fingerprint: super::super::semantic_fingerprint(
+                        "【Pixel】备份照片",
+                        None,
+                        "pi",
+                    ),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                35,
+            )
+            .expect("semantic topic");
+        catalog
+            .apply_title_batch(&[SessionTitleUpdate {
+                stable_key: session_key.clone(),
+                title: "【Workspace】title-failure-preserve".to_string(),
+                source: "heuristic".to_string(),
+                status: "failed".to_string(),
+                error: Some("backend unavailable".to_string()),
+                backend: None,
+                model: None,
+                fingerprint: "failed-title-input".to_string(),
+                generated_at: 40,
+            }])
+            .expect("failed title");
+
+        let row: (String, String, Option<String>, Option<String>, String) = catalog
+            .connection
+            .query_row(
+                "SELECT generated_title, title_source, title_backend, title_model,
+                        title_status
+                 FROM sessions WHERE stable_key = ?1",
+                [&session_key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("title row");
+        assert_eq!(row.0, "【Pixel】备份照片");
+        assert_eq!(row.1, "model");
+        assert_eq!(row.2.as_deref(), Some("pi"));
+        assert_eq!(row.3.as_deref(), Some("test-model"));
+        assert_eq!(row.4, "failed");
+        let semantic_count: i64 = catalog
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM semantic_assignments WHERE session_key = ?1",
+                [&session_key],
+                |row| row.get(0),
+            )
+            .expect("semantic row count");
+        assert_eq!(semantic_count, 1);
+    }
+
+    #[test]
     fn unknown_weight_with_title_is_pending_but_known_empty_default_is_not() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let mut unknown = candidate("grok", "unknown-weight", 10);
@@ -3066,7 +3433,11 @@ mod tests {
                         session_key,
                         topic_key: super::super::semantic_topic_key(topic),
                         topic_label: topic.to_string(),
-                        fingerprint: format!("fingerprint-{id}"),
+                        fingerprint: super::super::semantic_fingerprint(
+                            &item.title.as_ref().expect("title").value,
+                            item.cwd.as_ref().and_then(|field| field.value.to_str()),
+                            &item.identity.backend,
+                        ),
                         backend_used: "test".to_string(),
                         model_used: None,
                     }],

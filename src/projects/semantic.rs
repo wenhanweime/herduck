@@ -16,6 +16,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -24,6 +25,9 @@ use super::domain::{PendingSemanticSession, SemanticAssignment, SemanticTopicMer
 
 /// How long a single backend invocation may run before the batch is failed over.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+/// OpenCode may spend most of the configured timeout refreshing its provider/plugin state before
+/// producing any answer. Keep that optional backend from starving the local Pi fallback.
+const OPENCODE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Guards against a runaway backend streaming unbounded output.
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -172,6 +176,7 @@ pub(crate) fn backend_command(backend: &str, model: Option<&str>, prompt: &str) 
                     "-np", // no prompt templates
                     "-nc", // no AGENTS.md / CLAUDE.md discovery
                     "--no-session",
+                    "--offline", // do not block on startup package/model catalog refreshes
                 ]
                 .iter()
                 .map(|flag| flag.to_string()),
@@ -180,7 +185,11 @@ pub(crate) fn backend_command(backend: &str, model: Option<&str>, prompt: &str) 
             args
         }
         "opencode" => {
-            let mut args = vec!["run".to_string()];
+            // Classification must be a hermetic, one-shot invocation. Without `--pure`,
+            // OpenCode loads user-installed plugins and MCP servers (for example
+            // `gemini-search-mcp`) before it can answer, which can stall the background worker
+            // for the full timeout and starve recent sessions from the Cluster view.
+            let mut args = vec!["run".to_string(), "--pure".to_string()];
             if let Some(model) = model {
                 args.push("--model".to_string());
                 args.push(model.to_string());
@@ -192,6 +201,8 @@ pub(crate) fn backend_command(backend: &str, model: Option<&str>, prompt: &str) 
             "exec".to_string(),
             "--ephemeral".to_string(),
             "--skip-git-repo-check".to_string(),
+            "--ignore-user-config".to_string(),
+            "--ignore-rules".to_string(),
             prompt.to_string(),
         ],
         "hermes" => vec![
@@ -490,6 +501,11 @@ pub(crate) fn run_backend(
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, BatchError> {
+    let timeout = if backend == "opencode" {
+        timeout.min(OPENCODE_TIMEOUT)
+    } else {
+        timeout
+    };
     run_backend_program(Path::new(backend), backend, model, prompt, timeout)
 }
 
@@ -518,18 +534,29 @@ fn run_backend_program(
         .spawn()
         .map_err(|err| BatchError::Failed(format!("{backend} failed to start: {err}")))?;
 
+    // Drain both pipes while the process is running. Waiting for exit before reading can
+    // deadlock a backend once either pipe reaches the OS buffer limit (Pi/OpenCode both emit
+    // startup diagnostics), so the worker never reaches the timeout or the fallback backend.
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|mut handle| thread::spawn(move || read_capped(&mut handle)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|mut handle| thread::spawn(move || read_capped(&mut handle)));
+
     let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
                 if Instant::now() >= deadline {
+                    timed_out = true;
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(BatchError::Failed(format!(
-                        "{backend} timed out after {}s",
-                        timeout.as_secs()
-                    )));
+                    break;
                 }
                 std::thread::sleep(POLL_INTERVAL);
             }
@@ -541,21 +568,18 @@ fn run_backend_program(
         }
     }
 
-    let mut stdout = String::new();
-    if let Some(handle) = child.stdout.as_mut() {
-        let mut buffer = Vec::new();
-        let _ = handle
-            .take(MAX_OUTPUT_BYTES as u64)
-            .read_to_end(&mut buffer);
-        stdout = String::from_utf8_lossy(&buffer).into_owned();
-    }
-    let mut stderr = String::new();
-    if let Some(handle) = child.stderr.as_mut() {
-        let mut buffer = Vec::new();
-        let _ = handle
-            .take(MAX_OUTPUT_BYTES as u64)
-            .read_to_end(&mut buffer);
-        stderr = String::from_utf8_lossy(&buffer).into_owned();
+    let stdout = stdout_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+
+    if timed_out {
+        return Err(BatchError::Failed(format!(
+            "{backend} timed out after {}s",
+            timeout.as_secs()
+        )));
     }
 
     if is_quota_error(&stdout) || is_quota_error(&stderr) {
@@ -568,6 +592,28 @@ fn run_backend_program(
         )));
     }
     Ok(stdout)
+}
+
+/// Reads a backend pipe to EOF while retaining only the bounded prefix.
+///
+/// The reader must continue draining after the cap is reached; stopping at the cap would put us
+/// back into the same pipe-buffer deadlock this helper is intended to prevent.
+fn read_capped(reader: &mut impl Read) -> String {
+    let mut retained = Vec::new();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                if retained.len() < MAX_OUTPUT_BYTES {
+                    let remaining = MAX_OUTPUT_BYTES - retained.len();
+                    retained.extend_from_slice(&buffer[..read.min(remaining)]);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    String::from_utf8_lossy(&retained).into_owned()
 }
 
 fn is_quota_error(text: &str) -> bool {
@@ -622,11 +668,18 @@ pub(crate) fn classify_batch(
                         model
                     );
                 }
-                Err(BatchError::Failed(error)) => tracing::debug!(
-                    category = "semantic_backend",
-                    "{} failed: {error}",
-                    backend.name
-                ),
+                Err(BatchError::Failed(error)) => {
+                    tracing::debug!(
+                        category = "semantic_backend",
+                        "{} failed: {error}",
+                        backend.name
+                    );
+                    // A hard startup/transport failure applies to the backend, not just one
+                    // model. Trying every model serially turns one unavailable provider into
+                    // many minutes of queue starvation. Quota errors remain model-specific and
+                    // continue to the next model above.
+                    break;
+                }
             }
         }
     }
@@ -878,7 +931,15 @@ mod tests {
         assert!(args.contains(&"NewAPIConn/glm-4.7-flash".to_string()));
         // Without these, pi loads tools/skills/context and answers far slower, and without
         // --model it falls back to an unconfigured provider and hangs.
-        for flag in ["-p", "-nt", "-ns", "-np", "-nc", "--no-session"] {
+        for flag in [
+            "-p",
+            "-nt",
+            "-ns",
+            "-np",
+            "-nc",
+            "--no-session",
+            "--offline",
+        ] {
             assert!(args.contains(&flag.to_string()), "missing {flag}");
         }
     }
@@ -887,6 +948,44 @@ mod tests {
     fn codex_command_disables_session_persistence() {
         let args = backend_command("codex", None, "hi");
         assert!(args.contains(&"--ephemeral".to_string()));
+    }
+
+    #[test]
+    fn opencode_command_disables_external_plugins() {
+        let args = backend_command("opencode", Some("opencode/mimo-v2.5-free"), "hi");
+        assert_eq!(args.first().map(String::as_str), Some("run"));
+        assert!(args.contains(&"--pure".to_string()));
+        assert!(args.contains(&"--model".to_string()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backend_output_is_drained_before_waiting_for_exit() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = BackendScratch::create().expect("fixture root");
+        let fake_backend = fixture.path.join("noisy-backend");
+        fs::write(
+            &fake_backend,
+            "#!/bin/sh\n\n# Exceed the small macOS pipe buffer, then return a valid response.\ndd if=/dev/zero bs=1024 count=64 1>&2 || true\nprintf '%s\\n' '{\"clusters\":[{\"topic\":\"test\",\"ids\":[1]}]}'\n",
+        )
+        .expect("fake backend");
+        let mut permissions = fs::metadata(&fake_backend)
+            .expect("fake backend metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_backend, permissions).expect("fake backend executable");
+
+        let batch = vec![session("noisy", "test", None, "fake")];
+        let output = run_backend_program(
+            &fake_backend,
+            "fake",
+            None,
+            "ignored",
+            Duration::from_secs(5),
+        )
+        .expect("noisy backend should finish");
+        assert!(parse_response(&output, &batch, "fake", None).is_ok());
     }
 
     #[cfg(unix)]
