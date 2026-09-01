@@ -226,6 +226,11 @@ pub(crate) fn configuration_diagnostics(projects: &ProjectsConfig) -> Vec<String
                 }
             }
             SummaryProviderKind::OpenaiCompatible => {
+                if provider.id == "opencode_zen" && provider.api_key_env.is_none() {
+                    diagnostics.push(format!(
+                        "{label} requires api_key_env for paid OpenCode Zen access"
+                    ));
+                }
                 let valid_endpoint = provider.endpoint.as_deref().is_some_and(|endpoint| {
                     endpoint.starts_with("http://") || endpoint.starts_with("https://")
                 });
@@ -625,7 +630,7 @@ pub(crate) fn run_provider(
             run_backend_program(Path::new(command), &provider.name, model, prompt, timeout)
         }
         BackendKind::OpenaiCompatible => {
-            let timeout = if provider.name == "opencode_zen" {
+            let timeout = if matches!(provider.name.as_str(), "opencode_free" | "opencode_zen") {
                 timeout.min(Duration::from_secs(30))
             } else {
                 timeout
@@ -641,16 +646,24 @@ fn run_http_provider(
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, BatchError> {
+    if provider.name == "opencode_zen" && provider.api_key_env.is_none() {
+        return Err(BatchError::Failed(
+            "paid OpenCode Zen provider requires api_key_env".to_string(),
+        ));
+    }
     let endpoint = provider
         .endpoint
         .as_deref()
         .filter(|value| value.starts_with("http://") || value.starts_with("https://"))
         .ok_or_else(|| BatchError::Failed("provider endpoint is missing or invalid".to_string()))?;
+    // OpenCode Free is genuinely keyless. Do not synthesize a placeholder token (for example
+    // `Bearer public`): Hermes' official integration explicitly clears Authorization because
+    // OpenCode rejects unrecognised bearer values with 401. Other providers only receive a
+    // bearer token when the configured environment variable exists and is non-empty.
     let token = match provider.api_key_env.as_deref() {
         Some(variable) => std::env::var(variable).map_err(|_| {
             BatchError::Failed(format!("missing API key environment variable `{variable}`"))
         })?,
-        None if provider.name == "opencode_zen" => "public".to_string(),
         None => String::new(),
     };
     let request_body = serde_json::json!({
@@ -1246,12 +1259,12 @@ mod tests {
     }
 
     #[test]
-    fn default_config_exposes_opencode_zen_before_cli_presets() {
+    fn default_config_exposes_keyless_opencode_free_before_cli_presets() {
         let config = SemanticConfig::default();
         assert_eq!(config.mode, SummaryModeConfig::Auto);
         assert_eq!(
             config.backends.first().map(|backend| backend.name.as_str()),
-            Some("opencode_zen")
+            Some("opencode_free")
         );
         assert_eq!(
             config.backends.first().map(|backend| backend.kind),
@@ -1260,6 +1273,11 @@ mod tests {
         assert_eq!(
             config.backends.get(1).map(|backend| backend.name.as_str()),
             Some("opencode")
+        );
+        assert_eq!(config.backends[0].api_key_env, None);
+        assert_eq!(
+            config.backends[0].models.first().map(String::as_str),
+            Some("laguna-s-2.1-free")
         );
     }
 
@@ -1300,6 +1318,26 @@ mod tests {
     }
 
     #[test]
+    fn paid_opencode_zen_requires_an_explicit_api_key_env() {
+        let provider = BackendSpec {
+            name: "opencode_zen".to_string(),
+            kind: BackendKind::OpenaiCompatible,
+            command: None,
+            endpoint: Some("http://127.0.0.1:1/v1/chat/completions".to_string()),
+            api_key_env: None,
+            models: vec!["zen-model".to_string()],
+        };
+        let error = run_provider(
+            &provider,
+            Some("zen-model"),
+            "classify",
+            Duration::from_secs(1),
+        )
+        .expect_err("paid Zen must require a key env");
+        assert!(matches!(error, BatchError::Failed(message) if message.contains("api_key_env")));
+    }
+
+    #[test]
     fn http_provider_accepts_openai_compatible_chat_response() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -1333,6 +1371,65 @@ mod tests {
         let output = run_provider(
             &provider,
             Some("test-model"),
+            "classify",
+            Duration::from_secs(5),
+        )
+        .expect("HTTP response");
+        server.join().expect("server thread");
+        assert_eq!(output, r#"{"clusters":[]}"#);
+    }
+
+    #[test]
+    fn opencode_free_request_is_keyless_and_does_not_send_bearer() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener");
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().expect("listener address")
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut buffer).expect("request body");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
+            assert!(
+                !headers
+                    .lines()
+                    .any(|line| line.starts_with("authorization:")),
+                "OpenCode Free must not receive an Authorization header: {headers}"
+            );
+            let body = r#"{"choices":[{"message":{"content":"{\"clusters\":[]}"}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("response write");
+        });
+        let provider = BackendSpec {
+            name: "opencode_free".to_string(),
+            kind: BackendKind::OpenaiCompatible,
+            command: None,
+            endpoint: Some(endpoint),
+            api_key_env: None,
+            models: vec!["laguna-s-2.1-free".to_string()],
+        };
+        let output = run_provider(
+            &provider,
+            Some("laguna-s-2.1-free"),
             "classify",
             Duration::from_secs(5),
         )

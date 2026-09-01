@@ -70,9 +70,10 @@ cannot accidentally attach to a separately installed upstream runtime.
 ## Session summaries
 
 ORK3 can create session titles and Cluster topics with no account or API key. The default
-`auto` mode tries the OpenCode Zen public/free endpoint on a best-effort basis, then any
-configured local Agent CLI, and finally the deterministic local algorithm. A 429, missing Agent,
-network error, or malformed response never blocks the TUI.
+`auto` mode first tries Hermes-compatible OpenCode Free (`opencode_free`) on a best-effort,
+keyless basis, then local Agent CLIs, and finally the deterministic local algorithm. A 429,
+missing Agent, network error, or malformed response never blocks the TUI. OpenCode Free's
+recommended model is `laguna-s-2.1-free`; its live catalog and availability can change.
 
 To force completely offline behavior:
 
@@ -100,6 +101,22 @@ The same provider shape works with LiteLLM, LM Studio, and Ollama (for example,
 `http://localhost:11434/v1/chat/completions`). Local Agent presets for OpenCode, Pi, Codex, and
 Hermes are included by default; remove or reorder them under `[[projects.summary.providers]]` if
 needed. ORK3 never stores or logs the value of an API key.
+
+OpenCode Zen paid models are opt-in. Add a provider explicitly and export its key; do not use a
+placeholder value such as `public`:
+
+```toml
+[[projects.summary.providers]]
+id = "opencode_zen"
+kind = "openai_compatible"
+endpoint = "https://opencode.ai/zen/v1/chat/completions"
+api_key_env = "OPENCODE_ZEN_API_KEY"
+models = ["your-zen-model"]
+```
+
+The `opencode_free` preset is different: it is the official keyless OpenCode Free route used by
+Hermes Agent, so ORK3 intentionally sends no `Authorization` header for it. Free access is
+best-effort and subject to the provider's rate limits.
 
 The complete executable scope, fallback rules, privacy boundaries, and acceptance criteria are in
 [docs/PRD-public-summary-providers.md](docs/PRD-public-summary-providers.md).

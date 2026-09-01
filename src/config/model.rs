@@ -375,17 +375,24 @@ impl Default for SummaryProviderConfig {
 }
 
 impl SummaryProviderConfig {
-    fn opencode_zen() -> Self {
+    /// Hermes-compatible OpenCode Free endpoint.
+    ///
+    /// OpenCode Free is keyless: requests must not include a placeholder bearer token. The
+    /// catalog is refreshed by OpenCode, so keep the model list conservative and put the
+    /// provider's documented free model first.
+    fn opencode_free() -> Self {
         Self {
-            id: "opencode_zen".to_string(),
+            id: "opencode_free".to_string(),
             kind: SummaryProviderKind::OpenaiCompatible,
             command: None,
             endpoint: Some("https://opencode.ai/zen/v1/chat/completions".to_string()),
             api_key_env: None,
             models: vec![
-                "big-pickle".to_string(),
+                "laguna-s-2.1-free".to_string(),
                 "mimo-v2.5-free".to_string(),
                 "ling-3.0-flash-free".to_string(),
+                // Hermes documents that this model is commonly rate-limited outside OpenCode.
+                "big-pickle".to_string(),
             ],
         }
     }
@@ -403,7 +410,7 @@ impl SummaryProviderConfig {
 
     pub(crate) fn default_presets() -> Vec<Self> {
         vec![
-            Self::opencode_zen(),
+            Self::opencode_free(),
             Self::cli(
                 "opencode",
                 &[
@@ -1464,7 +1471,15 @@ roots = ["~/history/pi"]
                 .providers
                 .first()
                 .map(|provider| provider.id.as_str()),
-            Some("opencode_zen")
+            Some("opencode_free")
+        );
+        assert_eq!(defaults.projects.summary.providers[0].api_key_env, None);
+        assert_eq!(
+            defaults.projects.summary.providers[0]
+                .models
+                .first()
+                .map(String::as_str),
+            Some("laguna-s-2.1-free")
         );
 
         let config: Config = toml::from_str(

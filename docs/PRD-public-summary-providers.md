@@ -26,7 +26,7 @@ ork3 在不依赖任何云端账号时仍能生成可读的会话标题和主题
 - `local / llm / auto` 三种摘要模式；默认 `auto`。
 - 确定性本地标题/主题算法，完全不启动进程、不发网络请求。
 - 统一 provider 描述：CLI Agent 和 OpenAI-compatible HTTP。
-- 内置 provider preset：OpenCode Zen public/free（无密钥 best-effort）、OpenCode CLI、Pi CLI、Codex CLI、Hermes CLI；Ollama/OpenRouter/LM Studio/LiteLLM 通过同一兼容协议接入。
+- 内置 provider preset：Hermes 兼容的 OpenCode Free（无密钥、匿名、best-effort）、OpenCode CLI、Pi CLI、Codex CLI、Hermes CLI；付费 OpenCode Zen 通过显式配置接入；Ollama/OpenRouter/LM Studio/LiteLLM 通过同一兼容协议接入。
 - 用户自定义 endpoint、模型列表和 `api_key_env`；只从环境变量读取密钥。
 - provider 顺序、模型轮换、超时、429/配额识别和失败回退。
 - 标题与 Cluster 共用同一 provider 链，保留现有批处理、指纹和持久化语义。
@@ -52,7 +52,7 @@ ork3 在不依赖任何云端账号时仍能生成可读的会话标题和主题
 | 类型 | 内容 |
 |---|---|
 | **Stack** | Rust 2021；现有 `ProjectService`、`semantic.rs`、`title.rs`、SQLite Catalog。HTTP 使用 `reqwest` blocking + rustls；不引入异步运行时。 |
-| **集成** | OpenCode Zen `https://opencode.ai/zen/v1/chat/completions`；OpenRouter/LiteLLM/LM Studio 等通过自定义 OpenAI-compatible endpoint；Ollama 默认 `http://localhost:11434/v1/chat/completions`。 |
+| **集成** | OpenCode Free/Zen `https://opencode.ai/zen/v1/chat/completions`；OpenRouter/LiteLLM/LM Studio 等通过自定义 OpenAI-compatible endpoint；Ollama 默认 `http://localhost:11434/v1/chat/completions`。 |
 | **性能** | 摘要始终在后台线程；单请求超时默认 120s；批量大小和回填间隔可配置；`local` 模式不得启动 CLI 或网络请求。 |
 | **安全** | 配置只保存环境变量名，不保存 key 值；日志禁止输出 Authorization、请求正文和 transcript；HTTP 仅发送有界摘要 envelope。 |
 | **命令** | 格式/测试：`just check`；快速单测：`cargo test projects::semantic projects::title`；构建：`cargo build`。 |
@@ -119,15 +119,21 @@ SummaryProviderConfig:
 2. Given `api_key_env = "OPENROUTER_API_KEY"`，When请求 provider，Then只读取该环境变量；配置文件和日志中不出现 key 值。
 3. Given endpoint 缺失、kind 不匹配或数值为 0，When加载配置，Then产生诊断并跳过无效 provider，不影响目录扫描。
 
-### F3. OpenCode Zen 免费入口 · P0
+### F3. OpenCode Free 免费入口 · P0
 
-**行为：** 默认链首包含 OpenCode Zen public/free preset，使用 `Authorization: Bearer public`；免费模型清单可配置，当前默认包含 `big-pickle`、`mimo-v2.5-free`、`ling-3.0-flash-free`。
+**行为：** 默认链首包含 Hermes 官方使用的 `opencode_free` preset，指向
+`https://opencode.ai/zen/v1/chat/completions`。该入口无需 API Key，发送匿名请求，且绝不
+发送 `Authorization: Bearer public`。当前模型顺序为 `laguna-s-2.1-free`、
+`mimo-v2.5-free`、`ling-3.0-flash-free`、`big-pickle`；OpenCode live catalog 可能变化。
 
 **Acceptance criteria：**
 
-1. Given未设置任何 key，When Zen 返回 200 且 choices[0].message.content 为合法 JSON，Then结果被接受。
-2. Given Zen 返回 429/`FreeUsageLimitError`，When处理批次，Then记录 quota 诊断并立即尝试下一个模型/provider，不对同一模型重试。
-3. Given Zen 不可达，When启动 ork3，Then TUI 首帧和目录/会话树仍可用，且降级到本地算法或后续 provider。
+1. Given未设置任何 key，When OpenCode Free 返回 200 且 choices[0].message.content 为合法 JSON，Then结果被接受且请求不含 Authorization header。
+2. Given OpenCode Free 返回 429/`FreeUsageLimitError`，When处理批次，Then记录 quota 诊断并立即尝试下一个模型/provider，不对同一模型重试。
+3. Given OpenCode Free 不可达，When启动 ork3，Then TUI 首帧和目录/会话树仍可用，且降级到本地算法或后续 provider。
+
+付费 OpenCode Zen 是可选 provider，不在默认链中。用户必须配置
+`api_key_env = "OPENCODE_ZEN_API_KEY"`；ORK3 只从该环境变量读取密钥。
 
 ### F4. OpenAI-compatible HTTP · P0
 
@@ -175,7 +181,8 @@ SummaryProviderConfig:
 
 ## 7. Open questions
 
-- Assumption: `auto` 默认优先 Zen public/free，再按配置顺序尝试本机 CLI/兼容 endpoint，最后使用 local；不承诺 Zen 可用率。
+- Assumption: `auto` 默认优先 Hermes 兼容的 OpenCode Free keyless 入口，再按配置顺序尝试本机 CLI/兼容 endpoint，最后使用 local；不承诺免费入口可用率。
+- Note: Nous Portal 也曾提供限时 `:free` 模型活动，但活动模型和时间窗口不稳定，不作为默认 provider。
 - Assumption: `llm` 仍保留 local fallback，以保证标题/Cluster 不为空；UI 诊断区分“LLM 成功”和“本地回退”。
 - [NEEDS CLARIFICATION: P1 是否需要在 TUI 内编辑 provider/key 环境变量？本版本先使用 `config.toml` + 环境变量。]
 
