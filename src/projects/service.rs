@@ -19,7 +19,7 @@ const SCAN_WRITE_BATCH_SIZE: usize = 256;
 ///
 /// Adapter scanners keep per-root watermarks and return a reused cache when nothing changed, so
 /// this refresh is cheap in the steady state while ensuring a long-lived TUI does not show a
-/// stale Projects/Clusters tree indefinitely.
+/// stale Projects/Topics tree indefinitely.
 const BACKGROUND_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +34,7 @@ impl ProjectServiceError {
             CatalogError::NotFound => "not_found",
             CatalogError::AliasConflict => "alias_conflict",
             CatalogError::CrossBackendAlias => "cross_backend_alias",
+            CatalogError::InvalidTopicMerge => "invalid_topic_merge",
             CatalogError::Corrupt => "catalog_corrupt",
             CatalogError::UnsupportedSchema(_) => "unsupported_schema",
             CatalogError::Sqlite(_) | CatalogError::Io(_) => "catalog_error",
@@ -96,7 +97,6 @@ pub(crate) enum ProjectCommand {
     /// Sessions whose topic is missing or stale, for the classifier worker to pick up.
     PendingSemantic {
         limit: usize,
-        retry_local: bool,
         reply: mpsc::Sender<Result<Vec<PendingSemanticSession>, ProjectServiceError>>,
     },
     /// Topic labels already in use, so later batches can reuse them.
@@ -567,13 +567,11 @@ fn request_on_sender(
 pub(crate) fn request_pending_semantic(
     sender: &mpsc::Sender<ProjectCommand>,
     limit: usize,
-    retry_local: bool,
 ) -> Result<Vec<PendingSemanticSession>, ProjectServiceError> {
     let (reply_tx, reply_rx) = mpsc::channel();
     sender
         .send(ProjectCommand::PendingSemantic {
             limit,
-            retry_local,
             reply: reply_tx,
         })
         .map_err(|_| ProjectServiceError::unavailable())?;
@@ -726,13 +724,9 @@ fn process_command(
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.apply_topic_merges(&merges, observed_at)
         }),
-        ProjectCommand::PendingSemantic {
-            limit,
-            retry_local,
-            reply,
-        } => {
+        ProjectCommand::PendingSemantic { limit, reply } => {
             let result = catalog
-                .pending_semantic_sessions_with_retry(limit, retry_local)
+                .pending_semantic_sessions(limit)
                 .map_err(ProjectServiceError::catalog);
             let _ = reply.send(result);
         }

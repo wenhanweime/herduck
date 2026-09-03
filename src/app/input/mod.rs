@@ -455,8 +455,15 @@ impl App {
         action: crate::app::state::ProjectTreeAction,
     ) {
         match action {
-            crate::app::state::ProjectTreeAction::ToggleProject { project_key } => {
-                if !self.state.collapsed_project_keys.remove(&project_key) {
+            crate::app::state::ProjectTreeAction::ToggleProject {
+                project_key,
+                collapsed,
+            } => {
+                if collapsed {
+                    self.state.collapsed_project_keys.remove(&project_key);
+                    self.state.expanded_project_keys.insert(project_key);
+                } else {
+                    self.state.expanded_project_keys.remove(&project_key);
                     self.state.collapsed_project_keys.insert(project_key);
                 }
                 self.state.mark_session_dirty();
@@ -743,8 +750,7 @@ impl App {
         // normally refreshed on the next scheduler tick. Refresh now so Project and Cluster views
         // show this exact resumed Session as live/highlighted without a redraw race.
         if self.project_service.is_available() {
-            self.state.projects.snapshot = self.project_service.snapshot();
-            self.normalize_project_selection();
+            self.replace_projects_snapshot(self.project_service.snapshot());
         }
         self.schedule_session_save();
         Ok((ws_idx, pane_id))
@@ -1450,6 +1456,7 @@ fn capture_snapshot(state: &AppState) -> crate::persist::SessionSnapshot {
         state.sidebar_section_split,
         state.collapsed_space_keys.clone(),
         state.collapsed_project_keys.clone(),
+        state.expanded_project_keys.clone(),
     )
 }
 
@@ -1989,5 +1996,24 @@ mod tests {
             app.state.sidebar_view,
             crate::app::state::SidebarView::SpacesAgents
         );
+    }
+
+    #[test]
+    fn project_fold_actions_persist_explicit_expand_and_collapse_overrides() {
+        let mut app = test_app();
+
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::ToggleProject {
+            project_key: "topic-key".into(),
+            collapsed: true,
+        });
+        assert!(app.state.expanded_project_keys.contains("topic-key"));
+        assert!(!app.state.collapsed_project_keys.contains("topic-key"));
+
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::ToggleProject {
+            project_key: "topic-key".into(),
+            collapsed: false,
+        });
+        assert!(!app.state.expanded_project_keys.contains("topic-key"));
+        assert!(app.state.collapsed_project_keys.contains("topic-key"));
     }
 }

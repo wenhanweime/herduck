@@ -36,11 +36,48 @@ pub(crate) enum ProjectTreeRow {
     ScanStatus(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProjectTreeRowIdentity {
+    Project(String),
+    Session(String),
+    Automation(String),
+    Thin(String),
+    LoadOlder(String),
+}
+
 impl ProjectTreeRow {
+    /// Stable logical identity used to keep the user's selection on the same Catalog item when
+    /// an incremental snapshot inserts, removes, or reorders rows around it.
+    pub(crate) fn identity(&self) -> Option<ProjectTreeRowIdentity> {
+        match self {
+            Self::Project { project_key, .. } => {
+                Some(ProjectTreeRowIdentity::Project(project_key.clone()))
+            }
+            Self::Session(session) => {
+                Some(ProjectTreeRowIdentity::Session(session.stable_key.clone()))
+            }
+            Self::Automation(template) => Some(ProjectTreeRowIdentity::Automation(
+                template.representative_session_key.clone(),
+            )),
+            Self::Thin { project_key, .. } => {
+                Some(ProjectTreeRowIdentity::Thin(project_key.clone()))
+            }
+            Self::LoadOlder { project_key } => {
+                Some(ProjectTreeRowIdentity::LoadOlder(project_key.clone()))
+            }
+            Self::Empty(_) | Self::Diagnostic(_) | Self::ScanStatus(_) => None,
+        }
+    }
+
     pub(crate) fn action(&self) -> Option<ProjectTreeAction> {
         match self {
-            Self::Project { project_key, .. } => Some(ProjectTreeAction::ToggleProject {
+            Self::Project {
+                project_key,
+                collapsed,
+                ..
+            } => Some(ProjectTreeAction::ToggleProject {
                 project_key: project_key.clone(),
+                collapsed: *collapsed,
             }),
             Self::Session(session) => {
                 let activation = match (
@@ -189,8 +226,15 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             continue;
         }
 
-        let collapsed =
-            query.is_empty() && app.collapsed_project_keys.contains(&project.canonical_key);
+        let default_collapsed = grouping == crate::app::state::ProjectGrouping::Topics
+            && !project
+                .sessions
+                .iter()
+                .any(|session| is_current_session(app, session));
+        let collapsed = query.is_empty()
+            && (app.collapsed_project_keys.contains(&project.canonical_key)
+                || (!app.expanded_project_keys.contains(&project.canonical_key)
+                    && default_collapsed));
         rows.push(ProjectTreeRow::Project {
             project_key: project.canonical_key.clone(),
             display_name: project.display_name.clone(),
@@ -243,7 +287,7 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
         } else if catalog_is_empty {
             match grouping {
                 crate::app::state::ProjectGrouping::Directories => "No indexed projects yet",
-                crate::app::state::ProjectGrouping::Topics => "No clustered topics yet",
+                crate::app::state::ProjectGrouping::Topics => "No topics yet",
             }
         } else {
             "No sessions in this filter"
@@ -462,7 +506,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 }
 
 pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 4]) {
-    let labels = ["Spaces", "Sessions", "Projects", "Clusters"];
+    let labels = ["Spaces", "Sessions", "Projects", "Topics"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 {
             continue;
@@ -600,8 +644,11 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
     let geometry = project_sidebar_geometry(app, area);
     if area.width > 0 {
         let separator_x = area.x + area.width.saturating_sub(1);
-        let separator_style = if app.mode == crate::app::Mode::Navigate {
-            Style::default().fg(app.palette.accent)
+        let divider_active = app.mode == crate::app::Mode::Navigate;
+        let separator_style = if divider_active {
+            Style::default()
+                .fg(app.palette.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
                 .fg(app.palette.overlay0)
@@ -609,7 +656,12 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         };
         for y in area.y..area.y + area.height {
             frame.buffer_mut()[(separator_x, y)]
-                .set_symbol("│")
+                .set_symbol(if divider_active { "┃" } else { "│" })
+                .set_style(separator_style);
+        }
+        if divider_active && area.height >= 5 {
+            frame.buffer_mut()[(separator_x, area.y + area.height / 2)]
+                .set_symbol("↔")
                 .set_style(separator_style);
         }
     }
@@ -644,21 +696,49 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
     }
 
     if geometry.search.height > 0 {
-        let (prefix, query) = if app.projects.query.is_empty() {
-            ("/ ", "search groups, sessions, agents")
+        let focused = app.projects.search_focused;
+        let (prefix, query) = if focused {
+            (
+                "▌ SEARCH ",
+                if app.projects.query.is_empty() {
+                    "type to filter"
+                } else {
+                    app.projects.query.as_str()
+                },
+            )
+        } else if app.projects.query.is_empty() {
+            (" / ", "search groups, sessions, agents")
         } else {
-            ("/ ", app.projects.query.as_str())
+            (" / ", app.projects.query.as_str())
         };
         let query_style = if app.projects.query.is_empty() {
             Style::default().fg(app.palette.overlay0)
         } else {
             Style::default().fg(app.palette.text)
         };
+        let field_style = Style::default()
+            .bg(if focused {
+                app.palette.surface1
+            } else {
+                app.palette.surface0
+            })
+            .fg(app.palette.text);
+        let prefix_style = Style::default()
+            .fg(app.palette.accent)
+            .add_modifier(if focused {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            });
+        let mut spans = vec![
+            Span::styled(prefix, prefix_style),
+            Span::styled(query, query_style),
+        ];
+        if focused {
+            spans.push(Span::styled("▏", Style::default().fg(app.palette.accent)));
+        }
         frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(app.palette.accent)),
-                Span::styled(query, query_style),
-            ])),
+            Paragraph::new(Line::from(spans)).style(field_style),
             geometry.search,
         );
     }
@@ -1165,6 +1245,31 @@ mod tests {
         }
     }
 
+    fn topic_with_sessions(key: &str, display_name: &str, count: usize) -> ProjectSummary {
+        let mut topic = snapshot().projects.remove(0);
+        topic.canonical_key = key.to_string();
+        topic.canonical_path = key.to_string();
+        topic.kind = ProjectKind::Semantic;
+        topic.display_name = display_name.to_string();
+        let seed = topic.sessions.remove(0);
+        topic.sessions = (0..count)
+            .map(|index| {
+                let mut session = seed.clone();
+                session.stable_key = format!("{key}-session-{index}");
+                session.ref_value = session.stable_key.clone();
+                session.title = format!("{display_name} task {index}");
+                session.last_activity_at = 10_000_i64.saturating_sub(index as i64);
+                session.live = false;
+                session.workspace_id = None;
+                session.pane_id = None;
+                session.runtime_generation = None;
+                session.topic_label = Some(display_name.to_string());
+                session
+            })
+            .collect();
+        topic
+    }
+
     #[test]
     fn filters_are_one_row_and_share_geometry_with_hit_testing() {
         let mut state = AppState::test_new();
@@ -1175,7 +1280,7 @@ mod tests {
         assert_eq!(geometry.sidebar_tabs[3].right(), 29);
         assert!(
             geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
-            "Sessions/Projects/Clusters tabs must not abut"
+            "Sessions/Projects/Topics tabs must not abut"
         );
         assert!(geometry.filter_tabs.iter().all(|rect| rect.height == 1));
         assert!(
@@ -1192,6 +1297,149 @@ mod tests {
         );
         assert_eq!(geometry.row_hits.len(), 2);
         assert_eq!(geometry.row_hits[0].rect.height, 1);
+    }
+
+    #[test]
+    fn semantic_grouping_tab_is_named_topics() {
+        let mut state = AppState::test_new();
+        state.projects.snapshot = snapshot();
+        let text = rendered_text(&state, Rect::new(0, 0, 60, 8));
+        assert!(text.contains("Topics"));
+        assert!(!text.contains("Clusters"));
+    }
+
+    #[test]
+    fn focused_search_field_uses_a_filled_surface_label_and_cursor_marker() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        state.mode = crate::app::Mode::Navigate;
+        state.projects.search_focused = true;
+        state.projects.snapshot = snapshot();
+        let area = Rect::new(0, 0, 40, 12);
+        let geometry = project_sidebar_geometry(&state, area);
+        let cells = row_cells(&state, area);
+        let search_row = &cells[usize::from(geometry.search.y - area.y)];
+        let search_start = usize::from(geometry.search.x - area.x);
+
+        assert_eq!(search_row[search_start].symbol, "▌");
+        assert!(
+            search_row[search_start..usize::from(geometry.search.right() - area.x)]
+                .iter()
+                .all(|cell| cell.bg == Some(state.palette.surface1))
+        );
+        let text = rendered_text(&state, area);
+        assert!(text.contains("SEARCH"));
+        assert!(text.contains("▏"));
+    }
+
+    #[test]
+    fn navigate_mode_sidebar_divider_shows_a_resize_grip() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        state.mode = crate::app::Mode::Navigate;
+        state.projects.snapshot = snapshot();
+        let area = Rect::new(0, 0, 40, 12);
+        let cells = row_cells(&state, area);
+
+        assert_eq!(
+            cells[usize::from(area.height / 2)][usize::from(area.width - 1)].symbol,
+            "↔"
+        );
+    }
+
+    #[test]
+    fn topics_default_to_header_only_so_large_groups_do_not_hide_newer_topics() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Clusters;
+        let mut snapshot = snapshot();
+        snapshot.topics = vec![
+            topic_with_sessions("topic-latest", "最新主题", 50),
+            topic_with_sessions("topic-second", "第二主题", 50),
+            topic_with_sessions("topic-third", "第三主题", 50),
+        ];
+        state.projects.snapshot = snapshot;
+
+        let rows = project_tree_rows(&state);
+
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|row| matches!(
+            row,
+            ProjectTreeRow::Project {
+                collapsed: true,
+                ..
+            }
+        )));
+        assert!(matches!(
+            &rows[0],
+            ProjectTreeRow::Project { display_name, .. } if display_name == "最新主题"
+        ));
+        assert!(matches!(
+            &rows[1],
+            ProjectTreeRow::Project { display_name, .. } if display_name == "第二主题"
+        ));
+    }
+
+    #[test]
+    fn topics_default_to_only_the_current_topic_expanded() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Clusters;
+        let mut snapshot = snapshot();
+        snapshot.topics = vec![
+            topic_with_sessions("topic-latest", "最新主题", 2),
+            topic_with_sessions("topic-current", "当前主题", 2),
+            topic_with_sessions("topic-third", "第三主题", 2),
+        ];
+        state.projects.history_session_key = Some("topic-current-session-0".into());
+        state.projects.snapshot = snapshot;
+
+        let rows = project_tree_rows(&state);
+
+        assert!(matches!(
+            &rows[..],
+            [
+                ProjectTreeRow::Project {
+                    project_key: first,
+                    collapsed: true,
+                    ..
+                },
+                ProjectTreeRow::Project {
+                    project_key: current,
+                    collapsed: false,
+                    ..
+                },
+                ProjectTreeRow::Session(_),
+                ProjectTreeRow::Session(_),
+                ProjectTreeRow::Project {
+                    project_key: third,
+                    collapsed: true,
+                    ..
+                }
+            ] if first == "topic-latest" && current == "topic-current" && third == "topic-third"
+        ));
+    }
+
+    #[test]
+    fn explicitly_expanded_topic_overrides_the_header_only_default() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Clusters;
+        let mut snapshot = snapshot();
+        snapshot.topics = vec![topic_with_sessions("topic-latest", "最新主题", 2)];
+        state.projects.snapshot = snapshot;
+        state.expanded_project_keys.insert("topic-latest".into());
+
+        let rows = project_tree_rows(&state);
+
+        assert!(matches!(
+            &rows[..],
+            [
+                ProjectTreeRow::Project {
+                    collapsed: false,
+                    ..
+                },
+                ProjectTreeRow::Session(_),
+                ProjectTreeRow::Session(_)
+            ]
+        ));
     }
 
     #[test]
@@ -1648,7 +1896,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_rows_show_subject_label_but_cluster_rows_hide_it() {
+    fn directory_rows_show_subject_label_but_topic_rows_hide_it() {
         let mut state = AppState::test_new();
         let mut snapshot = snapshot();
         snapshot.projects[0].sessions[0].title = "【简历】整理腾讯 WorkBuddy 面试准备".into();
@@ -1658,6 +1906,7 @@ mod tests {
         topic.sessions[0].topic_label = Some("面试准备".into());
         snapshot.topics = vec![topic];
         state.projects.snapshot = snapshot;
+        state.expanded_project_keys.insert("p1".into());
 
         state.sidebar_view = crate::app::state::SidebarView::Projects;
         let projects_text = rendered_text(&state, Rect::new(0, 0, 80, 12));
@@ -1671,14 +1920,14 @@ mod tests {
         );
 
         state.sidebar_view = crate::app::state::SidebarView::Clusters;
-        let clusters_text = rendered_text(&state, Rect::new(0, 0, 80, 12));
+        let topics_text = rendered_text(&state, Rect::new(0, 0, 80, 12));
         assert!(
-            !clusters_text.contains("简历"),
-            "Clusters should not repeat the subject label:\n{clusters_text}"
+            !topics_text.contains("简历"),
+            "Topics should not repeat the subject label:\n{topics_text}"
         );
         assert!(
-            clusters_text.contains("整理腾讯"),
-            "Clusters should keep the task text:\n{clusters_text}"
+            topics_text.contains("整理腾讯"),
+            "Topics should keep the task text:\n{topics_text}"
         );
     }
 
@@ -1725,7 +1974,9 @@ mod tests {
         // divider and background fill occupy trailing cells.
         let painted = session_row
             .iter()
-            .rposition(|cell| !cell.symbol.trim().is_empty() && cell.symbol != "│")
+            .rposition(|cell| {
+                !cell.symbol.trim().is_empty() && !matches!(cell.symbol.as_str(), "│" | "┃" | "↔")
+            })
             .map_or(0, |index| index + 1);
         assert!(
             painted < 96,

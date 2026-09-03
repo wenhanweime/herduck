@@ -387,6 +387,7 @@ impl App {
             sidebar_section_split,
             collapsed_space_keys,
             collapsed_project_keys,
+            expanded_project_keys,
         ) = if no_session {
             (
                 Vec::new(),
@@ -395,6 +396,7 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
                 std::collections::HashSet::new(),
                 std::collections::HashSet::new(),
             )
@@ -434,6 +436,7 @@ impl App {
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
                     snap.collapsed_project_keys,
+                    snap.expanded_project_keys,
                 )
             } else {
                 crate::logging::session_restored(ws.len(), "ok");
@@ -452,6 +455,7 @@ impl App {
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
                     snap.collapsed_project_keys,
+                    snap.expanded_project_keys,
                 )
             }
         } else {
@@ -462,6 +466,7 @@ impl App {
                 config.ui.sidebar_width,
                 state::SidebarWidthSource::ConfigDefault,
                 0.5_f32,
+                std::collections::HashSet::new(),
                 std::collections::HashSet::new(),
                 std::collections::HashSet::new(),
             )
@@ -480,9 +485,9 @@ impl App {
             tracing::warn!(
                 min = config.ui.sidebar_min_width,
                 max = config.ui.sidebar_max_width,
-                "ui.sidebar_min_width is greater than sidebar_max_width; falling back to default bounds (18, 36)"
+                "ui.sidebar_min_width is greater than sidebar_max_width; falling back to default bounds (18, 64)"
             );
-            (18, 36)
+            (18, 64)
         });
 
         let worktree_directory =
@@ -556,6 +561,7 @@ impl App {
             worktree_directory,
             collapsed_space_keys,
             collapsed_project_keys,
+            expanded_project_keys,
             sidebar_view: state::SidebarView::SpacesAgents,
             projects: state::ProjectsViewState::default(),
             request_complete_onboarding: false,
@@ -869,6 +875,8 @@ impl App {
             app.state.sidebar_section_split = split;
         }
         app.state.collapsed_space_keys = snapshot.collapsed_space_keys.clone();
+        app.state.collapsed_project_keys = snapshot.collapsed_project_keys.clone();
+        app.state.expanded_project_keys = snapshot.expanded_project_keys.clone();
         app.state.mode = if app.state.active.is_some() {
             state::Mode::Terminal
         } else {
@@ -1618,6 +1626,24 @@ impl App {
 // ---------------------------------------------------------------------------
 
 impl App {
+    fn replace_projects_snapshot(&mut self, latest: crate::projects::ProjectsSnapshot) {
+        let selected_identity = crate::ui::project_tree_rows(&self.state)
+            .get(self.state.projects.selected_row)
+            .and_then(crate::ui::ProjectTreeRow::identity);
+        let previous_row = self.state.projects.selected_row;
+
+        self.state.projects.snapshot = latest;
+
+        self.state.projects.selected_row = selected_identity
+            .and_then(|identity| {
+                crate::ui::project_tree_rows(&self.state)
+                    .iter()
+                    .position(|row| row.identity().as_ref() == Some(&identity))
+            })
+            .unwrap_or(previous_row);
+        self.normalize_project_selection();
+    }
+
     fn sync_projects_snapshot(&mut self) -> bool {
         let latest = self.project_service.snapshot();
         if latest == self.state.projects.snapshot {
@@ -1628,8 +1654,7 @@ impl App {
         {
             return false;
         }
-        self.state.projects.snapshot = latest;
-        self.normalize_project_selection();
+        self.replace_projects_snapshot(latest);
         true
     }
 
@@ -1856,6 +1881,196 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         )
+    }
+
+    fn catalog_test_session(
+        stable_key: &str,
+        last_activity_at: i64,
+    ) -> crate::projects::IndexedSessionSummary {
+        crate::projects::IndexedSessionSummary {
+            stable_key: stable_key.into(),
+            backend: "codex".into(),
+            ref_kind: crate::projects::SessionRefKind::Id,
+            ref_value: stable_key.into(),
+            title: stable_key.into(),
+            cwd: Some("/tmp/catalog-selection".into()),
+            first_activity_at: 1,
+            last_activity_at,
+            live: false,
+            workspace_id: None,
+            pane_id: None,
+            runtime_generation: None,
+            session_class: crate::projects::SessionClass::Interactive,
+            topic_label: None,
+            transcript_ref: None,
+        }
+    }
+
+    fn catalog_test_group(
+        canonical_key: &str,
+        kind: crate::projects::ProjectKind,
+        session_key: &str,
+        last_activity_at: i64,
+    ) -> crate::projects::ProjectSummary {
+        crate::projects::ProjectSummary {
+            canonical_key: canonical_key.into(),
+            kind,
+            display_name: canonical_key.into(),
+            canonical_path: canonical_key.into(),
+            sessions: vec![catalog_test_session(session_key, last_activity_at)],
+            automation: Vec::new(),
+            thin_count: 0,
+            next_cursor: None,
+        }
+    }
+
+    fn catalog_test_snapshot(
+        revision: u64,
+        projects: Vec<crate::projects::ProjectSummary>,
+        topics: Vec<crate::projects::ProjectSummary>,
+    ) -> crate::projects::ProjectsSnapshot {
+        crate::projects::ProjectsSnapshot {
+            projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
+            revision,
+            projects,
+            topics,
+            scan_status: Vec::new(),
+            diagnostic_category: None,
+        }
+    }
+
+    #[test]
+    fn catalog_refresh_keeps_selected_topic_when_a_newer_topic_is_inserted_above_it() {
+        let mut app = test_app();
+        app.state.sidebar_view = state::SidebarView::Clusters;
+        app.state.projects.snapshot = catalog_test_snapshot(
+            1,
+            Vec::new(),
+            vec![
+                catalog_test_group(
+                    "topic-new",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-new",
+                    20,
+                ),
+                catalog_test_group(
+                    "topic-selected",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-selected",
+                    10,
+                ),
+            ],
+        );
+        app.state.projects.selected_row = 1;
+
+        app.replace_projects_snapshot(catalog_test_snapshot(
+            2,
+            Vec::new(),
+            vec![
+                catalog_test_group(
+                    "topic-newest",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-newest",
+                    30,
+                ),
+                catalog_test_group(
+                    "topic-new",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-new",
+                    20,
+                ),
+                catalog_test_group(
+                    "topic-selected",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-selected",
+                    10,
+                ),
+            ],
+        ));
+
+        assert_eq!(app.state.projects.selected_row, 2);
+        assert!(matches!(
+            crate::ui::project_tree_rows(&app.state).get(app.state.projects.selected_row),
+            Some(crate::ui::ProjectTreeRow::Project { project_key, .. })
+                if project_key == "topic-selected"
+        ));
+    }
+
+    #[test]
+    fn catalog_refresh_keeps_selected_session_when_new_activity_reorders_the_list() {
+        let mut app = test_app();
+        app.state.sidebar_view = state::SidebarView::Sessions;
+        let initial_project = crate::projects::ProjectSummary {
+            canonical_key: "project".into(),
+            kind: crate::projects::ProjectKind::Cwd,
+            display_name: "project".into(),
+            canonical_path: "/tmp/project".into(),
+            sessions: vec![
+                catalog_test_session("session-new", 20),
+                catalog_test_session("session-selected", 10),
+            ],
+            automation: Vec::new(),
+            thin_count: 0,
+            next_cursor: None,
+        };
+        app.state.projects.snapshot =
+            catalog_test_snapshot(1, vec![initial_project.clone()], Vec::new());
+        app.state.projects.selected_row = 1;
+
+        let mut refreshed_project = initial_project;
+        refreshed_project
+            .sessions
+            .insert(0, catalog_test_session("session-newest", 30));
+        app.replace_projects_snapshot(catalog_test_snapshot(
+            2,
+            vec![refreshed_project],
+            Vec::new(),
+        ));
+
+        assert_eq!(app.state.projects.selected_row, 2);
+        assert!(matches!(
+            crate::ui::project_tree_rows(&app.state).get(app.state.projects.selected_row),
+            Some(crate::ui::ProjectTreeRow::Session(session))
+                if session.stable_key == "session-selected"
+        ));
+    }
+
+    #[test]
+    fn catalog_refresh_clamps_to_a_valid_row_when_the_selected_item_disappears() {
+        let mut app = test_app();
+        app.state.sidebar_view = state::SidebarView::Clusters;
+        app.state.projects.snapshot = catalog_test_snapshot(
+            1,
+            Vec::new(),
+            vec![
+                catalog_test_group(
+                    "topic-first",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-first",
+                    20,
+                ),
+                catalog_test_group(
+                    "topic-removed",
+                    crate::projects::ProjectKind::Semantic,
+                    "s-removed",
+                    10,
+                ),
+            ],
+        );
+        app.state.projects.selected_row = 1;
+
+        app.replace_projects_snapshot(catalog_test_snapshot(
+            2,
+            Vec::new(),
+            vec![catalog_test_group(
+                "topic-first",
+                crate::projects::ProjectKind::Semantic,
+                "s-first",
+                20,
+            )],
+        ));
+
+        assert_eq!(app.state.projects.selected_row, 0);
     }
 
     fn unique_temp_path(name: &str) -> std::path::PathBuf {
@@ -2888,7 +3103,7 @@ mod tests {
         let mut app = test_app();
         // Default bounds.
         assert_eq!(app.state.sidebar_min_width, 18);
-        assert_eq!(app.state.sidebar_max_width, 36);
+        assert_eq!(app.state.sidebar_max_width, 64);
         assert_eq!(
             app.state.mobile_width_threshold,
             crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD
@@ -2969,7 +3184,7 @@ mod tests {
             "App::new must fall back to default min when bounds are inverted"
         );
         assert_eq!(
-            app.state.sidebar_max_width, 36,
+            app.state.sidebar_max_width, 64,
             "App::new must fall back to default max when bounds are inverted"
         );
     }

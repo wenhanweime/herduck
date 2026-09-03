@@ -152,7 +152,7 @@ impl App {
         self.project_runtime_leases.clear();
         self.next_project_runtime_generation = 1;
         self.sync_all_project_runtime_mappings();
-        self.state.projects.snapshot = self.project_service.snapshot();
+        self.replace_projects_snapshot(self.project_service.snapshot());
     }
 
     fn take_next_project_runtime_generation(&mut self) -> u64 {

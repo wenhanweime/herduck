@@ -511,8 +511,15 @@ impl AppState {
                         self.projects.selected_row = hit.row_index;
                         self.projects.search_focused = false;
                         return match hit.action {
-                            ProjectTreeAction::ToggleProject { project_key } => {
-                                if !self.collapsed_project_keys.remove(&project_key) {
+                            ProjectTreeAction::ToggleProject {
+                                project_key,
+                                collapsed,
+                            } => {
+                                if collapsed {
+                                    self.collapsed_project_keys.remove(&project_key);
+                                    self.expanded_project_keys.insert(project_key);
+                                } else {
+                                    self.expanded_project_keys.remove(&project_key);
                                     self.collapsed_project_keys.insert(project_key);
                                 }
                                 self.mark_session_dirty();
@@ -3998,6 +4005,25 @@ mod tests {
             crate::app::state::ProjectFilter::All,
             "a disabled chip must not strand the user in an empty filter"
         );
+    }
+
+    #[tokio::test]
+    async fn clicking_project_search_field_enters_visible_input_focus() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_view = SidebarView::Projects;
+        app.state.mode = Mode::Navigate;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let search = app.state.view.project_search_rect;
+        assert!(search.width > 0 && search.height > 0);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            search.x + 1,
+            search.y,
+        ));
+
+        assert!(app.state.projects.search_focused);
+        assert_eq!(app.state.mode, Mode::Navigate);
     }
 
     #[tokio::test]

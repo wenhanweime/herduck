@@ -615,7 +615,11 @@ impl ProjectsSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingSemanticSession {
     pub stable_key: String,
+    /// Effective user-facing title, preferring a manual or generated title.
     pub title: String,
+    /// Provider-observed title retained as secondary classification evidence. Generated titles
+    /// can preserve a codename while dropping the domain noun that distinguishes two topics.
+    pub native_title: String,
     pub cwd: Option<String>,
     pub backend: String,
     pub stored_fingerprint: Option<String>,

@@ -176,8 +176,7 @@ impl App {
                     },
                 });
                 if self.project_service.is_available() {
-                    self.state.projects.snapshot = self.project_service.snapshot();
-                    self.normalize_project_selection();
+                    self.replace_projects_snapshot(self.project_service.snapshot());
                 }
             }
         }

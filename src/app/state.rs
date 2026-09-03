@@ -879,10 +879,17 @@ pub enum ProjectSessionActivation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectTreeAction {
-    ToggleProject { project_key: String },
-    ToggleThin { project_key: String },
+    ToggleProject {
+        project_key: String,
+        collapsed: bool,
+    },
+    ToggleThin {
+        project_key: String,
+    },
     Activate(ProjectSessionActivation),
-    LoadOlder { project_key: String },
+    LoadOlder {
+        project_key: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1532,6 +1539,10 @@ pub struct AppState {
     pub worktree_directory: std::path::PathBuf,
     pub collapsed_space_keys: std::collections::HashSet<String>,
     pub collapsed_project_keys: std::collections::HashSet<String>,
+    /// Project/Topic rows the user explicitly expanded. Together with
+    /// `collapsed_project_keys`, this preserves a tri-state fold model: explicit collapse,
+    /// explicit expand, or the view's default policy.
+    pub expanded_project_keys: std::collections::HashSet<String>,
     pub sidebar_view: SidebarView,
     pub projects: ProjectsViewState,
     pub request_complete_onboarding: bool,
@@ -1901,6 +1912,7 @@ impl AppState {
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             collapsed_space_keys: std::collections::HashSet::new(),
             collapsed_project_keys: std::collections::HashSet::new(),
+            expanded_project_keys: std::collections::HashSet::new(),
             sidebar_view: SidebarView::SpacesAgents,
             projects: ProjectsViewState::default(),
             request_complete_onboarding: false,
@@ -1957,7 +1969,7 @@ impl AppState {
             default_sidebar_width: 26,
             sidebar_width: 26,
             sidebar_min_width: 18,
-            sidebar_max_width: 36,
+            sidebar_max_width: 64,
             mobile_width_threshold: crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD,
             sidebar_width_source: SidebarWidthSource::ConfigDefault,
             sidebar_width_auto: false,

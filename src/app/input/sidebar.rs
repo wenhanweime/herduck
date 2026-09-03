@@ -244,9 +244,13 @@ impl AppState {
             && col < toggle.x + toggle.width
             && row >= toggle.y
             && row < toggle.y + toggle.height;
+        let divider_col = sidebar.x + sidebar.width.saturating_sub(1);
         sidebar.width > 0
             && !on_toggle
-            && col == sidebar.x + sidebar.width.saturating_sub(1)
+            // A one-cell terminal divider is too easy to miss with a mouse. Treat the adjacent
+            // cell on either side as the same resize handle; higher-priority sidebar controls
+            // still win before this fallback is reached.
+            && col.abs_diff(divider_col) <= 1
             && row >= sidebar.y
             && row < sidebar.y + sidebar.height
     }
@@ -1595,6 +1599,25 @@ mod tests {
     }
 
     #[test]
+    fn dragging_from_the_cell_beside_sidebar_divider_starts_resize() {
+        let mut app = app_for_mouse_test();
+        let divider_col = app.state.view.sidebar_rect.x + app.state.view.sidebar_rect.width - 1;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            divider_col + 1,
+            8,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            divider_col + 6,
+            8,
+        ));
+
+        assert_eq!(app.state.sidebar_width, 32);
+    }
+
+    #[test]
     fn dragging_sidebar_divider_sets_manual_width() {
         let mut app = app_for_mouse_test();
 
@@ -1604,6 +1627,17 @@ mod tests {
         assert_eq!(app.state.sidebar_width, 31);
         let snapshot = capture_snapshot(&app.state);
         assert_eq!(snapshot.sidebar_width, Some(31));
+    }
+
+    #[test]
+    fn default_sidebar_bounds_allow_titles_to_expand_past_the_old_limit() {
+        let mut app = app_for_mouse_test();
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 25, 5));
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 49, 5));
+
+        assert_eq!(app.state.sidebar_width, 50);
+        assert_eq!(app.state.sidebar_max_width, 64);
     }
 
     #[test]

@@ -1233,8 +1233,9 @@ const INJECTED_PREAMBLE_MARKERS: [&str; 7] = [
 /// exchange needs more than that. Below this the topic is guesswork, and the session keeps its
 /// path-based Project rather than getting an invented topic.
 pub(crate) const MIN_SUBSTANTIVE_TURNS: usize = 4;
-/// Minimum total user characters for the same decision.
-pub(crate) const MIN_SUBSTANTIVE_CHARS: usize = 80;
+/// Minimum total user characters for the same decision. A single concrete instruction around one
+/// terminal line is enough context to classify, while shorter fragments stay in the thin bucket.
+pub(crate) const MIN_SUBSTANTIVE_CHARS: usize = 64;
 /// Floor of real user text regardless of turn count, so a session of only "hi" never qualifies.
 pub(crate) const MIN_ANY_CHARS: usize = 24;
 /// A short opener is not evidence of a short session, so keep collecting until this many turns
@@ -2249,6 +2250,18 @@ mod tests {
         let mut single_long = SessionWeight::default();
         single_long.record(&"帮我看下 openclaw 为什么不继续工作了".repeat(10));
         assert!(single_long.is_substantive());
+
+        let boundary = SessionWeight {
+            turns: 1,
+            chars: MIN_SUBSTANTIVE_CHARS,
+            known: true,
+        };
+        assert!(boundary.is_substantive());
+        assert!(!SessionWeight {
+            chars: MIN_SUBSTANTIVE_CHARS - 1,
+            ..boundary
+        }
+        .is_substantive());
 
         // Harness preamble is not the user's words: four "hi" turns preceded by an AGENTS.md
         // block measured 264 characters and wrongly looked substantive.

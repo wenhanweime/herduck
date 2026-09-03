@@ -9,7 +9,7 @@ use crate::terminal::TerminalRuntimeRegistry;
 use crate::workspace::Workspace;
 
 /// Current snapshot format version.
-pub(super) const SNAPSHOT_VERSION: u32 = 4;
+pub(super) const SNAPSHOT_VERSION: u32 = 5;
 
 /// Serializable snapshot of the entire herdr session.
 #[derive(Serialize, Deserialize)]
@@ -28,6 +28,8 @@ pub struct SessionSnapshot {
     pub collapsed_space_keys: std::collections::HashSet<String>,
     #[serde(default)]
     pub collapsed_project_keys: std::collections::HashSet<String>,
+    #[serde(default)]
+    pub expanded_project_keys: std::collections::HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -186,6 +188,8 @@ struct RawSessionSnapshot {
     collapsed_space_keys: std::collections::HashSet<String>,
     #[serde(default)]
     collapsed_project_keys: std::collections::HashSet<String>,
+    #[serde(default)]
+    expanded_project_keys: std::collections::HashSet<String>,
 }
 
 fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> {
@@ -202,6 +206,7 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         sidebar_section_split: raw.sidebar_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
         collapsed_project_keys: raw.collapsed_project_keys,
+        expanded_project_keys: raw.expanded_project_keys,
     })
 }
 
@@ -265,6 +270,7 @@ pub fn capture(
     sidebar_section_split: f32,
     collapsed_space_keys: std::collections::HashSet<String>,
     collapsed_project_keys: std::collections::HashSet<String>,
+    expanded_project_keys: std::collections::HashSet<String>,
 ) -> SessionSnapshot {
     SessionSnapshot {
         version: SNAPSHOT_VERSION,
@@ -278,6 +284,7 @@ pub fn capture(
         sidebar_section_split: Some(sidebar_section_split),
         collapsed_space_keys,
         collapsed_project_keys,
+        expanded_project_keys,
     }
 }
 
@@ -547,6 +554,7 @@ mod tests {
             state.sidebar_section_split,
             state.collapsed_space_keys.clone(),
             state.collapsed_project_keys.clone(),
+            state.expanded_project_keys.clone(),
         )
     }
 
@@ -575,6 +583,7 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             collapsed_project_keys: std::collections::HashSet::new(),
+            expanded_project_keys: std::collections::HashSet::new(),
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored = parse_snapshot(&json).unwrap();
@@ -661,6 +670,7 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             collapsed_project_keys: std::collections::HashSet::new(),
+            expanded_project_keys: std::collections::HashSet::new(),
             version: SNAPSHOT_VERSION,
         };
 
@@ -844,12 +854,14 @@ mod tests {
         state.sidebar_section_split = 0.4;
         state.collapsed_space_keys.insert("repo-key".into());
         state.collapsed_project_keys.insert("project-key".into());
+        state.expanded_project_keys.insert("topic-key".into());
 
         let snapshot = capture_from_state(&state);
         assert_eq!(snapshot.sidebar_width, Some(31));
         assert_eq!(snapshot.sidebar_section_split, Some(0.4));
         assert!(snapshot.collapsed_space_keys.contains("repo-key"));
         assert!(snapshot.collapsed_project_keys.contains("project-key"));
+        assert!(snapshot.expanded_project_keys.contains("topic-key"));
     }
 
     #[test]
@@ -1220,6 +1232,7 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             collapsed_project_keys: std::collections::HashSet::new(),
+            expanded_project_keys: std::collections::HashSet::new(),
         };
 
         let json = serde_json::to_string(&snap).unwrap();

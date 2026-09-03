@@ -1595,8 +1595,7 @@ impl App {
         // otherwise refreshed on the scheduler tick. Refresh it now so the just-closed row
         // loses its green light/highlight in the same interaction.
         if self.project_service.is_available() {
-            self.state.projects.snapshot = self.project_service.snapshot();
-            self.normalize_project_selection();
+            self.replace_projects_snapshot(self.project_service.snapshot());
         }
 
         Ok(())

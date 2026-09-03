@@ -928,7 +928,7 @@ pub(super) fn render_sidebar(
     let p = &app.palette;
     let is_navigating = matches!(app.mode, Mode::Navigate);
     let sep_style = if is_navigating {
-        Style::default().fg(p.accent)
+        Style::default().fg(p.accent).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(p.surface_dim)
     };
@@ -936,8 +936,12 @@ pub(super) fn render_sidebar(
     let sep_x = area.x + area.width.saturating_sub(1);
     let buf = frame.buffer_mut();
     for y in area.y..area.y + area.height {
-        buf[(sep_x, y)].set_symbol("│");
+        buf[(sep_x, y)].set_symbol(if is_navigating { "┃" } else { "│" });
         buf[(sep_x, y)].set_style(sep_style);
+    }
+    if is_navigating && area.height >= 5 {
+        buf[(sep_x, area.y + area.height / 2)].set_symbol("↔");
+        buf[(sep_x, area.y + area.height / 2)].set_style(sep_style);
     }
 
     let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);

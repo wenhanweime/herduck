@@ -443,6 +443,7 @@ pub struct SummaryConfig {
     pub max_sessions_per_run: usize,
     pub timeout_secs: u64,
     pub startup_grace_secs: u64,
+    /// Seconds between semantic queue checks when there is no pending work.
     pub idle_backfill_secs: u64,
 }
 
@@ -954,7 +955,7 @@ pub struct UiConfig {
     pub sidebar_width: u16,
     /// Minimum sidebar width (columns) when expanded. Default: 18.
     pub sidebar_min_width: u16,
-    /// Maximum sidebar width (columns) when expanded. Default: 36.
+    /// Maximum sidebar width (columns) when expanded. Default: 64.
     pub sidebar_max_width: u16,
     /// Collapsed sidebar presentation. Default: compact.
     pub sidebar_collapsed_mode: SidebarCollapsedModeConfig,
@@ -1165,7 +1166,7 @@ impl Default for UiConfig {
         Self {
             sidebar_width: 26,
             sidebar_min_width: 18,
-            sidebar_max_width: 36,
+            sidebar_max_width: 64,
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
@@ -1592,7 +1593,7 @@ cjk_ime_agents = ["claude", "codex"]
     fn sidebar_bounds_default_and_parse() {
         let default_config = Config::default();
         assert_eq!(default_config.ui.sidebar_min_width, 18);
-        assert_eq!(default_config.ui.sidebar_max_width, 36);
+        assert_eq!(default_config.ui.sidebar_max_width, 64);
         assert_eq!(
             default_config.ui.mobile_width_threshold,
             DEFAULT_MOBILE_WIDTH_THRESHOLD

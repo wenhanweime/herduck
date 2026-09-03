@@ -92,6 +92,7 @@ pub(crate) enum CatalogError {
     UnsupportedSchema(u32),
     AliasConflict,
     CrossBackendAlias,
+    InvalidTopicMerge,
     NotFound,
 }
 
@@ -108,6 +109,7 @@ impl std::fmt::Display for CatalogError {
             Self::CrossBackendAlias => {
                 f.write_str("session alias backend differs from primary backend")
             }
+            Self::InvalidTopicMerge => f.write_str("invalid semantic topic merge"),
             Self::NotFound => f.write_str("catalog record not found"),
         }
     }
@@ -749,12 +751,11 @@ impl ProjectCatalog {
         Ok(())
     }
 
-    /// Removes semantic rows whose input envelope changed while the Catalog was offline.
+    /// Removes semantic rows that no longer belong in the interactive Topics view.
     ///
-    /// A title refresh and a semantic classification can finish in either order. Rechecking all
-    /// rows at startup makes the persisted Catalog self-healing, so an old topic cannot survive
-    /// until the next provider scan merely because the process was restarted between the two
-    /// writes.
+    /// Fingerprint mismatches deliberately remain visible while a replacement classification is
+    /// pending. The classifier atomically replaces them after it has a valid new result, avoiding
+    /// Topic rows disappearing during title refreshes or provider outages.
     fn reconcile_stale_semantic_assignments(&mut self) -> Result<(), CatalogError> {
         if !table_has_column(&self.connection, "semantic_assignments", "fingerprint")?
             || !table_has_column(&self.connection, "sessions", "generated_title")?
@@ -767,10 +768,7 @@ impl ProjectCatalog {
         }
         let stale_keys = {
             let mut statement = self.connection.prepare(
-                "SELECT sa.session_key,
-                        COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
-                        s.cwd, s.backend, sa.fingerprint, s.session_class,
-                        COALESCE(a.locked, 0)
+                "SELECT sa.session_key, s.session_class, COALESCE(a.locked, 0)
                  FROM semantic_assignments sa
                  JOIN sessions s ON s.stable_key = sa.session_key
                  LEFT JOIN assignments a ON a.session_key = sa.session_key
@@ -779,17 +777,12 @@ impl ProjectCatalog {
             let rows = statement
                 .query_map([], |row| {
                     let key = row.get::<_, String>(0)?;
-                    let title = row.get::<_, String>(1)?;
-                    let cwd = row.get::<_, Option<String>>(2)?;
-                    let backend = row.get::<_, String>(3)?;
-                    let stored_fingerprint = row.get::<_, String>(4)?;
-                    let session_class = row.get::<_, String>(5)?;
-                    let locked = row.get::<_, i64>(6)?;
-                    let current_fingerprint =
-                        super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
-                    Ok((stored_fingerprint != current_fingerprint
-                        || (session_class != SessionClass::Interactive.as_str() && locked == 0))
-                        .then_some(key))
+                    let session_class = row.get::<_, String>(1)?;
+                    let locked = row.get::<_, i64>(2)?;
+                    Ok(
+                        (session_class != SessionClass::Interactive.as_str() && locked == 0)
+                            .then_some(key),
+                    )
                 })?
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
@@ -1035,27 +1028,17 @@ impl ProjectCatalog {
     /// Sessions whose topic is missing or stale, most recently active first.
     ///
     /// A session is pending when it has no semantic row, or its stored fingerprint no longer
-    /// matches its current metadata. When requested, a local fallback row is also retried so a
-    /// later provider recovery can replace it. Manually locked sessions are excluded outright:
-    /// the user already decided where they belong, so spending a classifier call on them is
-    /// wasted.
-    #[cfg(test)]
+    /// matches its current metadata. Provider or mode changes do not invalidate a current row;
+    /// that would turn an incremental index into a full reclassification. Manually locked
+    /// sessions are excluded outright because the user already decided where they belong.
     pub(crate) fn pending_semantic_sessions(
         &self,
         limit: usize,
     ) -> Result<Vec<PendingSemanticSession>, CatalogError> {
-        self.pending_semantic_sessions_with_retry(limit, false)
-    }
-
-    pub(crate) fn pending_semantic_sessions_with_retry(
-        &self,
-        limit: usize,
-        retry_local: bool,
-    ) -> Result<Vec<PendingSemanticSession>, CatalogError> {
         let mut statement = self.connection.prepare(
             "SELECT s.stable_key,
                     COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
-                    s.cwd, s.backend, sa.fingerprint,
+                    s.title, s.cwd, s.backend, sa.fingerprint,
                     sa.topic_key, sa.topic_label, sa.backend_used, sa.model_used
              FROM sessions s
              JOIN assignments a ON a.session_key = s.stable_key
@@ -1091,16 +1074,17 @@ impl ProjectCatalog {
                         PendingSemanticSession {
                             stable_key: row.get(0)?,
                             title: row.get(1)?,
-                            cwd: row.get(2)?,
-                            backend: row.get(3)?,
-                            stored_fingerprint: row.get(4)?,
+                            native_title: row.get(2)?,
+                            cwd: row.get(3)?,
+                            backend: row.get(4)?,
+                            stored_fingerprint: row.get(5)?,
                             duplicates: Vec::new(),
                             inherited_topic: None,
                         },
-                        row.get::<_, Option<String>>(5)?,
                         row.get::<_, Option<String>>(6)?,
                         row.get::<_, Option<String>>(7)?,
                         row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
                     ))
                 },
             )?
@@ -1134,10 +1118,7 @@ impl ProjectCatalog {
                             session.cwd.as_deref(),
                             &session.backend,
                         );
-                        let retry = retry_local && backend.as_deref() == Some("local");
-                        if session.stored_fingerprint.as_deref() != Some(fingerprint.as_str())
-                            || retry
-                        {
+                        if session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()) {
                             return None;
                         }
                         Some(InheritedSemanticTopic {
@@ -1149,15 +1130,14 @@ impl ProjectCatalog {
                     });
             let mut stale = group
                 .into_iter()
-                .filter_map(|(session, _, _, backend, _)| {
+                .filter_map(|(session, _, _, _, _)| {
                     let fingerprint = super::semantic_fingerprint(
                         &session.title,
                         session.cwd.as_deref(),
                         &session.backend,
                     );
-                    (session.stored_fingerprint.as_deref() != Some(fingerprint.as_str())
-                        || (retry_local && backend.as_deref() == Some("local")))
-                    .then_some((session, fingerprint))
+                    (session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()))
+                        .then_some((session, fingerprint))
                 })
                 .take(limit.saturating_sub(consumed))
                 .collect::<Vec<_>>();
@@ -1185,11 +1165,17 @@ impl ProjectCatalog {
     /// coining a near-duplicate name for the same effort.
     pub(crate) fn known_topics(&self, limit: usize) -> Result<Vec<String>, CatalogError> {
         let mut statement = self.connection.prepare(
-            "SELECT topic_label, MAX(classified_at) recent
-             FROM semantic_assignments
-             GROUP BY topic_key
-             ORDER BY recent DESC
-             LIMIT ?1",
+            "SELECT
+                (SELECT latest.topic_label
+                   FROM semantic_assignments latest
+                  WHERE latest.topic_key = grouped.topic_key
+                  ORDER BY latest.classified_at DESC, latest.session_key ASC
+                  LIMIT 1),
+                MAX(grouped.classified_at) recent
+               FROM semantic_assignments grouped
+              GROUP BY grouped.topic_key
+              ORDER BY recent DESC, grouped.topic_key ASC
+              LIMIT ?1",
         )?;
         let rows = statement
             .query_map(params![limit as i64], |row| row.get::<_, String>(0))?
@@ -1329,16 +1315,9 @@ impl ProjectCatalog {
                     ],
                 )?;
             }
-            // A changed generated title is part of the semantic input. Drop the previous
-            // inference in the same transaction so a title refresh can never leave an old topic
-            // visible until the next periodic scanner pass. A failed retry that preserved the
-            // existing title does not invalidate the topic.
-            if !preserve_existing {
-                transaction.execute(
-                    "DELETE FROM semantic_assignments WHERE session_key = ?1",
-                    [&update.stable_key],
-                )?;
-            }
+            // A changed title makes the existing fingerprint stale, which places the session
+            // back in the pending queue. Keep the previous Topic visible until a valid new
+            // classification atomically replaces it.
         }
         let revision = bump_revision(&transaction)?;
         transaction.commit()?;
@@ -1369,8 +1348,15 @@ impl ProjectCatalog {
             [now],
         )?;
         let mut statement = transaction.prepare(
-            "SELECT topic_label FROM semantic_assignments
-             GROUP BY topic_key, topic_label ORDER BY MAX(classified_at) DESC",
+            "SELECT
+                (SELECT latest.topic_label
+                   FROM semantic_assignments latest
+                  WHERE latest.topic_key = grouped.topic_key
+                  ORDER BY latest.classified_at DESC, latest.session_key ASC
+                  LIMIT 1)
+               FROM semantic_assignments grouped
+              GROUP BY grouped.topic_key
+              ORDER BY MAX(grouped.classified_at) DESC, grouped.topic_key ASC",
         )?;
         let labels = statement
             .query_map([], |row| row.get::<_, String>(0))?
@@ -1396,18 +1382,24 @@ impl ProjectCatalog {
             .collect::<Result<Vec<_>, _>>()?;
         let known = labels.into_iter().collect::<HashMap<_, _>>();
         let mut seen_from = HashSet::new();
+        let mut seen_into = HashSet::new();
         for merge in merges {
             let into_key = super::semantic_topic_key(&merge.into);
-            if merge.from.is_empty() || !known.contains_key(&into_key) {
-                return Err(CatalogError::Sqlite(rusqlite::Error::InvalidQuery));
+            if merge.from.is_empty()
+                || !known.contains_key(&into_key)
+                || seen_from.contains(&into_key)
+            {
+                return Err(CatalogError::InvalidTopicMerge);
             }
+            seen_into.insert(into_key.clone());
             for from in &merge.from {
                 let from_key = super::semantic_topic_key(from);
                 if from_key == into_key
                     || !known.contains_key(&from_key)
+                    || seen_into.contains(&from_key)
                     || !seen_from.insert(from_key)
                 {
-                    return Err(CatalogError::Sqlite(rusqlite::Error::InvalidQuery));
+                    return Err(CatalogError::InvalidTopicMerge);
                 }
             }
         }
@@ -1470,13 +1462,8 @@ impl ProjectCatalog {
             }
             let current_fingerprint = super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
             if item.fingerprint != current_fingerprint {
-                // Remove only the stale row that this invocation could have produced. A newer
-                // assignment (with the current fingerprint) must remain untouched.
-                transaction.execute(
-                    "DELETE FROM semantic_assignments
-                     WHERE session_key = ?1 AND fingerprint = ?2",
-                    params![item.session_key, item.fingerprint],
-                )?;
+                // The title changed while this provider call was in flight. Keep whichever
+                // assignment is currently visible and let the pending queue obtain a fresh result.
                 continue;
             }
 
@@ -1650,8 +1637,8 @@ impl ProjectCatalog {
                     MAX(s.last_activity_at) AS latest,
                     MAX(CASE WHEN s.session_class = 'interactive'
                                   AND s.user_weight_known = 1
-                                  AND s.user_chars >= 24
-                                  AND (s.user_turns >= 4 OR s.user_chars >= 80)
+                                  AND s.user_chars >= ?1
+                                  AND (s.user_turns >= ?2 OR s.user_chars >= ?3)
                              THEN 1 ELSE 0 END) AS has_substantive
              FROM projects p
              JOIN assignments a ON a.project_id = p.id
@@ -1662,16 +1649,23 @@ impl ProjectCatalog {
              ORDER BY has_substantive DESC, latest DESC, p.canonical_key ASC",
         )?;
         let raw_projects = projects_statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            })?
+            .query_map(
+                params![
+                    super::adapters::MIN_ANY_CHARS as i64,
+                    super::adapters::MIN_SUBSTANTIVE_TURNS as i64,
+                    super::adapters::MIN_SUBSTANTIVE_CHARS as i64,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         drop(projects_statement);
 
@@ -1707,16 +1701,14 @@ impl ProjectCatalog {
                      WHERE latest.topic_key = sa.topic_key
                      ORDER BY latest.classified_at DESC, latest.session_key ASC
                      LIMIT 1) AS topic_label,
-                    MAX(s.last_activity_at) AS latest,
-                    MAX(CASE WHEN s.user_weight_known = 1
-                                  AND s.user_chars >= 24
-                                  AND (s.user_turns >= 4 OR s.user_chars >= 80)
-                             THEN 1 ELSE 0 END) AS has_substantive
+                    -- A Topic follows its most recently active child Session. Session creation
+                    -- time and classification time must not affect the Topic's position.
+                    MAX(s.last_activity_at) AS latest
              FROM semantic_assignments sa
              JOIN sessions s ON s.stable_key = sa.session_key
              WHERE s.session_class = 'interactive'
              GROUP BY sa.topic_key
-             ORDER BY has_substantive DESC, latest DESC, sa.topic_key ASC",
+             ORDER BY latest DESC, sa.topic_key ASC",
         )?;
         let raw_topics = topics_statement
             .query_map([], |row| {
@@ -2369,33 +2361,19 @@ fn reconcile_semantic_assignment(
 ) -> Result<bool, CatalogError> {
     let metadata = transaction
         .query_row(
-            "SELECT COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
-                    s.cwd, s.backend, sa.fingerprint, s.session_class,
-                    COALESCE(a.locked, 0)
+            "SELECT s.session_class, COALESCE(a.locked, 0)
              FROM sessions s
              JOIN semantic_assignments sa ON sa.session_key = s.stable_key
              LEFT JOIN assignments a ON a.session_key = s.stable_key
              WHERE s.stable_key = ?1",
             [stable_key],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                ))
-            },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()?;
-    let Some((title, cwd, backend, stored_fingerprint, session_class, locked)) = metadata else {
+    let Some((session_class, locked)) = metadata else {
         return Ok(false);
     };
-    let current_fingerprint = super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
-    if stored_fingerprint != current_fingerprint
-        || (session_class != SessionClass::Interactive.as_str() && locked == 0)
-    {
+    if session_class != SessionClass::Interactive.as_str() && locked == 0 {
         let deleted = transaction.execute(
             "DELETE FROM semantic_assignments WHERE session_key = ?1",
             [stable_key],
@@ -2936,6 +2914,41 @@ mod tests {
     }
 
     #[test]
+    fn current_local_fallback_is_not_requeued_after_provider_change() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut item = candidate("claude", "stable-local-topic", 20);
+        item.weight = super::super::adapters::SessionWeight {
+            turns: 4,
+            chars: 120,
+            known: true,
+        };
+        let fingerprint = super::super::semantic_fingerprint(
+            &item.title.as_ref().expect("title").value,
+            None,
+            "claude",
+        );
+        catalog.upsert_candidate(&item).expect("session");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: item.identity.stable_key,
+                    topic_key: super::super::semantic_topic_key("稳定本地主题"),
+                    topic_label: "稳定本地主题".to_string(),
+                    fingerprint,
+                    backend_used: "local".to_string(),
+                    model_used: None,
+                }],
+                30,
+            )
+            .expect("local fallback");
+
+        assert!(catalog
+            .pending_semantic_sessions(10)
+            .expect("pending")
+            .is_empty());
+    }
+
+    #[test]
     fn title_generation_is_requeued_when_a_session_has_new_activity() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let session = candidate("pi", "title-refresh", 200);
@@ -3021,6 +3034,52 @@ mod tests {
     }
 
     #[test]
+    fn catalog_reopen_keeps_a_stale_topic_visible_while_reclassification_is_pending() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut session = candidate("pi", "offline-title-refresh", 20);
+        session.weight = super::super::adapters::SessionWeight {
+            turns: 4,
+            chars: 120,
+            known: true,
+        };
+        let session_key = session.identity.stable_key.clone();
+        let old_title = session.title.as_ref().expect("title").value.clone();
+        catalog.upsert_candidate(&session).expect("session");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: session_key.clone(),
+                    topic_key: super::super::semantic_topic_key("旧主题"),
+                    topic_label: "旧主题".to_string(),
+                    fingerprint: super::super::semantic_fingerprint(&old_title, None, "pi"),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                30,
+            )
+            .expect("old topic");
+        catalog
+            .connection
+            .execute(
+                "UPDATE sessions SET generated_title = '离线刷新的新标题', title_status = 'done'
+                 WHERE stable_key = ?1",
+                [&session_key],
+            )
+            .expect("offline title refresh");
+
+        let ProjectCatalog { connection, .. } = catalog;
+        let reopened = ProjectCatalog::initialize(connection, false, None, 40).expect("reopen");
+        let snapshot = reopened.snapshot(50).expect("snapshot");
+        assert_eq!(snapshot.topics.len(), 1);
+        assert_eq!(snapshot.topics[0].display_name, "旧主题");
+        assert!(reopened
+            .pending_semantic_sessions(10)
+            .expect("pending")
+            .iter()
+            .any(|session| session.stable_key == session_key));
+    }
+
+    #[test]
     fn stale_semantic_batch_result_is_ignored_after_title_refresh() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let session = candidate("pi", "stale-semantic-result", 20);
@@ -3043,20 +3102,34 @@ mod tests {
             .expect("initial semantic result");
 
         catalog
-            .connection
-            .execute(
-                "UPDATE sessions SET generated_title = '新标题', title_status = 'done'
-                 WHERE stable_key = ?1",
-                [&session_key],
-            )
+            .apply_title_batch(&[SessionTitleUpdate {
+                stable_key: session_key.clone(),
+                title: "新标题".to_string(),
+                source: "model".to_string(),
+                status: "done".to_string(),
+                error: None,
+                backend: Some("pi".to_string()),
+                model: Some("test-model".to_string()),
+                fingerprint: "new-title-input".to_string(),
+                generated_at: 35,
+            }])
             .expect("title refresh");
+        let visible_before_retry: String = catalog
+            .connection
+            .query_row(
+                "SELECT topic_label FROM semantic_assignments WHERE session_key = ?1",
+                [&session_key],
+                |row| row.get(0),
+            )
+            .expect("previous topic remains visible");
+        assert_eq!(visible_before_retry, "旧主题");
         catalog
             .apply_semantic_batch(
                 &[SemanticAssignment {
                     session_key: session_key.clone(),
                     topic_key: super::super::semantic_topic_key("旧主题"),
                     topic_label: "旧主题".to_string(),
-                    fingerprint: old_fingerprint,
+                    fingerprint: old_fingerprint.clone(),
                     backend_used: "test".to_string(),
                     model_used: None,
                 }],
@@ -3074,7 +3147,36 @@ mod tests {
             )
             .optional()
             .expect("semantic row");
-        assert!(row.is_none(), "obsolete classification must not survive");
+        assert_eq!(row, Some(("旧主题".to_string(), old_fingerprint)));
+        let pending = catalog.pending_semantic_sessions(10).expect("pending");
+        assert!(pending
+            .iter()
+            .any(|session| session.stable_key == session_key));
+
+        let fresh_fingerprint = super::super::semantic_fingerprint("新标题", None, "pi");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: session_key.clone(),
+                    topic_key: super::super::semantic_topic_key("新主题"),
+                    topic_label: "新主题".to_string(),
+                    fingerprint: fresh_fingerprint.clone(),
+                    backend_used: "test".to_string(),
+                    model_used: None,
+                }],
+                50,
+            )
+            .expect("fresh semantic result");
+        let replaced: (String, String) = catalog
+            .connection
+            .query_row(
+                "SELECT topic_label, fingerprint FROM semantic_assignments
+                 WHERE session_key = ?1",
+                [&session_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("replaced topic");
+        assert_eq!(replaced, ("新主题".to_string(), fresh_fingerprint));
     }
 
     #[test]
@@ -3231,15 +3333,16 @@ mod tests {
             .expect("merged rows");
         assert_eq!(merged, 2);
         assert!(catalog.revision().expect("revision") > revision);
-        assert!(catalog
-            .apply_topic_merges(
+        assert!(matches!(
+            catalog.apply_topic_merges(
                 &[SemanticTopicMerge {
                     into: "主题 A".to_string(),
                     from: vec!["不存在".to_string()],
                 }],
                 50,
-            )
-            .is_err());
+            ),
+            Err(CatalogError::InvalidTopicMerge)
+        ));
         let still_merged: i64 = catalog
             .connection
             .query_row(
@@ -3249,6 +3352,38 @@ mod tests {
             )
             .expect("atomic rows");
         assert_eq!(still_merged, 2);
+    }
+
+    #[test]
+    fn topic_merge_candidates_use_one_latest_label_per_normalized_topic_key() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let first = candidate("codex", "same-topic-a", 10);
+        let second = candidate("codex", "same-topic-b", 20);
+        catalog
+            .upsert_scanned_candidates(&[first.clone(), second.clone()])
+            .expect("sessions");
+        let assignment = |session: &SessionCandidate, label: &str| SemanticAssignment {
+            session_key: session.identity.stable_key.clone(),
+            topic_key: super::super::semantic_topic_key(label),
+            topic_label: label.to_string(),
+            fingerprint: super::super::semantic_fingerprint(
+                &session.title.as_ref().unwrap().value,
+                None,
+                "codex",
+            ),
+            backend_used: "test".to_string(),
+            model_used: None,
+        };
+        catalog
+            .apply_semantic_batch(&[assignment(&first, "HAPI")], 30)
+            .expect("first label");
+        catalog
+            .apply_semantic_batch(&[assignment(&second, "hapi")], 40)
+            .expect("latest label");
+
+        let labels = catalog.begin_topic_merge(100).expect("merge candidates");
+
+        assert_eq!(labels, vec!["hapi"]);
     }
 
     #[test]
@@ -3473,6 +3608,13 @@ mod tests {
             catalog.known_topics(1).expect("bounded topics"),
             vec!["主题 A".to_string()]
         );
+
+        seed(&mut catalog, "case-old", "HAPI", 40);
+        seed(&mut catalog, "case-new", "hapi", 50);
+        assert_eq!(
+            catalog.known_topics(1).expect("latest display label"),
+            vec!["hapi".to_string()]
+        );
     }
 
     #[test]
@@ -3587,6 +3729,57 @@ mod tests {
             .expect("sources");
         assert_eq!(sources, vec!["automatic".to_string()]);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn topics_are_ordered_by_latest_session_end_not_session_start_or_weight() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut earlier_started_later_finished = candidate("codex", "later-finished", 40);
+        earlier_started_later_finished.first_activity_at = 10;
+        earlier_started_later_finished.weight = super::super::adapters::SessionWeight {
+            turns: 1,
+            chars: 30,
+            known: true,
+        };
+        let mut later_started_earlier_finished = candidate("pi", "earlier-finished", 30);
+        later_started_earlier_finished.first_activity_at = 20;
+        later_started_earlier_finished.weight = super::super::adapters::SessionWeight {
+            turns: 8,
+            chars: 400,
+            known: true,
+        };
+        catalog
+            .upsert_scanned_candidates(&[
+                earlier_started_later_finished.clone(),
+                later_started_earlier_finished.clone(),
+            ])
+            .expect("sessions");
+        let assignment = |session: &SessionCandidate, topic: &str| SemanticAssignment {
+            session_key: session.identity.stable_key.clone(),
+            topic_key: super::super::semantic_topic_key(topic),
+            topic_label: topic.to_string(),
+            fingerprint: super::super::semantic_fingerprint(
+                &session.title.as_ref().expect("title").value,
+                None,
+                &session.identity.backend,
+            ),
+            backend_used: "test".to_string(),
+            model_used: None,
+        };
+        catalog
+            .apply_semantic_batch(
+                &[
+                    assignment(&earlier_started_later_finished, "先开始但最后结束"),
+                    assignment(&later_started_earlier_finished, "后开始但较早结束"),
+                ],
+                50,
+            )
+            .expect("topics");
+
+        let snapshot = catalog.snapshot(50).expect("snapshot");
+        assert_eq!(snapshot.topics.len(), 2);
+        assert_eq!(snapshot.topics[0].display_name, "先开始但最后结束");
+        assert_eq!(snapshot.topics[1].display_name, "后开始但较早结束");
     }
 
     #[test]
@@ -3990,7 +4183,7 @@ mod tests {
     }
 
     #[test]
-    fn same_source_reparse_refreshes_title_and_invalidates_semantic_fingerprint() {
+    fn same_source_reparse_keeps_previous_topic_until_reclassified() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let mut dirty = candidate("codex", "reparsed", 20);
         dirty.title.as_mut().unwrap().value =
@@ -4046,7 +4239,8 @@ mod tests {
             snapshot.projects[0].sessions[0].title,
             "修复 ORK3 Projects 自动分类"
         );
-        assert!(snapshot.topics.is_empty());
+        assert_eq!(snapshot.topics.len(), 1);
+        assert_eq!(snapshot.topics[0].display_name, "old topic");
         let pending = catalog
             .pending_semantic_sessions(10)
             .expect("stale semantic query");
@@ -4061,7 +4255,7 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("semantic row count");
-        assert_eq!(semantic_count, 0);
+        assert_eq!(semantic_count, 1);
         let assignment_source: String = catalog
             .connection
             .query_row(
