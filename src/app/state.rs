@@ -784,8 +784,7 @@ pub enum SidebarView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectFilter {
     All,
-    Live,
-    Unclassified,
+    Open,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -920,7 +919,7 @@ pub struct ViewState {
     pub pane_infos: Vec<PaneInfo>,
     pub split_borders: Vec<SplitBorder>,
     pub project_sidebar_tabs: [Rect; 4],
-    pub project_filter_tabs: [Rect; 3],
+    pub project_filter_tabs: [Rect; 2],
     pub project_search_rect: Rect,
     pub project_tree_rect: Rect,
     pub project_row_hit_areas: Vec<ProjectRowHitArea>,
@@ -1944,7 +1943,7 @@ impl AppState {
                 pane_infos: Vec::new(),
                 split_borders: Vec::new(),
                 project_sidebar_tabs: [Rect::default(); 4],
-                project_filter_tabs: [Rect::default(); 3],
+                project_filter_tabs: [Rect::default(); 2],
                 project_search_rect: Rect::default(),
                 project_tree_rect: Rect::default(),
                 project_row_hit_areas: Vec::new(),

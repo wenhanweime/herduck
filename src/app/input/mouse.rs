@@ -456,9 +456,6 @@ impl AppState {
                     if rect_contains(self.view.project_sidebar_tabs[3], mouse.column, mouse.row) {
                         self.sidebar_view = SidebarView::Clusters;
                         self.projects.grouping = ProjectGrouping::Topics;
-                        if self.projects.filter == ProjectFilter::Unclassified {
-                            self.projects.filter = ProjectFilter::All;
-                        }
                         self.projects.selected_row = 0;
                         self.projects.scroll = 0;
                         self.projects.search_focused = false;
@@ -475,17 +472,9 @@ impl AppState {
                         .position(|rect| rect_contains(*rect, mouse.column, mouse.row))
                         .map(|index| match index {
                             0 => ProjectFilter::All,
-                            1 => ProjectFilter::Live,
-                            _ => ProjectFilter::Unclassified,
+                            _ => ProjectFilter::Open,
                         })
                     {
-                        // A disabled `unclassified` chip has nothing to review, so it must not
-                        // become a filter that shows an empty tree.
-                        if filter == ProjectFilter::Unclassified
-                            && crate::ui::unclassified_pending_count(self) == 0
-                        {
-                            return None;
-                        }
                         self.projects.filter = filter;
                         self.projects.selected_row = 0;
                         self.projects.scroll = 0;
@@ -3964,14 +3953,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_unclassified_chip_click_does_not_change_filter() {
+    async fn open_filter_chip_click_selects_open_sessions() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("test")];
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.sidebar_view = crate::app::state::SidebarView::Projects;
         app.state.mode = Mode::Navigate;
-        // Snapshot has no unclassified project, so the chip has nothing to review.
         app.state.projects.snapshot = crate::projects::ProjectsSnapshot {
             projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
             revision: 1,
@@ -3990,10 +3978,9 @@ mod tests {
             diagnostic_category: None,
         };
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
-        assert_eq!(crate::ui::unclassified_pending_count(&app.state), 0);
 
-        let chip = app.state.view.project_filter_tabs[2];
-        assert!(chip.width > 0, "unclassified chip should be laid out");
+        let chip = app.state.view.project_filter_tabs[1];
+        assert!(chip.width > 0, "open chip should be laid out");
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             chip.x,
@@ -4002,8 +3989,8 @@ mod tests {
 
         assert_eq!(
             app.state.projects.filter,
-            crate::app::state::ProjectFilter::All,
-            "a disabled chip must not strand the user in an empty filter"
+            crate::app::state::ProjectFilter::Open,
+            "the second filter chip should select open sessions"
         );
     }
 
@@ -4098,14 +4085,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clicking_clusters_top_level_tab_keeps_project_filter_state_valid() {
+    async fn clicking_topics_top_level_tab_preserves_open_filter() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("test")];
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.sidebar_view = crate::app::state::SidebarView::Projects;
         app.state.mode = Mode::Navigate;
-        app.state.projects.filter = ProjectFilter::Unclassified;
+        app.state.projects.filter = ProjectFilter::Open;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
         let clusters = app.state.view.project_sidebar_tabs[3];
@@ -4118,7 +4105,7 @@ mod tests {
 
         assert_eq!(app.state.sidebar_view, SidebarView::Clusters);
         assert_eq!(app.state.projects.grouping, ProjectGrouping::Topics);
-        assert_eq!(app.state.projects.filter, ProjectFilter::All);
+        assert_eq!(app.state.projects.filter, ProjectFilter::Open);
         assert_eq!(app.state.projects.selected_row, 0);
         assert_eq!(app.state.projects.scroll, 0);
     }
@@ -4128,7 +4115,7 @@ mod tests {
         let mut app = app_for_mouse_test();
         app.state.sidebar_view = SidebarView::Projects;
         app.state.mode = Mode::Navigate;
-        app.state.projects.filter = ProjectFilter::Unclassified;
+        app.state.projects.filter = ProjectFilter::Open;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
         let sessions = app.state.view.project_sidebar_tabs[1];
@@ -4141,7 +4128,7 @@ mod tests {
 
         assert_eq!(app.state.sidebar_view, SidebarView::Sessions);
         assert_eq!(app.state.projects.grouping, ProjectGrouping::Directories);
-        assert_eq!(app.state.projects.filter, ProjectFilter::Unclassified);
+        assert_eq!(app.state.projects.filter, ProjectFilter::Open);
         assert_eq!(app.state.projects.selected_row, 0);
         assert_eq!(app.state.projects.scroll, 0);
     }

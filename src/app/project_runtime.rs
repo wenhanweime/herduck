@@ -100,6 +100,7 @@ impl App {
                         observed_at,
                     },
                 );
+                self.replace_projects_snapshot(self.project_service.snapshot());
             }
             Err(error) => tracing::warn!(
                 adapter = session.agent,
@@ -113,14 +114,17 @@ impl App {
         let Some(lease) = self.project_runtime_leases.remove(&pane_id) else {
             return;
         };
-        if let Err(error) = self
+        match self
             .project_service
             .clear_runtime_mapping(lease.session_key, lease.generation)
         {
-            tracing::warn!(
-                category = error.code,
-                "Project runtime lease could not be cleared"
-            );
+            Ok(_) => self.replace_projects_snapshot(self.project_service.snapshot()),
+            Err(error) => {
+                tracing::warn!(
+                    category = error.code,
+                    "Project runtime lease could not be cleared"
+                );
+            }
         }
     }
 
@@ -209,6 +213,15 @@ mod tests {
             Some(app.state.workspaces[0].id.as_str())
         );
         assert_eq!(session.runtime_generation, Some(1));
+        let stable_key = session.stable_key.clone();
+        assert!(app
+            .state
+            .projects
+            .snapshot
+            .topics
+            .iter()
+            .flat_map(|topic| &topic.sessions)
+            .any(|session| session.stable_key == stable_key && session.live));
 
         app.handle_internal_event(AppEvent::PaneDied { pane_id });
         let snapshot = app.project_service.snapshot();

@@ -482,6 +482,22 @@ fn agent_hint_for_foreground_job_members(
         .or_else(|| agent_hint_for_non_leader_foreground_job_members(job, read_hint))
 }
 
+fn foreground_job_matches_agent_reap_target(
+    job: &crate::platform::ForegroundJob,
+    child_pid: u32,
+    expected_agent: Agent,
+    allow_child_process_group: bool,
+) -> bool {
+    if job.process_group_id <= 1
+        || (job.process_group_id == child_pid && !allow_child_process_group)
+    {
+        return false;
+    }
+    agent_hint_for_foreground_job_members(job, crate::platform::process_agent_hint)
+        .or_else(|| crate::detect::identify_agent_in_job(job).map(|(agent, _)| agent))
+        == Some(expected_agent)
+}
+
 fn agent_hint_for_non_leader_foreground_job_members(
     job: &crate::platform::ForegroundJob,
     read_hint: impl Fn(u32) -> Option<Agent>,
@@ -970,6 +986,7 @@ pub struct PaneRuntime {
     terminal: Arc<PaneTerminal>,
     io: PaneRuntimeIo,
     current_size: Cell<(u16, u16, u32, u32)>,
+    last_activity_at: Arc<Mutex<std::time::Instant>>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     child_wait_completed: Option<Arc<AtomicBool>>,
@@ -981,6 +998,23 @@ pub struct PaneRuntime {
     preserve_processes_on_drop: bool,
     // Task handles for deterministic shutdown
     detect_handle: Option<tokio::task::AbortHandle>,
+}
+
+fn runtime_activity_at(activity: &Mutex<std::time::Instant>) -> std::time::Instant {
+    match activity.lock() {
+        Ok(activity) => *activity,
+        Err(poisoned) => *poisoned.into_inner(),
+    }
+}
+
+fn mark_runtime_activity(activity: &Mutex<std::time::Instant>, observed_at: std::time::Instant) {
+    let mut activity = match activity.lock() {
+        Ok(activity) => activity,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if observed_at > *activity {
+        *activity = observed_at;
+    }
 }
 
 enum PaneRuntimeIo {
@@ -1225,6 +1259,100 @@ fn shutdown_pane_processes(
         pids = ?pids,
         "pane session still alive after forced shutdown"
     );
+}
+
+pub(crate) struct ForegroundAgentShutdown {
+    pane_id: PaneId,
+    agent: Agent,
+    process_group_id: u32,
+    pids: Vec<u32>,
+    last_signal_index: usize,
+}
+
+const FOREGROUND_AGENT_SHUTDOWN_SIGNALS: [crate::platform::Signal; 3] = [
+    crate::platform::Signal::Hangup,
+    crate::platform::Signal::Terminate,
+    crate::platform::Signal::Kill,
+];
+
+fn wait_for_foreground_agent_shutdown_phase(shutdowns: &[ForegroundAgentShutdown]) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+    while shutdowns
+        .iter()
+        .any(|shutdown| crate::platform::process_group_exists(shutdown.process_group_id))
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+pub(crate) fn finish_foreground_agent_shutdowns(
+    mut shutdowns: Vec<ForegroundAgentShutdown>,
+) -> Vec<PaneId> {
+    let mut completed = Vec::new();
+    while !shutdowns.is_empty() {
+        wait_for_foreground_agent_shutdown_phase(&shutdowns);
+
+        let mut still_alive = Vec::new();
+        for shutdown in shutdowns {
+            if crate::platform::process_group_exists(shutdown.process_group_id) {
+                still_alive.push(shutdown);
+            } else {
+                completed.push(shutdown.pane_id);
+                info!(
+                    pane = shutdown.pane_id.raw(),
+                    agent = crate::detect::agent_label(shutdown.agent),
+                    signal = ?FOREGROUND_AGENT_SHUTDOWN_SIGNALS[shutdown.last_signal_index],
+                    "idle Agent process group terminated"
+                );
+            }
+        }
+        shutdowns = still_alive;
+        if shutdowns.is_empty() {
+            return completed;
+        }
+
+        let mut escalated = false;
+        for shutdown in &mut shutdowns {
+            let next = FOREGROUND_AGENT_SHUTDOWN_SIGNALS
+                .iter()
+                .copied()
+                .enumerate()
+                .skip(shutdown.last_signal_index + 1)
+                .find(|(_, signal)| {
+                    crate::platform::signal_process_group(shutdown.process_group_id, *signal)
+                });
+            if let Some((signal_index, _)) = next {
+                shutdown.last_signal_index = signal_index;
+                escalated = true;
+            }
+        }
+        if escalated {
+            continue;
+        }
+
+        for shutdown in shutdowns {
+            if crate::platform::process_group_exists(shutdown.process_group_id) {
+                warn!(
+                    pane = shutdown.pane_id.raw(),
+                    agent = crate::detect::agent_label(shutdown.agent),
+                    process_group_id = shutdown.process_group_id,
+                    pids = ?shutdown.pids,
+                    "idle Agent process group still alive after forced shutdown"
+                );
+            } else {
+                completed.push(shutdown.pane_id);
+                info!(
+                    pane = shutdown.pane_id.raw(),
+                    agent = crate::detect::agent_label(shutdown.agent),
+                    signal = ?FOREGROUND_AGENT_SHUTDOWN_SIGNALS[shutdown.last_signal_index],
+                    "idle Agent process group terminated"
+                );
+            }
+        }
+        return completed;
+    }
+    completed
 }
 
 #[cfg(unix)]
@@ -1784,6 +1912,7 @@ impl PaneRuntime {
         let reported_cwd = Arc::new(Mutex::new(None));
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(keyboard_protocol_flags));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
+        let last_activity_at = Arc::new(Mutex::new(std::time::Instant::now()));
 
         let io = {
             let terminal = terminal.clone();
@@ -1794,9 +1923,13 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let read_events = events.clone();
             let reported_cwd = reported_cwd.clone();
+            let last_activity_at = last_activity_at.clone();
             let rt = tokio::runtime::Handle::current();
             let delay_rt = rt.clone();
             let on_read = Box::new(move |bytes: &[u8]| {
+                if !bytes.is_empty() {
+                    mark_runtime_activity(&last_activity_at, std::time::Instant::now());
+                }
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
@@ -1859,6 +1992,7 @@ impl PaneRuntime {
             terminal,
             io,
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
+            last_activity_at,
             child_pid,
             reported_cwd,
             child_wait_completed: None,
@@ -1921,6 +2055,7 @@ impl PaneRuntime {
         let child_wait_completed = Arc::new(AtomicBool::new(false));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
+        let last_activity_at = Arc::new(Mutex::new(std::time::Instant::now()));
         {
             let child_pid = child_pid.clone();
             let child_wait_completed = child_wait_completed.clone();
@@ -1956,8 +2091,12 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let events = events.clone();
             let reported_cwd = reported_cwd.clone();
+            let last_activity_at = last_activity_at.clone();
             let rt = tokio::runtime::Handle::current();
             let on_read = Box::new(move |bytes: &[u8]| {
+                if !bytes.is_empty() {
+                    mark_runtime_activity(&last_activity_at, std::time::Instant::now());
+                }
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
@@ -2380,6 +2519,7 @@ impl PaneRuntime {
             terminal,
             io,
             current_size: Cell::new((rows, cols, 0, 0)),
+            last_activity_at,
             child_pid,
             reported_cwd,
             child_wait_completed: Some(child_wait_completed),
@@ -2625,11 +2765,84 @@ impl PaneRuntime {
     }
 
     pub async fn send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::SendError<Bytes>> {
-        self.io.send_bytes(bytes).await
+        let has_activity = !bytes.is_empty();
+        let result = self.io.send_bytes(bytes).await;
+        if has_activity && result.is_ok() {
+            self.mark_activity_at(std::time::Instant::now());
+        }
+        result
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
-        self.io.try_send_bytes(bytes)
+        let has_activity = !bytes.is_empty();
+        let result = self.io.try_send_bytes(bytes);
+        if has_activity && result.is_ok() {
+            self.mark_activity_at(std::time::Instant::now());
+        }
+        result
+    }
+
+    pub(crate) fn last_activity_at(&self) -> std::time::Instant {
+        runtime_activity_at(&self.last_activity_at)
+    }
+
+    pub(crate) fn mark_activity_at(&self, observed_at: std::time::Instant) {
+        mark_runtime_activity(&self.last_activity_at, observed_at);
+    }
+
+    pub(crate) fn begin_foreground_agent_shutdown(
+        &self,
+        expected_agent: Agent,
+        allow_child_process_group: bool,
+        inactive_before: std::time::Instant,
+        attempted_at: std::time::Instant,
+    ) -> Option<ForegroundAgentShutdown> {
+        let mut activity = match self.last_activity_at.lock() {
+            Ok(activity) => activity,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if *activity > inactive_before {
+            return None;
+        }
+
+        let child_pid = self.child_pid()?;
+        let job = crate::detect::foreground_job(child_pid)?;
+        if !foreground_job_matches_agent_reap_target(
+            &job,
+            child_pid,
+            expected_agent,
+            allow_child_process_group,
+        ) {
+            return None;
+        }
+
+        let pids = job
+            .processes
+            .iter()
+            .map(|process| process.pid)
+            .collect::<Vec<_>>();
+        if pids.is_empty() {
+            return None;
+        }
+
+        let (first_signal_index, _) = FOREGROUND_AGENT_SHUTDOWN_SIGNALS
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, signal)| {
+                crate::platform::signal_process_group(job.process_group_id, *signal)
+            })?;
+
+        if attempted_at > *activity {
+            *activity = attempted_at;
+        }
+        Some(ForegroundAgentShutdown {
+            pane_id: self.pane_id,
+            agent: expected_agent,
+            process_group_id: job.process_group_id,
+            pids,
+            last_signal_index: first_signal_index,
+        })
     }
 
     pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
@@ -2800,8 +3013,19 @@ impl PaneRuntime {
     }
 
     pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
+        if !bytes.is_empty() {
+            self.mark_activity_at(std::time::Instant::now());
+        }
         let (tx, _rx) = mpsc::channel(1);
         let _ = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
+    }
+
+    pub(crate) fn test_set_last_activity_at(&self, activity_at: std::time::Instant) {
+        let mut current = match self.last_activity_at.lock() {
+            Ok(current) => current,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *current = activity_at;
     }
 
     pub(crate) fn test_with_scrollback_bytes(
@@ -2837,6 +3061,7 @@ impl PaneRuntime {
                     resize_tx,
                 },
                 current_size: Cell::new((rows, cols, 0, 0)),
+                last_activity_at: Arc::new(Mutex::new(std::time::Instant::now())),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
                 child_wait_completed: None,
@@ -3365,6 +3590,7 @@ mod tests {
                 resize_tx,
             },
             current_size: Cell::new((80, 24, 0, 0)),
+            last_activity_at: Arc::new(Mutex::new(std::time::Instant::now())),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
@@ -3382,6 +3608,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn successful_terminal_input_updates_runtime_activity() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+        let old_activity = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        runtime.test_set_last_activity_at(old_activity);
+        let sent_at = std::time::Instant::now();
+
+        runtime
+            .try_send_bytes(Bytes::from_static(b"hello"))
+            .unwrap();
+
+        assert_eq!(rx.recv().await.unwrap(), Bytes::from_static(b"hello"));
+        assert!(runtime.last_activity_at() >= sent_at);
+    }
+
+    #[tokio::test]
+    async fn empty_terminal_input_does_not_update_runtime_activity() {
+        let (runtime, mut rx) = PaneRuntime::test_with_channel(80, 24);
+        let old_activity = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        runtime.test_set_last_activity_at(old_activity);
+
+        runtime.try_send_bytes(Bytes::new()).unwrap();
+
+        assert_eq!(rx.recv().await.unwrap(), Bytes::new());
+        assert_eq!(runtime.last_activity_at(), old_activity);
+    }
+
+    #[tokio::test]
+    async fn terminal_output_updates_runtime_activity() {
+        let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
+        let old_activity = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        runtime.test_set_last_activity_at(old_activity);
+        let observed_at = std::time::Instant::now();
+
+        runtime.test_process_pty_bytes(b"agent output");
+
+        assert!(runtime.last_activity_at() >= observed_at);
+    }
+
+    #[tokio::test]
     async fn focus_events_are_suppressed_when_disabled() {
         let (tx, mut rx) = mpsc::channel(4);
         let (resize_tx, _resize_rx) = watch::channel((80, 24, 0, 0));
@@ -3396,6 +3661,7 @@ mod tests {
                 resize_tx,
             },
             current_size: Cell::new((80, 24, 0, 0)),
+            last_activity_at: Arc::new(Mutex::new(std::time::Instant::now())),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
@@ -3460,6 +3726,48 @@ mod tests {
             argv: None,
             cmdline: None,
         }
+    }
+
+    #[test]
+    fn idle_reap_rejects_shell_process_group_but_allows_direct_agent_group() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![foreground_process(42, "codex")],
+        };
+
+        assert!(!foreground_job_matches_agent_reap_target(
+            &job,
+            42,
+            Agent::Codex,
+            false,
+        ));
+        assert!(foreground_job_matches_agent_reap_target(
+            &job,
+            42,
+            Agent::Codex,
+            true,
+        ));
+    }
+
+    #[test]
+    fn idle_reap_requires_the_current_foreground_agent_to_match() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 84,
+            processes: vec![foreground_process(84, "claude")],
+        };
+
+        assert!(!foreground_job_matches_agent_reap_target(
+            &job,
+            42,
+            Agent::Codex,
+            false,
+        ));
+        assert!(foreground_job_matches_agent_reap_target(
+            &job,
+            42,
+            Agent::Claude,
+            false,
+        ));
     }
 
     #[test]

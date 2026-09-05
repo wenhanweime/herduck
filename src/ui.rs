@@ -45,9 +45,7 @@ pub(crate) use self::panes::popup_pane_rects;
 use self::panes::{
     compute_pane_infos, render_panes, render_popup_pane, resize_popup_pane, resize_tab_panes,
 };
-pub(crate) use self::projects::{
-    project_sidebar_geometry, project_tree_rows, unclassified_pending_count, ProjectTreeRow,
-};
+pub(crate) use self::projects::{project_sidebar_geometry, project_tree_rows, ProjectTreeRow};
 use self::projects::{render_project_history, render_projects_sidebar, render_sidebar_tabs};
 pub(crate) use self::release_notes::{
     product_announcement_display_lines, release_notes_close_button_rect,
@@ -416,7 +414,7 @@ fn compute_mobile_view(
         pane_infos,
         split_borders,
         project_sidebar_tabs: [Rect::default(); 4],
-        project_filter_tabs: [Rect::default(); 3],
+        project_filter_tabs: [Rect::default(); 2],
         project_search_rect: Rect::default(),
         project_tree_rect: Rect::default(),
         project_row_hit_areas: Vec::new(),

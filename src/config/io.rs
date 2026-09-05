@@ -710,11 +710,13 @@ mod tests {
             r#"
 [session]
 resume_agents_on_restore = true
+agent_idle_timeout_secs = 1800
 "#,
         )
         .unwrap();
 
         assert!(loaded.config.session.resume_agents_on_restore);
+        assert_eq!(loaded.config.session.agent_idle_timeout_secs, 1800);
         assert!(loaded.diagnostics.is_empty());
         assert!(loaded.invalid_sections.is_empty());
     }

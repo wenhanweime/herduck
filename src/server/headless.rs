@@ -3941,6 +3941,8 @@ impl HeadlessServer {
             self.app.start_background_session_save();
         }
 
+        changed |= self.app.reap_idle_agents(now);
+
         if let Some(deadline) = self
             .app
             .agent_metadata_deadline

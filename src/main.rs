@@ -369,6 +369,11 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # a ORK3 server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
 
+# Stop an identified idle Agent after this many seconds without terminal input
+# or output. The pane and shell stay open when the Agent was launched from a shell.
+# Set to 0 to disable automatic Agent process reclamation.
+# agent_idle_timeout_secs = 3600
+
 [remote]
 # Whether ork3 manages the ssh config used for `ork3 --remote`.
 # When true (default), ork3 runs remote ssh through a generated config that

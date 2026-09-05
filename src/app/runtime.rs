@@ -11,6 +11,8 @@ use crate::events::AppEvent;
 use crate::workspace::{GitStatusCacheEntry, Workspace, WorkspaceGitStatus};
 use std::collections::HashMap;
 
+const AGENT_IDLE_REAP_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WorkspaceGitRefreshItem {
     pub(crate) workspace_id: String,
@@ -30,6 +32,15 @@ pub(crate) struct WorkspaceGitRefreshJob {
     pub(crate) status_cwd: std::path::PathBuf,
     pub(crate) cached: Option<GitStatusCacheEntry>,
     pub(crate) targets: Vec<WorkspaceGitRefreshTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct IdleAgentRuntime {
+    ws_idx: usize,
+    pane_id: crate::layout::PaneId,
+    agent: crate::detect::Agent,
+    allow_child_process_group: bool,
+    last_activity_at: Instant,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -311,6 +322,8 @@ impl App {
             self.start_background_session_save();
         }
 
+        changed |= self.reap_idle_agents(now);
+
         changed |= self.expire_due_metadata(now);
 
         if geometry_dirty || resized {
@@ -560,6 +573,127 @@ impl App {
             .then_some(self.last_git_remote_status_refresh + GIT_REMOTE_STATUS_REFRESH_INTERVAL)
     }
 
+    fn idle_agent_runtimes(&self) -> Vec<IdleAgentRuntime> {
+        let mut seen_terminal_ids = std::collections::HashSet::new();
+        let mut runtimes = Vec::new();
+        for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
+            for tab in &workspace.tabs {
+                for (&pane_id, pane) in &tab.panes {
+                    if !seen_terminal_ids.insert(pane.attached_terminal_id.clone()) {
+                        continue;
+                    }
+                    let Some(terminal) = self.state.terminals.get(&pane.attached_terminal_id)
+                    else {
+                        continue;
+                    };
+                    if terminal.state != crate::detect::AgentState::Idle {
+                        continue;
+                    }
+                    let Some(agent) = terminal.effective_known_agent() else {
+                        continue;
+                    };
+                    let Some(runtime) = self.state.runtime_for_pane_in_workspace(
+                        &self.terminal_runtimes,
+                        ws_idx,
+                        pane_id,
+                    ) else {
+                        continue;
+                    };
+                    runtimes.push(IdleAgentRuntime {
+                        ws_idx,
+                        pane_id,
+                        agent,
+                        allow_child_process_group: terminal.launch_argv.is_some(),
+                        last_activity_at: runtime.last_activity_at(),
+                    });
+                }
+            }
+        }
+        runtimes
+    }
+
+    pub(crate) fn next_agent_idle_reap_deadline(&self) -> Option<Instant> {
+        let timeout = self.agent_idle_timeout?;
+        self.idle_agent_runtimes()
+            .into_iter()
+            .filter_map(|runtime| runtime.last_activity_at.checked_add(timeout))
+            .min()
+    }
+
+    fn idle_agent_reap_targets(&self, now: Instant) -> Vec<IdleAgentRuntime> {
+        let Some(timeout) = self.agent_idle_timeout else {
+            return Vec::new();
+        };
+        let Some(inactive_before) = now.checked_sub(timeout) else {
+            return Vec::new();
+        };
+        self.idle_agent_runtimes()
+            .into_iter()
+            .filter(|runtime| runtime.last_activity_at <= inactive_before)
+            .collect()
+    }
+
+    pub(crate) fn reap_idle_agents(&mut self, now: Instant) -> bool {
+        let Some(timeout) = self.agent_idle_timeout else {
+            return false;
+        };
+        let Some(inactive_before) = now.checked_sub(timeout) else {
+            return false;
+        };
+        let targets = self.idle_agent_reap_targets(now);
+        let retry_delay = AGENT_IDLE_REAP_RETRY_INTERVAL.min(timeout);
+        let retry_activity_at = now
+            .checked_sub(timeout.saturating_sub(retry_delay))
+            .unwrap_or(now);
+
+        let mut shutdowns = Vec::new();
+        for target in targets {
+            let shutdown = self
+                .state
+                .runtime_for_pane_in_workspace(
+                    &self.terminal_runtimes,
+                    target.ws_idx,
+                    target.pane_id,
+                )
+                .and_then(|runtime| {
+                    let shutdown = runtime.begin_foreground_agent_shutdown(
+                        target.agent,
+                        target.allow_child_process_group,
+                        inactive_before,
+                        now,
+                    );
+                    if shutdown.is_none() {
+                        // Avoid a tight scheduler loop when detection is stale or
+                        // the foreground job changes during the safety re-check,
+                        // while retrying much sooner than the full idle timeout.
+                        runtime.mark_activity_at(retry_activity_at);
+                    }
+                    shutdown
+                });
+            let Some(shutdown) = shutdown else {
+                continue;
+            };
+
+            tracing::info!(
+                pane = target.pane_id.raw(),
+                agent = crate::detect::agent_label(target.agent),
+                idle_seconds = timeout.as_secs(),
+                "reclaiming idle Agent process"
+            );
+            shutdowns.push(shutdown);
+        }
+        let started = !shutdowns.is_empty();
+        let completed = crate::terminal::TerminalRuntime::finish_agent_process_shutdowns(shutdowns);
+        let catalog_changed = !completed.is_empty();
+        for pane_id in completed {
+            self.publish_reaped_agent_process_exit(pane_id);
+        }
+        if catalog_changed && self.project_service.is_available() {
+            self.replace_projects_snapshot(self.project_service.snapshot());
+        }
+        started
+    }
+
     pub(crate) fn next_loop_deadline(&self, now: Instant, needs_render: bool) -> Option<Instant> {
         self.next_loop_deadline_with_resize_poll(now, needs_render, true, true)
     }
@@ -600,6 +734,7 @@ impl App {
                 .flatten(),
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
+            self.next_agent_idle_reap_deadline(),
             self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
@@ -747,6 +882,159 @@ mod tests {
             is_focused: true,
         });
         (app, pane_id)
+    }
+
+    fn idle_agent_test_app(
+        agent: Option<crate::detect::Agent>,
+        agent_state: crate::detect::AgentState,
+    ) -> (super::super::App, crate::layout::PaneId) {
+        let mut app = super::super::App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        let mut ws = Workspace::test_new("idle-agent");
+        let pane_id = ws.tabs[0].root_pane;
+        ws.tabs[0].runtimes.insert(
+            pane_id,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+        );
+        app.state.workspaces.push(ws);
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = agent;
+        terminal.state = agent_state;
+        (app, pane_id)
+    }
+
+    #[tokio::test]
+    async fn agent_idle_timeout_defaults_to_one_hour_and_zero_disables_it() {
+        let (app, _) = idle_agent_test_app(None, crate::detect::AgentState::Idle);
+        assert_eq!(app.agent_idle_timeout, Some(Duration::from_secs(60 * 60)));
+
+        let mut config = crate::config::Config::default();
+        config.session.agent_idle_timeout_secs = 0;
+        let app = super::super::App::new(
+            &config,
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        assert_eq!(app.agent_idle_timeout, None);
+    }
+
+    #[tokio::test]
+    async fn idle_agent_reap_targets_only_known_idle_agents_at_the_threshold() {
+        let now = Instant::now();
+        let (mut app, pane_id) = idle_agent_test_app(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Idle,
+        );
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        runtime.test_set_last_activity_at(now - Duration::from_secs(60 * 60 - 1));
+        assert!(app.idle_agent_reap_targets(now).is_empty());
+        assert_eq!(
+            app.next_agent_idle_reap_deadline(),
+            Some(now + Duration::from_secs(1))
+        );
+
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        runtime.test_set_last_activity_at(now - Duration::from_secs(60 * 60));
+        let targets = app.idle_agent_reap_targets(now);
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].pane_id, pane_id);
+
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        app.state.terminals.get_mut(&terminal_id).unwrap().state =
+            crate::detect::AgentState::Working;
+        assert!(app.idle_agent_reap_targets(now).is_empty());
+        app.state.terminals.get_mut(&terminal_id).unwrap().state =
+            crate::detect::AgentState::Blocked;
+        assert!(app.idle_agent_reap_targets(now).is_empty());
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.state = crate::detect::AgentState::Idle;
+        terminal.detected_agent = None;
+        assert!(app.idle_agent_reap_targets(now).is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_idle_agent_probe_does_not_publish_a_false_process_exit() {
+        let now = Instant::now();
+        let (mut app, pane_id) = idle_agent_test_app(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Idle,
+        );
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        runtime.test_set_last_activity_at(now - Duration::from_secs(60 * 60));
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("idle-session").unwrap(),
+        });
+
+        assert!(!app.reap_idle_agents(now));
+        assert!(app
+            .state
+            .terminals
+            .get(&terminal_id)
+            .unwrap()
+            .persisted_agent_session
+            .is_some());
+        assert_eq!(
+            app.next_agent_idle_reap_deadline(),
+            Some(now + AGENT_IDLE_REAP_RETRY_INTERVAL)
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_state_transition_resets_runtime_activity() {
+        let now = Instant::now();
+        let old_activity = now - Duration::from_secs(60 * 60);
+        let (mut app, pane_id) = idle_agent_test_app(
+            Some(crate::detect::Agent::Codex),
+            crate::detect::AgentState::Working,
+        );
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        runtime.test_set_last_activity_at(old_activity);
+
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(crate::detect::Agent::Codex),
+            state: crate::detect::AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: now,
+        });
+
+        let activity = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap()
+            .last_activity_at();
+        assert!(activity > old_activity);
     }
 
     #[test]

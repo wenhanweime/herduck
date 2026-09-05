@@ -383,9 +383,6 @@ impl App {
                     } else {
                         crate::app::state::ProjectGrouping::Directories
                     };
-                if self.state.projects.filter == crate::app::state::ProjectFilter::Unclassified {
-                    self.state.projects.filter = crate::app::state::ProjectFilter::All;
-                }
                 self.state.projects.selected_row = 0;
                 self.state.projects.scroll = 0;
                 true

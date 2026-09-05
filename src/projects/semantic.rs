@@ -36,6 +36,9 @@ const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// Cap on topics offered back to the classifier, so the prompt stays bounded as the Catalog grows.
 const MAX_KNOWN_TOPICS: usize = 200;
+/// Deterministic assignment written synchronously when a session first enters Catalog. It makes
+/// the session visible in Topics immediately while remaining eligible for background refinement.
+pub(crate) const LOCAL_PENDING_BACKEND: &str = "local-pending";
 /// Prevent one malformed backend label from making every later prompt unbounded.
 const MAX_TOPIC_LABEL_CHARS: usize = 80;
 const DISALLOWED_TOPIC_LABELS: [&str; 8] = [
@@ -853,8 +856,12 @@ fn is_quota_error(text: &str) -> bool {
 
 /// Produces a stable topic label without a model. Generated titles use `【object】task`, so the
 /// object is the strongest local signal; otherwise the repository/folder basename is used.
-fn local_topic_label(session: &PendingSemanticSession) -> String {
-    let title = session.title.trim();
+pub(crate) fn local_topic_label_for_metadata(
+    title: &str,
+    cwd: Option<&str>,
+    backend: &str,
+) -> String {
+    let title = title.trim();
     if let Some(subject) = title
         .strip_prefix('【')
         .and_then(|value| value.split_once('】').map(|(subject, _)| subject.trim()))
@@ -863,9 +870,7 @@ fn local_topic_label(session: &PendingSemanticSession) -> String {
     {
         return subject.chars().take(MAX_TOPIC_LABEL_CHARS).collect();
     }
-    if let Some(folder) = session
-        .cwd
-        .as_deref()
+    if let Some(folder) = cwd
         .and_then(|cwd| Path::new(cwd).file_name())
         .and_then(|name| name.to_str())
         .map(str::trim)
@@ -873,11 +878,15 @@ fn local_topic_label(session: &PendingSemanticSession) -> String {
     {
         return folder.chars().take(MAX_TOPIC_LABEL_CHARS).collect();
     }
-    let backend = session.backend.trim();
+    let backend = backend.trim();
     if !backend.is_empty() && !is_disallowed_topic(backend) {
         return backend.chars().take(MAX_TOPIC_LABEL_CHARS).collect();
     }
     "本地摘要".to_string()
+}
+
+fn local_topic_label(session: &PendingSemanticSession) -> String {
+    local_topic_label_for_metadata(&session.title, session.cwd.as_deref(), &session.backend)
 }
 
 fn classify_batch_local(batch: &[PendingSemanticSession]) -> Vec<SemanticAssignment> {

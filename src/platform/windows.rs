@@ -29,7 +29,7 @@ use windows_sys::{
             Threading::{
                 GetCurrentProcess, GetExitCodeProcess, OpenProcess, TerminateProcess,
                 DETACHED_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-                PROCESS_VM_READ,
+                PROCESS_TERMINATE, PROCESS_VM_READ,
             },
         },
         UI::Shell::{CommandLineToArgvW, ShellExecuteW},
@@ -445,14 +445,46 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
         return;
     }
 
+    let _ = terminate_process_trees(pids);
+}
+
+pub fn signal_process_group(process_group_id: u32, signal: Signal) -> bool {
+    process_group_id > 1 && signal != Signal::Hangup && terminate_process_trees(&[process_group_id])
+}
+
+pub fn process_group_exists(process_group_id: u32) -> bool {
+    process_group_id > 1 && process_exists(process_group_id)
+}
+
+fn terminate_process_trees(pids: &[u32]) -> bool {
+    let entries = snapshot_processes();
+    let mut targets = Vec::new();
+    let mut seen = HashSet::new();
     for &pid in pids {
-        let Some(process) = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION) else {
-            continue;
-        };
-        unsafe {
-            TerminateProcess(process.0, 1);
+        let mut descendants = descendant_entries(pid, &entries);
+        descendants.reverse();
+        for descendant in descendants {
+            if seen.insert(descendant.pid) {
+                targets.push(descendant.pid);
+            }
+        }
+        if seen.insert(pid) {
+            targets.push(pid);
         }
     }
+
+    // Windows has no Unix-style process-group signal. Terminate descendants
+    // before their selected Agent parent so helper processes do not survive as
+    // orphans after idle reclamation.
+    let processes = targets
+        .into_iter()
+        .filter_map(|pid| ProcessHandle::open(pid, PROCESS_TERMINATE))
+        .collect::<Vec<_>>();
+    let mut terminated = false;
+    for process in &processes {
+        terminated |= unsafe { TerminateProcess(process.0, 1) } != 0;
+    }
+    terminated
 }
 
 pub fn process_exists(pid: u32) -> bool {

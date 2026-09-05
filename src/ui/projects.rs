@@ -115,11 +115,42 @@ impl ProjectTreeRow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProjectSidebarGeometry {
     pub sidebar_tabs: [Rect; 4],
-    pub filter_tabs: [Rect; 3],
+    pub filter_tabs: [Rect; 2],
     pub search: Rect,
     pub tree: Rect,
     pub row_hits: Vec<ProjectRowHitArea>,
     pub normalized_scroll: usize,
+}
+
+/// Every Catalog session currently available to the sidebar, independent of which hierarchy
+/// exposed it. Directory snapshots intentionally hide disposable agent cwd groups, while Topics
+/// can still carry those sessions; taking the union keeps Sessions complete without presenting an
+/// internal holding Project.
+fn snapshot_sessions(app: &AppState) -> Vec<IndexedSessionSummary> {
+    let mut seen = HashSet::new();
+    app.projects
+        .snapshot
+        .projects
+        .iter()
+        .chain(app.projects.snapshot.topics.iter())
+        .flat_map(|project| project.sessions.iter())
+        .filter(|session| seen.insert(session.stable_key.clone()))
+        .cloned()
+        .collect()
+}
+
+fn session_matches_query(session: &IndexedSessionSummary, query: &str) -> bool {
+    query.is_empty()
+        || crate::app::state::text_matches_query(
+            query,
+            &format!(
+                "{} {} {} {}",
+                session.title,
+                session.backend,
+                session.cwd.as_deref().unwrap_or_default(),
+                session.topic_label.as_deref().unwrap_or_default()
+            ),
+        )
 }
 
 pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
@@ -129,34 +160,14 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
         ))];
     }
 
-    let query = app.projects.query.trim().to_lowercase();
+    let query = app.projects.query.trim();
     let mut rows = Vec::new();
+    let all_sessions = snapshot_sessions(app);
     if app.sidebar_view == crate::app::state::SidebarView::Sessions {
-        let mut seen = HashSet::new();
-        let mut sessions = app
-            .projects
-            .snapshot
-            .projects
-            .iter()
-            .flat_map(|project| project.sessions.iter())
-            .filter(|session| seen.insert(session.stable_key.clone()))
-            .filter(|session| {
-                (app.projects.filter != ProjectFilter::Live || session.live)
-                    && (app.projects.filter != ProjectFilter::Unclassified
-                        || session.topic_label.is_none())
-            })
-            .filter(|session| {
-                query.is_empty()
-                    || format!(
-                        "{} {} {}",
-                        session.title,
-                        session.backend,
-                        session.cwd.as_deref().unwrap_or_default()
-                    )
-                    .to_lowercase()
-                    .contains(&query)
-            })
-            .cloned()
+        let mut sessions = all_sessions
+            .into_iter()
+            .filter(|session| app.projects.filter != ProjectFilter::Open || session.live)
+            .filter(|session| session_matches_query(session, query))
             .collect::<Vec<_>>();
         sessions.sort_by(|left, right| {
             right
@@ -182,32 +193,70 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
         crate::app::state::ProjectGrouping::Directories => &app.projects.snapshot.projects,
         crate::app::state::ProjectGrouping::Topics => &app.projects.snapshot.topics,
     };
-    for project in groups {
-        if app.projects.filter == ProjectFilter::Unclassified
-            && project.kind != ProjectKind::Unclassified
-        {
-            continue;
-        }
 
+    enum TopLevelItem<'a> {
+        Session(&'a IndexedSessionSummary),
+        Project(&'a crate::projects::ProjectSummary),
+    }
+
+    let mut top_level = groups
+        .iter()
+        .filter(|project| {
+            grouping == crate::app::state::ProjectGrouping::Topics
+                || project.kind != ProjectKind::Unclassified
+        })
+        .map(TopLevelItem::Project)
+        .collect::<Vec<_>>();
+
+    // Internal Unclassified/ephemeral groups are storage details, not user navigation. Sessions
+    // without a visible directory parent are still useful, so show them directly at the top level.
+    if grouping == crate::app::state::ProjectGrouping::Directories {
+        let represented = groups
+            .iter()
+            .filter(|project| project.kind != ProjectKind::Unclassified)
+            .flat_map(|project| project.sessions.iter())
+            .map(|session| session.stable_key.as_str())
+            .collect::<HashSet<_>>();
+        let parentless = all_sessions
+            .iter()
+            .filter(|session| !represented.contains(session.stable_key.as_str()))
+            .filter(|session| app.projects.filter != ProjectFilter::Open || session.live)
+            .filter(|session| session_matches_query(session, query))
+            .collect::<Vec<_>>();
+        top_level.extend(parentless.into_iter().map(TopLevelItem::Session));
+    }
+
+    top_level.sort_by(|left, right| {
+        let latest = |item: &TopLevelItem<'_>| match item {
+            TopLevelItem::Session(session) => session.last_activity_at,
+            TopLevelItem::Project(project) => project
+                .sessions
+                .iter()
+                .map(|session| session.last_activity_at)
+                .max()
+                .unwrap_or(i64::MIN),
+        };
+        latest(right).cmp(&latest(left))
+    });
+
+    for item in top_level {
+        let project = match item {
+            TopLevelItem::Session(session) => {
+                rows.push(ProjectTreeRow::Session((*session).clone()));
+                continue;
+            }
+            TopLevelItem::Project(project) => project,
+        };
         let project_matches = query.is_empty()
-            || format!("{} {}", project.display_name, project.canonical_path)
-                .to_lowercase()
-                .contains(&query);
+            || crate::app::state::text_matches_query(
+                query,
+                &format!("{} {}", project.display_name, project.canonical_path),
+            );
         let sessions = project
             .sessions
             .iter()
-            .filter(|session| app.projects.filter != ProjectFilter::Live || session.live)
-            .filter(|session| {
-                project_matches
-                    || format!(
-                        "{} {} {}",
-                        session.title,
-                        session.backend,
-                        session.cwd.as_deref().unwrap_or_default()
-                    )
-                    .to_lowercase()
-                    .contains(&query)
-            })
+            .filter(|session| app.projects.filter != ProjectFilter::Open || session.live)
+            .filter(|session| project_matches || session_matches_query(session, query))
             .cloned()
             .collect::<Vec<_>>();
         let automation = project
@@ -216,9 +265,10 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             .filter(|_| app.projects.filter == ProjectFilter::All)
             .filter(|template| {
                 project_matches
-                    || format!("{} {}", template.title, template.backend)
-                        .to_lowercase()
-                        .contains(&query)
+                    || crate::app::state::text_matches_query(
+                        query,
+                        &format!("{} {}", template.title, template.backend),
+                    )
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -281,7 +331,12 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     if rows.is_empty() {
         // Only a genuinely empty Catalog gets the "not indexed yet" copy; an empty filter or
         // search result must not claim the Catalog is empty.
-        let catalog_is_empty = groups.is_empty();
+        let catalog_is_empty = match grouping {
+            crate::app::state::ProjectGrouping::Directories => {
+                app.projects.snapshot.projects.is_empty() && all_sessions.is_empty()
+            }
+            crate::app::state::ProjectGrouping::Topics => groups.is_empty(),
+        };
         let label = if !app.projects.query.trim().is_empty() {
             "No matching sessions"
         } else if catalog_is_empty {
@@ -316,43 +371,6 @@ fn scan_status_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             ProjectTreeRow::ScanStatus(format!("{}: {}{detail}", status.adapter, status.state))
         })
         .collect()
-}
-
-/// The number of projects still awaiting review. This is the only place the pending count is
-/// derived, so the `unclassified` chip stays the single display of it.
-pub(crate) fn unclassified_pending_count(app: &AppState) -> usize {
-    let grouping = app
-        .sidebar_view
-        .project_grouping()
-        .unwrap_or(app.projects.grouping);
-    if grouping == crate::app::state::ProjectGrouping::Topics {
-        return 0;
-    }
-    app.projects
-        .snapshot
-        .projects
-        .iter()
-        .filter(|project| project.kind == ProjectKind::Unclassified)
-        .count()
-}
-
-pub(crate) struct UnclassifiedChip {
-    pub label: String,
-    pub disabled: bool,
-}
-
-/// The `unclassified` chip's rendered contract, kept out of the render loop so both the drawing
-/// code and the tests read the same label and disabled state.
-pub(crate) fn unclassified_chip(app: &AppState) -> UnclassifiedChip {
-    let pending = unclassified_pending_count(app);
-    UnclassifiedChip {
-        label: if pending == 0 {
-            "unclass".to_string()
-        } else {
-            format!("unclass {pending}")
-        },
-        disabled: pending == 0,
-    }
 }
 
 /// Lays out the visible tree rows, returning each row with the rect it occupies.
@@ -397,7 +415,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
     if content.width == 0 || content.height == 0 {
         return ProjectSidebarGeometry {
             sidebar_tabs: [Rect::default(); 4],
-            filter_tabs: [Rect::default(); 3],
+            filter_tabs: [Rect::default(); 2],
             search: Rect::default(),
             tree: Rect::default(),
             row_hits: Vec::new(),
@@ -405,22 +423,30 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
         };
     }
 
-    let tab_gap = u16::from(content.width >= 5);
+    let tab_gap = u16::from(content.width >= 31);
     let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(3));
-    // Keep the four peer tabs balanced while giving the first tab a little room for its label.
-    // At the normal sidebar width this fits every label; narrower sidebars still retain distinct
-    // clickable rects for each tab.
-    let first_width = tab_inner.saturating_mul(7) / 31;
-    let second_width = tab_inner.saturating_sub(first_width).saturating_mul(8) / 24;
-    let third_width = tab_inner
-        .saturating_sub(first_width.saturating_add(second_width))
-        .saturating_mul(8)
-        / 16;
-    let fourth_width = tab_inner.saturating_sub(
-        first_width
-            .saturating_add(second_width)
-            .saturating_add(third_width),
-    );
+    // Full labels require 28 columns. Drop only the decorative gaps before truncating labels, then
+    // distribute spare width evenly so every tab keeps a generous click target.
+    let (first_width, second_width, third_width, fourth_width) = if tab_inner >= 28 {
+        let extra = tab_inner - 28;
+        let shared = extra / 4;
+        let remainder = extra % 4;
+        (
+            6 + shared + u16::from(remainder > 0),
+            8 + shared + u16::from(remainder > 1),
+            8 + shared + u16::from(remainder > 2),
+            6 + shared,
+        )
+    } else {
+        let first = tab_inner.saturating_mul(6) / 28;
+        let second = tab_inner.saturating_sub(first).saturating_mul(8) / 22;
+        let third = tab_inner
+            .saturating_sub(first.saturating_add(second))
+            .saturating_mul(8)
+            / 14;
+        let fourth = tab_inner.saturating_sub(first.saturating_add(second).saturating_add(third));
+        (first, second, third, fourth)
+    };
     let sidebar_tabs = [
         Rect::new(content.x, content.y, first_width, 1),
         Rect::new(
@@ -444,24 +470,18 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
     ];
     let controls_y = content.y.saturating_add(1);
     // Filter chips paint a background when selected, so two adjacent chips would read as one block.
-    // They reuse the view tabs' gap rule: the gap is dropped only when the sidebar is too narrow to
-    // afford it, and the chips shrink before the separation does.
-    let filter_inner = content.width.saturating_sub(tab_gap.saturating_mul(2));
+    // Keep their own gap while the sidebar can still fit both labels; top tabs use a separate rule
+    // because four full labels need considerably more width.
+    let filter_gap = u16::from(content.width >= 12);
+    let filter_inner = content.width.saturating_sub(filter_gap);
     let first_width = filter_inner.min(5);
     let second_width = filter_inner.saturating_sub(first_width).min(6);
-    let third_width = filter_inner.saturating_sub(first_width.saturating_add(second_width));
     let filter_tabs = [
         Rect::new(content.x, controls_y, first_width, 1),
         Rect::new(
-            content.x + first_width + tab_gap,
+            content.x + first_width + filter_gap,
             controls_y,
             second_width,
-            1,
-        ),
-        Rect::new(
-            content.x + first_width + tab_gap + second_width + tab_gap,
-            controls_y,
-            third_width,
             1,
         ),
     ];
@@ -506,7 +526,17 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 }
 
 pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 4]) {
-    let labels = ["Spaces", "Sessions", "Projects", "Topics"];
+    if let (Some(first), Some(last)) = (
+        tabs.iter().find(|rect| rect.width > 0),
+        tabs.iter().rev().find(|rect| rect.width > 0),
+    ) {
+        frame.render_widget(
+            Paragraph::new("").style(Style::default().bg(app.palette.panel_bg)),
+            Rect::new(first.x, first.y, last.right().saturating_sub(first.x), 1),
+        );
+    }
+
+    let labels = ["Agents", "Sessions", "Projects", "Topics"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 {
             continue;
@@ -667,28 +697,16 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
     }
     render_sidebar_tabs(app, frame, geometry.sidebar_tabs);
 
-    let filters = [
-        (ProjectFilter::All, "all".to_string(), false),
-        (ProjectFilter::Live, "live".to_string(), false),
-        {
-            let chip = unclassified_chip(app);
-            (ProjectFilter::Unclassified, chip.label, chip.disabled)
-        },
-    ];
-    for ((filter, label, disabled), rect) in filters.into_iter().zip(geometry.filter_tabs) {
+    let filters = [(ProjectFilter::All, "all"), (ProjectFilter::Open, "open")];
+    for ((filter, label), rect) in filters.into_iter().zip(geometry.filter_tabs) {
         if rect.width == 0 {
             continue;
         }
-        let style = if disabled {
-            // `overlay0` + DIM, never `surface_dim`: that slot is a background and sits ~1.1:1
-            // against `panel_bg`, so using it as a foreground renders the chip unreadable.
-            Style::default()
-                .fg(app.palette.overlay0)
-                .add_modifier(Modifier::DIM)
-        } else if app.projects.filter == filter {
+        let style = if app.projects.filter == filter {
             Style::default()
                 .fg(app.palette.text)
                 .bg(app.palette.surface1)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(app.palette.overlay0)
         };
@@ -707,7 +725,13 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                 },
             )
         } else if app.projects.query.is_empty() {
-            (" / ", "search groups, sessions, agents")
+            let placeholder = match app.sidebar_view {
+                crate::app::state::SidebarView::Sessions => "search sessions, agents, paths",
+                crate::app::state::SidebarView::Projects => "search projects, sessions, agents",
+                crate::app::state::SidebarView::Clusters => "search topics, sessions, agents",
+                crate::app::state::SidebarView::SpacesAgents => "search sessions",
+            };
+            (" / ", placeholder)
         } else {
             (" / ", app.projects.query.as_str())
         };
@@ -789,11 +813,6 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                 // with the same words without one hiding the other.
                 previous_session_text = None;
                 let marker = if *collapsed { "▸" } else { "▾" };
-                let badge = if *kind == ProjectKind::Unclassified {
-                    " ?"
-                } else {
-                    ""
-                };
                 Line::from(vec![
                     Span::styled(
                         format!("{marker} "),
@@ -806,7 +825,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!(" {session_count}{badge}"),
+                        format!(" {session_count}"),
                         Style::default().fg(app.palette.overlay0),
                     ),
                 ])
@@ -1274,10 +1293,10 @@ mod tests {
     fn filters_are_one_row_and_share_geometry_with_hit_testing() {
         let mut state = AppState::test_new();
         state.projects.snapshot = snapshot();
-        let geometry = project_sidebar_geometry(&state, Rect::new(0, 0, 30, 12));
+        let geometry = project_sidebar_geometry(&state, Rect::new(0, 0, 40, 12));
         assert!(geometry.sidebar_tabs.iter().all(|rect| rect.height == 1));
         assert_eq!(geometry.sidebar_tabs[0].y, geometry.filter_tabs[0].y - 1);
-        assert_eq!(geometry.sidebar_tabs[3].right(), 29);
+        assert_eq!(geometry.sidebar_tabs[3].right(), 39);
         assert!(
             geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
             "Sessions/Projects/Topics tabs must not abut"
@@ -1285,14 +1304,10 @@ mod tests {
         assert!(geometry.filter_tabs.iter().all(|rect| rect.height == 1));
         assert!(
             geometry.filter_tabs[1].x > geometry.filter_tabs[0].right(),
-            "all/live/unclass chips paint backgrounds and must not abut"
+            "all/open chips paint backgrounds and must not abut"
         );
         assert!(
-            geometry.filter_tabs[2].x > geometry.filter_tabs[1].right(),
-            "all/live/unclass chips paint backgrounds and must not abut"
-        );
-        assert!(
-            geometry.filter_tabs[2].right() <= geometry.sidebar_tabs[3].right(),
+            geometry.filter_tabs[1].right() <= geometry.sidebar_tabs[3].right(),
             "filter chips must stay inside the sidebar content column"
         );
         assert_eq!(geometry.row_hits.len(), 2);
@@ -1306,6 +1321,33 @@ mod tests {
         let text = rendered_text(&state, Rect::new(0, 0, 60, 8));
         assert!(text.contains("Topics"));
         assert!(!text.contains("Clusters"));
+    }
+
+    #[test]
+    fn top_level_tabs_clear_the_spaces_heading_under_narrow_layouts() {
+        let state = AppState::test_new();
+        let area = Rect::new(0, 0, 30, 4);
+        let tabs = project_sidebar_geometry(&state, area).sidebar_tabs;
+        let backend = ratatui::backend::TestBackend::new(area.width, area.height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new(" spaces"), Rect::new(0, 0, 29, 1));
+                render_sidebar_tabs(&state, frame, tabs);
+            })
+            .expect("draw tabs");
+        let first_row = (0..29)
+            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
+            .collect::<String>();
+
+        assert!(
+            first_row.contains("Agents"),
+            "first tab should name the agent view"
+        );
+        assert!(
+            !first_row.to_lowercase().contains("spaces"),
+            "the underlying section title must not bleed through: {first_row}"
+        );
     }
 
     #[test]
@@ -1510,7 +1552,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_tab_applies_live_unclassified_and_search_filters() {
+    fn sessions_tab_applies_open_and_search_filters() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Sessions;
         let mut snapshot = snapshot();
@@ -1520,15 +1562,10 @@ mod tests {
         snapshot.projects[0].sessions.push(historical);
         state.projects.snapshot = snapshot;
 
-        state.projects.filter = ProjectFilter::Live;
+        state.projects.filter = ProjectFilter::Open;
         assert!(project_tree_rows(&state)
             .iter()
             .all(|row| { matches!(row, ProjectTreeRow::Session(session) if session.live) }));
-
-        state.projects.filter = ProjectFilter::Unclassified;
-        assert!(project_tree_rows(&state).iter().all(|row| {
-            matches!(row, ProjectTreeRow::Session(session) if session.topic_label.is_none())
-        }));
 
         state.projects.filter = ProjectFilter::All;
         state.projects.query = "historical".into();
@@ -1536,6 +1573,90 @@ mod tests {
         assert!(
             matches!(&rows[..], [ProjectTreeRow::Session(session)] if session.title == "Historical topic")
         );
+    }
+
+    #[test]
+    fn automation_search_is_case_insensitive_and_matches_multiple_terms() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        let mut snapshot = snapshot();
+        snapshot.projects[0].sessions.clear();
+        snapshot.projects[0].automation = vec![AutomationTemplateSummary {
+            representative_session_key: "automation-search".into(),
+            backend: "Codex".into(),
+            title: "Daily Backup".into(),
+            count: 1,
+            last_activity_at: 3,
+        }];
+        state.projects.snapshot = snapshot;
+        state.projects.query = "BACKUP codex".into();
+
+        let rows = project_tree_rows(&state);
+
+        assert!(rows
+            .iter()
+            .any(|row| matches!(row, ProjectTreeRow::Automation(template) if template.representative_session_key == "automation-search")));
+    }
+
+    #[test]
+    fn sessions_and_projects_include_topic_only_sessions_without_an_internal_parent() {
+        let mut state = AppState::test_new();
+        let mut snapshot = snapshot();
+        let mut topic = topic_with_sessions("topic-only", "Recovered topic", 1);
+        topic.sessions[0].stable_key = "hidden-runtime".into();
+        topic.sessions[0].title = "Fresh runtime session".into();
+        snapshot.projects.clear();
+        snapshot.topics = vec![topic];
+        state.projects.snapshot = snapshot;
+
+        state.sidebar_view = crate::app::state::SidebarView::Sessions;
+        assert!(matches!(
+            &project_tree_rows(&state)[..],
+            [ProjectTreeRow::Session(session)] if session.stable_key == "hidden-runtime"
+        ));
+
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        assert!(matches!(
+            &project_tree_rows(&state)[..],
+            [ProjectTreeRow::Session(session)] if session.stable_key == "hidden-runtime"
+        ));
+    }
+
+    #[test]
+    fn project_groups_and_parentless_sessions_share_latest_activity_order() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        let mut snapshot = snapshot();
+        snapshot.projects[0].sessions[0].last_activity_at = 10;
+
+        let mut parentless = snapshot.projects[0].clone();
+        parentless.canonical_key = "holding".into();
+        parentless.kind = ProjectKind::Unclassified;
+        parentless.sessions[0].stable_key = "parentless".into();
+        parentless.sessions[0].last_activity_at = 20;
+
+        let mut recent = snapshot.projects[0].clone();
+        recent.canonical_key = "recent".into();
+        recent.display_name = "recent project".into();
+        recent.sessions[0].stable_key = "recent-session".into();
+        recent.sessions[0].last_activity_at = 30;
+        snapshot.projects.push(parentless);
+        snapshot.projects.push(recent);
+        state.projects.snapshot = snapshot;
+
+        let rows = project_tree_rows(&state);
+        assert!(matches!(
+            &rows[0],
+            ProjectTreeRow::Project { project_key, .. } if project_key == "recent"
+        ));
+        assert!(matches!(
+            &rows[2],
+            ProjectTreeRow::Session(session) if session.stable_key == "parentless"
+        ));
+        assert!(matches!(
+            &rows[3],
+            ProjectTreeRow::Project { project_key, .. } if project_key == "p1"
+        ));
     }
 
     /// Builds a state whose single session is genuinely mapped to the focused pane, so `Open` is
@@ -2458,38 +2579,20 @@ mod tests {
     }
 
     #[test]
-    fn locking_last_unclassified_project_zeroes_chip_count_and_leaves_no_pseudo_node() {
+    fn unclassified_sessions_render_without_an_internal_parent_node() {
         let mut state = AppState::test_new();
         let mut snapshot = snapshot();
         snapshot.projects[0].kind = ProjectKind::Unclassified;
+        snapshot.projects[0].display_name = "Unclassified".into();
         state.projects.snapshot = snapshot;
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
 
-        assert_eq!(unclassified_pending_count(&state), 1);
-        let chip = unclassified_chip(&state);
-        assert_eq!(chip.label, "unclass 1");
-        assert!(!chip.disabled);
-        state.projects.filter = ProjectFilter::Unclassified;
-        assert_eq!(project_tree_rows(&state).len(), 2);
-
-        // Moving the last pending session to a real Project and locking it clears the queue.
-        state.projects.snapshot.projects[0].kind = ProjectKind::Cwd;
-
-        assert_eq!(unclassified_pending_count(&state), 0);
-        let chip = unclassified_chip(&state);
-        assert_eq!(chip.label, "unclass");
-        assert!(
-            chip.disabled,
-            "chip must be disabled once nothing is pending"
-        );
         let rows = project_tree_rows(&state);
-        assert_eq!(
-            rows[0],
-            ProjectTreeRow::Empty("No sessions in this filter".to_string())
+        assert!(
+            matches!(&rows[..], [ProjectTreeRow::Session(session)] if session.stable_key == "s1")
         );
-        assert!(!rows.iter().any(|row| matches!(
-            row,
-            ProjectTreeRow::Project { .. } | ProjectTreeRow::Session(_)
-        )));
+        let text = rendered_text(&state, Rect::new(0, 0, 40, 10));
+        assert!(!text.to_lowercase().contains("unclass"));
     }
 
     #[test]

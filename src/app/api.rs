@@ -61,7 +61,14 @@ impl App {
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
         let project_runtime_sync = match &ev {
             AppEvent::AgentSessionReported { pane_id, .. }
-            | AppEvent::HookStateReported { pane_id, .. } => Some((*pane_id, false)),
+            | AppEvent::HookStateReported { pane_id, .. }
+            | AppEvent::HookAuthorityCleared { pane_id, .. }
+            | AppEvent::HookAgentReleased { pane_id, .. } => Some((*pane_id, false)),
+            AppEvent::StateChanged {
+                pane_id,
+                process_exited: true,
+                ..
+            } => Some((*pane_id, false)),
             AppEvent::TerminalCwdReported { pane_id, .. } => Some((*pane_id, true)),
             _ => None,
         };
@@ -288,6 +295,17 @@ impl App {
             self.render_notify.notify_one();
         }
         for update in &pane_updates {
+            if update.previous_state != update.state
+                || update.previous_agent_label != update.agent_label
+            {
+                if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
+                    &self.terminal_runtimes,
+                    update.ws_idx,
+                    update.pane_id,
+                ) {
+                    runtime.mark_activity_at(Instant::now());
+                }
+            }
             self.flush_pending_catalog_submission(update);
             self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
@@ -538,6 +556,20 @@ impl App {
         } else {
             RuntimeExitAction::ClosePane
         }
+    }
+
+    pub(crate) fn publish_reaped_agent_process_exit(&mut self, pane_id: crate::layout::PaneId) {
+        let previous_toast = self.state.toast.clone();
+        if let Some(update) = self.state.publish_pane_process_exit_if_agent(pane_id) {
+            self.sync_full_lifecycle_authority_detection_pauses();
+            self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+            self.emit_pane_state_update(&update);
+            self.emit_terminal_or_system_agent_notifications(std::slice::from_ref(&update));
+        }
+        self.sync_project_runtime_for_pane(pane_id, false);
+        self.pending_catalog_submissions.remove(&pane_id);
+        self.sync_agent_metadata_deadline();
+        self.sync_toast_deadline(previous_toast);
     }
 
     fn should_respawn_shell_after_agent_exit(

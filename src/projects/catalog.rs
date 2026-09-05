@@ -229,6 +229,7 @@ impl ProjectCatalog {
         catalog.exclude_ephemeral_agent_assignments()?;
         catalog.reconcile_stale_semantic_assignments()?;
         catalog.purge_junk_semantic_assignments()?;
+        catalog.backfill_local_topic_assignments()?;
         Ok(catalog)
     }
 
@@ -856,6 +857,56 @@ impl ProjectCatalog {
         Ok(())
     }
 
+    /// Gives every interactive session a deterministic Topic before any model-backed worker runs.
+    ///
+    /// Older Catalogs can contain sessions that never entered Topics because they were thin, had a
+    /// fallback title, or arrived after the semantic worker went idle. Backfilling the missing rows
+    /// on open makes the Topics index complete without making provider availability a UI concern.
+    fn backfill_local_topic_assignments(&mut self) -> Result<(), CatalogError> {
+        if !table_exists(&self.connection, "assignments")?
+            || !table_exists(&self.connection, "semantic_assignments")?
+            || !table_has_column(&self.connection, "sessions", "session_class")?
+            || !table_has_column(&self.connection, "sessions", "custom_title")?
+            || !table_has_column(&self.connection, "sessions", "generated_title")?
+        {
+            return Ok(());
+        }
+        let keys = {
+            let mut statement = self.connection.prepare(
+                "SELECT s.stable_key, s.last_activity_at
+                 FROM sessions s
+                 JOIN assignments a ON a.session_key = s.stable_key
+                 LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
+                 WHERE s.session_class = 'interactive'
+                   AND a.locked = 0
+                   AND sa.session_key IS NULL
+                 ORDER BY s.last_activity_at DESC, s.stable_key ASC",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut changed = false;
+        for (stable_key, last_activity_at) in keys {
+            changed |= ensure_local_topic_assignment(&transaction, &stable_key, last_activity_at)?;
+        }
+        if changed {
+            bump_revision(&transaction)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn revision(&self) -> Result<u64, CatalogError> {
         let value: i64 = self.connection.query_row(
             "SELECT value FROM catalog_meta WHERE key = 'revision'",
@@ -889,6 +940,11 @@ impl ProjectCatalog {
             )?;
         }
         reconcile_semantic_assignment(&transaction, &candidate.identity.stable_key)?;
+        ensure_local_topic_assignment(
+            &transaction,
+            &candidate.identity.stable_key,
+            candidate.observed_at,
+        )?;
         upsert_source(&transaction, &candidate)?;
         upsert_aliases(&transaction, &candidate)?;
         upsert_runtime(&transaction, &candidate)?;
@@ -942,6 +998,11 @@ impl ProjectCatalog {
                 )?;
             }
             reconcile_semantic_assignment(&transaction, &candidate.identity.stable_key)?;
+            ensure_local_topic_assignment(
+                &transaction,
+                &candidate.identity.stable_key,
+                candidate.observed_at,
+            )?;
             upsert_source(&transaction, &candidate)?;
             upsert_aliases(&transaction, &candidate)?;
             upsert_runtime(&transaction, &candidate)?;
@@ -1118,7 +1179,9 @@ impl ProjectCatalog {
                             session.cwd.as_deref(),
                             &session.backend,
                         );
-                        if session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()) {
+                        if backend.as_deref() == Some(super::semantic::LOCAL_PENDING_BACKEND)
+                            || session.stored_fingerprint.as_deref() != Some(fingerprint.as_str())
+                        {
                             return None;
                         }
                         Some(InheritedSemanticTopic {
@@ -1130,14 +1193,15 @@ impl ProjectCatalog {
                     });
             let mut stale = group
                 .into_iter()
-                .filter_map(|(session, _, _, _, _)| {
+                .filter_map(|(session, _, _, backend, _)| {
                     let fingerprint = super::semantic_fingerprint(
                         &session.title,
                         session.cwd.as_deref(),
                         &session.backend,
                     );
-                    (session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()))
-                        .then_some((session, fingerprint))
+                    (backend.as_deref() == Some(super::semantic::LOCAL_PENDING_BACKEND)
+                        || session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()))
+                    .then_some((session, fingerprint))
                 })
                 .take(limit.saturating_sub(consumed))
                 .collect::<Vec<_>>();
@@ -2381,6 +2445,71 @@ fn reconcile_semantic_assignment(
         return Ok(deleted > 0);
     }
     Ok(false)
+}
+
+/// Creates the first Topic assignment locally and synchronously.
+///
+/// The marker in `backend_used` deliberately keeps this row in the semantic pending queue. A later
+/// classifier pass can refine it, but until then Sessions and Topics still have a stable parent and
+/// never depend on an LLM or its polling interval for basic visibility.
+fn ensure_local_topic_assignment(
+    transaction: &Transaction<'_>,
+    stable_key: &str,
+    observed_at: i64,
+) -> Result<bool, CatalogError> {
+    let metadata = transaction
+        .query_row(
+            "SELECT s.session_class, COALESCE(a.locked, 0),
+                    COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
+                    s.cwd, s.backend
+             FROM sessions s
+             JOIN assignments a ON a.session_key = s.stable_key
+             LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
+             WHERE s.stable_key = ?1 AND sa.session_key IS NULL",
+            [stable_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((session_class, locked, title, cwd, backend)) = metadata else {
+        return Ok(false);
+    };
+    if session_class != SessionClass::Interactive.as_str() || locked != 0 {
+        return Ok(false);
+    }
+
+    let topic_label =
+        super::semantic::local_topic_label_for_metadata(&title, cwd.as_deref(), &backend);
+    let topic_key = super::semantic_topic_key(&topic_label);
+    let fingerprint = super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
+    let classification = ProjectClassification::new(
+        ProjectKind::Semantic,
+        topic_key.clone(),
+        topic_label.clone(),
+        "semantic".to_string(),
+    );
+    upsert_project(transaction, &classification, observed_at)?;
+    transaction.execute(
+        "INSERT INTO semantic_assignments(session_key, topic_key, topic_label, fingerprint,
+                                           backend_used, model_used, classified_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+        params![
+            stable_key,
+            topic_key,
+            topic_label,
+            fingerprint,
+            super::semantic::LOCAL_PENDING_BACKEND,
+            observed_at,
+        ],
+    )?;
+    Ok(true)
 }
 
 fn update_string_field(
@@ -4068,7 +4197,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_titles_leave_semantic_queue_and_unlocked_topics() {
+    fn fallback_titles_keep_a_deterministic_local_topic() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let mut item = candidate("grok", "fallback-semantic", 10);
         item.title = None;
@@ -4078,36 +4207,61 @@ mod tests {
             known: true,
         };
         catalog.upsert_candidate(&item).expect("fallback session");
-        catalog
-            .apply_semantic_batch(
-                &[SemanticAssignment {
-                    session_key: item.identity.stable_key.clone(),
-                    topic_key: super::super::semantic_topic_key("Grok 空会话"),
-                    topic_label: "Grok 空会话".to_string(),
-                    fingerprint: "fp".to_string(),
-                    backend_used: "test".to_string(),
-                    model_used: None,
-                }],
-                20,
-            )
-            .expect("seed junk topic");
 
         let ProjectCatalog { connection, .. } = catalog;
         let repaired =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("purge fallback");
-        let leftover: i64 = repaired
+            ProjectCatalog::initialize(connection, false, None, 20).expect("reopen fallback");
+        let assignment: (String, String) = repaired
             .connection
             .query_row(
-                "SELECT COUNT(*) FROM semantic_assignments WHERE session_key = ?1",
+                "SELECT topic_label, backend_used FROM semantic_assignments WHERE session_key = ?1",
                 [&item.identity.stable_key],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .expect("semantic leftover");
-        assert_eq!(leftover, 0);
+            .expect("local semantic assignment");
+        assert_eq!(assignment.0, "grok");
+        assert_eq!(assignment.1, super::super::semantic::LOCAL_PENDING_BACKEND);
         assert!(repaired
             .pending_semantic_sessions(10)
             .expect("pending")
             .is_empty());
+    }
+
+    #[test]
+    fn new_interactive_session_gets_an_immediate_refinable_local_topic() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut item = candidate("codex", "fresh-topic", 10);
+        item.weight = super::super::adapters::SessionWeight {
+            turns: 4,
+            chars: 400,
+            known: true,
+        };
+
+        catalog.upsert_candidate(&item).expect("session");
+
+        let snapshot = catalog.snapshot(50).expect("snapshot");
+        assert!(snapshot
+            .topics
+            .iter()
+            .flat_map(|topic| &topic.sessions)
+            .any(|session| session.stable_key == item.identity.stable_key));
+        let backend_used: String = catalog
+            .connection
+            .query_row(
+                "SELECT backend_used FROM semantic_assignments WHERE session_key = ?1",
+                [&item.identity.stable_key],
+                |row| row.get(0),
+            )
+            .expect("local backend marker");
+        assert_eq!(backend_used, super::super::semantic::LOCAL_PENDING_BACKEND);
+        assert_eq!(
+            catalog
+                .pending_semantic_sessions(10)
+                .expect("refinement queue")
+                .len(),
+            1,
+            "a synchronous local Topic must remain eligible for later refinement"
+        );
     }
 
     #[test]

@@ -247,10 +247,9 @@ impl AppState {
         let divider_col = sidebar.x + sidebar.width.saturating_sub(1);
         sidebar.width > 0
             && !on_toggle
-            // A one-cell terminal divider is too easy to miss with a mouse. Treat the adjacent
-            // cell on either side as the same resize handle; higher-priority sidebar controls
-            // still win before this fallback is reached.
-            && col.abs_diff(divider_col) <= 1
+            // A one-cell divider is too easy to miss with a mouse. Extend its resize handle one
+            // cell into the sidebar, without stealing the terminal's first content column.
+            && (col == divider_col || col.checked_add(1) == Some(divider_col))
             && row >= sidebar.y
             && row < sidebar.y + sidebar.height
     }
@@ -1599,13 +1598,13 @@ mod tests {
     }
 
     #[test]
-    fn dragging_from_the_cell_beside_sidebar_divider_starts_resize() {
+    fn dragging_from_the_sidebar_cell_beside_divider_starts_resize() {
         let mut app = app_for_mouse_test();
         let divider_col = app.state.view.sidebar_rect.x + app.state.view.sidebar_rect.width - 1;
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            divider_col + 1,
+            divider_col - 1,
             8,
         ));
         app.handle_mouse(mouse(
