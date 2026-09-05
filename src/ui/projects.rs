@@ -11,7 +11,16 @@ use ratatui::{
 use crate::app::state::{
     AppState, ProjectFilter, ProjectRowHitArea, ProjectSessionActivation, ProjectTreeAction,
 };
-use crate::projects::{AutomationTemplateSummary, IndexedSessionSummary, ProjectKind};
+use crate::projects::{
+    AutomationTemplateSummary, IndexedSessionSummary, ProjectKind, ProjectSummary,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ProjectTreeActivity {
+    Inactive,
+    Live,
+    Current,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProjectTreeRow {
@@ -21,6 +30,7 @@ pub(crate) enum ProjectTreeRow {
         session_count: usize,
         collapsed: bool,
         kind: ProjectKind,
+        activity: ProjectTreeActivity,
     },
     Session(IndexedSessionSummary),
     Automation(AutomationTemplateSummary),
@@ -153,6 +163,25 @@ fn session_matches_query(session: &IndexedSessionSummary, query: &str) -> bool {
         )
 }
 
+fn session_tree_activity(app: &AppState, session: &IndexedSessionSummary) -> ProjectTreeActivity {
+    if is_current_session(app, session) {
+        ProjectTreeActivity::Current
+    } else if session.live {
+        ProjectTreeActivity::Live
+    } else {
+        ProjectTreeActivity::Inactive
+    }
+}
+
+fn project_tree_activity(app: &AppState, project: &ProjectSummary) -> ProjectTreeActivity {
+    project
+        .sessions
+        .iter()
+        .map(|session| session_tree_activity(app, session))
+        .max()
+        .unwrap_or(ProjectTreeActivity::Inactive)
+}
+
 pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     if let Some(category) = app.projects.snapshot.diagnostic_category.as_ref() {
         return vec![ProjectTreeRow::Diagnostic(format!(
@@ -227,6 +256,10 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     }
 
     top_level.sort_by(|left, right| {
+        let activity = |item: &TopLevelItem<'_>| match item {
+            TopLevelItem::Session(session) => session_tree_activity(app, session),
+            TopLevelItem::Project(project) => project_tree_activity(app, project),
+        };
         let latest = |item: &TopLevelItem<'_>| match item {
             TopLevelItem::Session(session) => session.last_activity_at,
             TopLevelItem::Project(project) => project
@@ -236,7 +269,23 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
                 .max()
                 .unwrap_or(i64::MIN),
         };
-        latest(right).cmp(&latest(left))
+        activity(right)
+            .cmp(&activity(left))
+            .then_with(|| latest(right).cmp(&latest(left)))
+            .then_with(|| match (left, right) {
+                (TopLevelItem::Session(left), TopLevelItem::Session(right)) => {
+                    left.stable_key.cmp(&right.stable_key)
+                }
+                (TopLevelItem::Project(left), TopLevelItem::Project(right)) => {
+                    left.canonical_key.cmp(&right.canonical_key)
+                }
+                (TopLevelItem::Session(left), TopLevelItem::Project(right)) => {
+                    left.stable_key.cmp(&right.canonical_key)
+                }
+                (TopLevelItem::Project(left), TopLevelItem::Session(right)) => {
+                    left.canonical_key.cmp(&right.stable_key)
+                }
+            })
     });
 
     for item in top_level {
@@ -276,11 +325,11 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             continue;
         }
 
+        let activity = project_tree_activity(app, project);
+        // Running/current groups are part of the user's working set, so expose their sessions by
+        // default. An explicit fold remains authoritative and search still expands temporarily.
         let default_collapsed = grouping == crate::app::state::ProjectGrouping::Topics
-            && !project
-                .sessions
-                .iter()
-                .any(|session| is_current_session(app, session));
+            && activity == ProjectTreeActivity::Inactive;
         let collapsed = query.is_empty()
             && (app.collapsed_project_keys.contains(&project.canonical_key)
                 || (!app.expanded_project_keys.contains(&project.canonical_key)
@@ -293,6 +342,7 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             }),
             collapsed,
             kind: project.kind,
+            activity,
         });
         if !collapsed {
             let collapse_thin = query.is_empty()
@@ -785,6 +835,10 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         let cursor = app.projects.selected_row == absolute_idx;
         let current =
             matches!(row, ProjectTreeRow::Session(session) if is_current_session(app, session));
+        let project_activity = match row {
+            ProjectTreeRow::Project { activity, .. } => *activity,
+            _ => ProjectTreeActivity::Inactive,
+        };
         // Neither state is gated on `app.mode`. Clicking a session switches the mode away from
         // `Navigate`, so gating here erased the marking exactly when the row became the current
         // one. Current wins the stronger fill because "what am I working in" outranks "where is
@@ -792,13 +846,16 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         //
         // The background has to travel with the text: painting it first and then rendering an
         // unstyled `Paragraph` over the same rect resets every cell the glyphs occupy.
-        let row_style = match (current, cursor) {
-            (true, _) => Style::default().bg(app.palette.surface1),
-            (false, true) => Style::default().bg(app.palette.surface0),
-            (false, false) => Style::default(),
+        let row_style = match (current, project_activity, cursor) {
+            (true, _, _) => Style::default().bg(app.palette.surface1),
+            (false, ProjectTreeActivity::Current | ProjectTreeActivity::Live, _)
+            | (false, ProjectTreeActivity::Inactive, true) => {
+                Style::default().bg(app.palette.surface0)
+            }
+            (false, ProjectTreeActivity::Inactive, false) => Style::default(),
         };
         // Fill the whole row, including a second line, before any text lands on it.
-        if current || cursor {
+        if current || cursor || project_activity != ProjectTreeActivity::Inactive {
             frame.render_widget(Paragraph::new("").style(row_style), row_rect);
         }
         let line = match row {
@@ -807,28 +864,38 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                 session_count,
                 collapsed,
                 kind,
+                activity,
                 ..
             } => {
                 // A new Project starts a new sibling group; two projects may legitimately open
                 // with the same words without one hiding the other.
                 previous_session_text = None;
                 let marker = if *collapsed { "▸" } else { "▾" };
-                Line::from(vec![
-                    Span::styled(
-                        format!("{marker} "),
-                        Style::default().fg(app.palette.accent),
-                    ),
+                let activity_color = match activity {
+                    ProjectTreeActivity::Current => app.palette.accent,
+                    ProjectTreeActivity::Live => app.palette.green,
+                    ProjectTreeActivity::Inactive => app.palette.overlay0,
+                };
+                let name_color = if *activity == ProjectTreeActivity::Current {
+                    app.palette.text
+                } else {
+                    project_name_color(app, *kind)
+                };
+                let mut spans = vec![
+                    Span::styled(format!("{marker} "), Style::default().fg(activity_color)),
                     Span::styled(
                         display_name.clone(),
-                        Style::default()
-                            .fg(project_name_color(app, *kind))
-                            .add_modifier(Modifier::BOLD),
+                        Style::default().fg(name_color).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!(" {session_count}"),
                         Style::default().fg(app.palette.overlay0),
                     ),
-                ])
+                ];
+                if *activity != ProjectTreeActivity::Inactive {
+                    spans.push(Span::styled(" ●", Style::default().fg(activity_color)));
+                }
+                Line::from(spans)
             }
             ProjectTreeRow::Session(session) => {
                 let label = super::session_label::session_label(
@@ -1422,15 +1489,16 @@ mod tests {
     }
 
     #[test]
-    fn topics_default_to_only_the_current_topic_expanded() {
+    fn current_and_live_topics_are_pinned_and_expanded_before_newer_history() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Clusters;
         let mut snapshot = snapshot();
-        snapshot.topics = vec![
-            topic_with_sessions("topic-latest", "最新主题", 2),
-            topic_with_sessions("topic-current", "当前主题", 2),
-            topic_with_sessions("topic-third", "第三主题", 2),
-        ];
+        let mut newest_history = topic_with_sessions("topic-latest", "最新主题", 2);
+        newest_history.sessions[0].last_activity_at = 30_000;
+        let current = topic_with_sessions("topic-current", "当前主题", 2);
+        let mut live = topic_with_sessions("topic-live", "运行主题", 2);
+        live.sessions[0].live = true;
+        snapshot.topics = vec![newest_history, current, live];
         state.projects.history_session_key = Some("topic-current-session-0".into());
         state.projects.snapshot = snapshot;
 
@@ -1440,23 +1508,60 @@ mod tests {
             &rows[..],
             [
                 ProjectTreeRow::Project {
-                    project_key: first,
-                    collapsed: true,
-                    ..
-                },
-                ProjectTreeRow::Project {
                     project_key: current,
                     collapsed: false,
+                    activity: ProjectTreeActivity::Current,
                     ..
                 },
                 ProjectTreeRow::Session(_),
                 ProjectTreeRow::Session(_),
                 ProjectTreeRow::Project {
-                    project_key: third,
+                    project_key: live,
+                    collapsed: false,
+                    activity: ProjectTreeActivity::Live,
+                    ..
+                },
+                ProjectTreeRow::Session(_),
+                ProjectTreeRow::Session(_),
+                ProjectTreeRow::Project {
+                    project_key: history,
                     collapsed: true,
+                    activity: ProjectTreeActivity::Inactive,
                     ..
                 }
-            ] if first == "topic-latest" && current == "topic-current" && third == "topic-third"
+            ] if current == "topic-current" && live == "topic-live" && history == "topic-latest"
+        ));
+    }
+
+    #[test]
+    fn explicit_collapse_keeps_a_live_topic_folded_while_it_stays_pinned() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Clusters;
+        let mut snapshot = snapshot();
+        let mut live = topic_with_sessions("topic-live", "运行主题", 2);
+        live.sessions[0].live = true;
+        snapshot.topics = vec![topic_with_sessions("topic-history", "历史主题", 2), live];
+        state.projects.snapshot = snapshot;
+        state.collapsed_project_keys.insert("topic-live".into());
+
+        let rows = project_tree_rows(&state);
+
+        assert!(matches!(
+            &rows[..],
+            [
+                ProjectTreeRow::Project {
+                    project_key: live,
+                    collapsed: true,
+                    activity: ProjectTreeActivity::Live,
+                    ..
+                },
+                ProjectTreeRow::Project {
+                    project_key: history,
+                    collapsed: true,
+                    activity: ProjectTreeActivity::Inactive,
+                    ..
+                }
+            ] if live == "topic-live" && history == "topic-history"
         ));
     }
 
@@ -1623,7 +1728,7 @@ mod tests {
     }
 
     #[test]
-    fn project_groups_and_parentless_sessions_share_latest_activity_order() {
+    fn live_project_is_pinned_before_newer_history_and_parentless_sessions() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Projects;
         let mut snapshot = snapshot();
@@ -1634,12 +1739,14 @@ mod tests {
         parentless.kind = ProjectKind::Unclassified;
         parentless.sessions[0].stable_key = "parentless".into();
         parentless.sessions[0].last_activity_at = 20;
+        parentless.sessions[0].live = false;
 
         let mut recent = snapshot.projects[0].clone();
         recent.canonical_key = "recent".into();
         recent.display_name = "recent project".into();
         recent.sessions[0].stable_key = "recent-session".into();
         recent.sessions[0].last_activity_at = 30;
+        recent.sessions[0].live = false;
         snapshot.projects.push(parentless);
         snapshot.projects.push(recent);
         state.projects.snapshot = snapshot;
@@ -1647,15 +1754,19 @@ mod tests {
         let rows = project_tree_rows(&state);
         assert!(matches!(
             &rows[0],
-            ProjectTreeRow::Project { project_key, .. } if project_key == "recent"
+            ProjectTreeRow::Project {
+                project_key,
+                activity: ProjectTreeActivity::Live,
+                ..
+            } if project_key == "p1"
         ));
         assert!(matches!(
             &rows[2],
-            ProjectTreeRow::Session(session) if session.stable_key == "parentless"
+            ProjectTreeRow::Project { project_key, .. } if project_key == "recent"
         ));
         assert!(matches!(
-            &rows[3],
-            ProjectTreeRow::Project { project_key, .. } if project_key == "p1"
+            &rows[4],
+            ProjectTreeRow::Session(session) if session.stable_key == "parentless"
         ));
     }
 
@@ -1684,6 +1795,27 @@ mod tests {
         session.runtime_generation = Some(9);
         state.projects.snapshot = snapshot;
         state
+    }
+
+    #[test]
+    fn parent_of_current_session_uses_current_highlight_and_activity_marker() {
+        let mut state = state_with_open_session();
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        // Keep the keyboard cursor on the child so the parent highlight must come from activity.
+        state.projects.selected_row = 1;
+        let area = Rect::new(0, 0, 40, 12);
+        let tree_top = usize::from(project_sidebar_geometry(&state, area).tree.y);
+        let rows = row_cells(&state, area);
+        let parent = &rows[tree_top];
+
+        assert_eq!(
+            text_cell_background(parent),
+            Some(state.palette.surface0),
+            "the current session's parent must use a contextual fill below the session itself"
+        );
+        assert!(parent
+            .iter()
+            .any(|cell| { cell.symbol == "●" && cell.fg == Some(state.palette.accent) }));
     }
 
     /// One rendered cell, reduced to what the highlight tests care about.
