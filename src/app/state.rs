@@ -937,6 +937,7 @@ pub enum Mode {
     RenameWorkspace,
     RenameTab,
     RenamePane,
+    RenameSession,
     NewLinkedWorktree,
     OpenExistingWorktree,
     ConfirmRemoveWorktree,
@@ -1290,6 +1291,10 @@ pub(crate) struct TabPressState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextMenuKind {
+    Session {
+        session_key: String,
+        title: String,
+    },
     Workspace {
         ws_idx: usize,
     },
@@ -1323,6 +1328,7 @@ pub struct ContextMenuState {
 impl ContextMenuState {
     pub fn items(&self) -> &'static [&'static str] {
         match self.kind {
+            ContextMenuKind::Session { .. } => &["Rename"],
             ContextMenuKind::Workspace { .. } => &["Rename", "Close"],
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
@@ -1532,6 +1538,8 @@ pub struct AppState {
     pub creating_new_tab: bool,
     pub requested_new_tab_name: Option<String>,
     pub rename_pane_target: Option<PaneId>,
+    pub rename_session_target: Option<String>,
+    pub rename_session_error: String,
     pub worktree_create: Option<WorktreeCreateState>,
     pub worktree_open: Option<WorktreeOpenState>,
     pub worktree_remove: Option<WorktreeRemoveState>,
@@ -1905,6 +1913,8 @@ impl AppState {
             creating_new_tab: false,
             requested_new_tab_name: None,
             rename_pane_target: None,
+            rename_session_target: None,
+            rename_session_error: String::new(),
             worktree_create: None,
             worktree_open: None,
             worktree_remove: None,
@@ -2349,6 +2359,7 @@ impl AppState {
         }
         if let Some(menu) = &self.context_menu {
             match menu.kind {
+                ContextMenuKind::Session { .. } => {}
                 ContextMenuKind::Workspace { ws_idx }
                 | ContextMenuKind::GitWorkspace { ws_idx, .. } => {
                     assert_workspace_index(ws_idx, "context menu workspace")

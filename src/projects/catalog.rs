@@ -1247,7 +1247,7 @@ impl ProjectCatalog {
         Ok(rows)
     }
 
-    /// Sessions whose title has not been generated for the current transcript envelope.
+    /// Generate a stable name once; only provisional names follow later activity.
     pub(crate) fn pending_title_sessions(
         &self,
         limit: usize,
@@ -1258,13 +1258,11 @@ impl ProjectCatalog {
              FROM sessions
              WHERE session_class = 'interactive'
                AND custom_title IS NULL
+               AND NOT (title_status = 'done' AND COALESCE(generated_title, '') != '')
                AND (title_status IN ('pending', 'failed')
                     OR title_input_fingerprint IS NULL
                     OR title_generated_at IS NULL
-                    -- A session can keep receiving messages after its title was generated.
-                    -- Re-read its transcript so the title (and therefore its semantic topic)
-                    -- reflects the work that is actually current.
-                    OR last_activity_at > title_generated_at)
+                    OR (title_status = 'provisional' AND last_activity_at > title_generated_at))
              ORDER BY last_activity_at DESC, stable_key ASC
              LIMIT ?1",
         )?;
@@ -1283,6 +1281,34 @@ impl ProjectCatalog {
             .collect::<Result<Vec<_>, _>>()
             .map_err(CatalogError::from);
         rows
+    }
+
+    pub(crate) fn rename_session(&mut self, key: &str, title: &str) -> Result<u64, CatalogError> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if transaction.execute(
+            "UPDATE sessions SET custom_title = ?2, title_status = 'done' WHERE stable_key = ?1",
+            params![key, title],
+        )? == 0
+        {
+            return Err(CatalogError::NotFound);
+        }
+        // Renaming is presentation intent, not a request to move an existing Topic.
+        transaction.execute(
+            "UPDATE semantic_assignments SET fingerprint = ?2 WHERE session_key = ?1",
+            params![key, {
+                let (cwd, backend): (Option<String>, String) = transaction.query_row(
+                    "SELECT cwd, backend FROM sessions WHERE stable_key = ?1",
+                    [key],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                super::semantic_fingerprint(title, cwd.as_deref(), &backend)
+            }],
+        )?;
+        let revision = bump_revision(&transaction)?;
+        transaction.commit()?;
+        Ok(revision)
     }
 
     /// Marks in-flight title work as pending so an interrupted process can retry it safely.
@@ -2561,7 +2587,8 @@ fn update_string_field(
     if existing.0 != candidate.value && matches!(field_name, "title" | "cwd" | "transcript_ref") {
         transaction.execute(
             "UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL
-             WHERE stable_key = ?1 AND custom_title IS NULL",
+             WHERE stable_key = ?1 AND custom_title IS NULL
+               AND NOT (title_status = 'done' AND COALESCE(generated_title, '') != '')",
             [stable_key],
         )?;
     }
@@ -3078,7 +3105,7 @@ mod tests {
     }
 
     #[test]
-    fn title_generation_is_requeued_when_a_session_has_new_activity() {
+    fn completed_title_stays_fixed_after_new_activity() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let session = candidate("pi", "title-refresh", 200);
         let session_key = session.identity.stable_key.clone();
@@ -3099,21 +3126,97 @@ mod tests {
             .expect("title result");
 
         let pending = catalog.pending_title_sessions(10).expect("pending titles");
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].stable_key, session_key);
+        assert!(pending.is_empty());
 
+        let mut refreshed = candidate("pi", "title-refresh", 300);
+        refreshed.title.as_mut().expect("native title").value = "later discussion".into();
         catalog
-            .connection
-            .execute(
-                "UPDATE sessions SET title_generated_at = last_activity_at
-                 WHERE stable_key = ?1",
-                [&session_key],
-            )
-            .expect("mark title current");
+            .upsert_candidate(&refreshed)
+            .expect("refresh metadata");
         assert!(catalog
             .pending_title_sessions(10)
             .expect("pending titles")
             .is_empty());
+    }
+
+    #[test]
+    fn provisional_titles_wait_for_activity_and_manual_names_survive_late_generation() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let session = candidate("pi", "provisional-title", 20);
+        let key = session.identity.stable_key.clone();
+        catalog.upsert_candidate(&session).expect("session");
+        let mut update = SessionTitleUpdate {
+            stable_key: key.clone(),
+            title: "等待补充具体任务信息".into(),
+            source: "heuristic".into(),
+            status: "provisional".into(),
+            error: None,
+            backend: None,
+            model: None,
+            fingerprint: "initial".into(),
+            generated_at: 30,
+        };
+        catalog
+            .apply_title_batch(&[update.clone()])
+            .expect("placeholder");
+        assert!(catalog
+            .pending_title_sessions(10)
+            .expect("pending")
+            .is_empty());
+        catalog
+            .upsert_candidate(&candidate("pi", "provisional-title", 40))
+            .expect("activity");
+        assert_eq!(
+            catalog.pending_title_sessions(10).expect("pending").len(),
+            1
+        );
+        catalog
+            .claim_title_batch(std::slice::from_ref(&key))
+            .expect("in-flight title");
+        catalog
+            .rename_session(&key, "照片迁移和备份")
+            .expect("manual name");
+        update.title = "a late generated name".into();
+        update.status = "done".into();
+        catalog.apply_title_batch(&[update]).expect("late result");
+        catalog
+            .upsert_candidate(&candidate("pi", "provisional-title", 50))
+            .expect("rescan");
+        let stored: String = catalog.connection.query_row("SELECT COALESCE(custom_title, generated_title, title) FROM sessions WHERE stable_key = ?1", [&key], |row| row.get(0)).expect("effective title");
+        assert_eq!(stored, "照片迁移和备份");
+        let status: String = catalog
+            .connection
+            .query_row(
+                "SELECT title_status FROM sessions WHERE stable_key = ?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .expect("status");
+        assert_eq!(status, "done");
+        assert!(catalog
+            .pending_title_sessions(10)
+            .expect("pending")
+            .is_empty());
+        let (cwd, backend): (Option<String>, String) = catalog
+            .connection
+            .query_row(
+                "SELECT cwd, backend FROM sessions WHERE stable_key = ?1",
+                [&key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("metadata");
+        let stored_fingerprint: String = catalog
+            .connection
+            .query_row(
+                "SELECT fingerprint FROM semantic_assignments WHERE session_key = ?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .expect("topic fingerprint");
+        assert_eq!(
+            stored_fingerprint,
+            super::super::semantic_fingerprint("照片迁移和备份", cwd.as_deref(), &backend)
+        );
     }
 
     #[test]

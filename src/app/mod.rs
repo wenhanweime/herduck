@@ -560,6 +560,8 @@ impl App {
             creating_new_tab: false,
             requested_new_tab_name: None,
             rename_pane_target: None,
+            rename_session_target: None,
+            rename_session_error: String::new(),
             worktree_create: None,
             worktree_open: None,
             worktree_remove: None,
@@ -1792,7 +1794,7 @@ impl App {
             Mode::Copy => {
                 self.handle_copy_mode_key(key);
             }
-            Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane => {
+            Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::RenameSession => {
                 self.handle_rename_key_via_api(key_event);
             }
             Mode::NewLinkedWorktree => {

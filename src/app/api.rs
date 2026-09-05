@@ -1108,6 +1108,18 @@ impl App {
                     Err(error) => responses::encode_error(request.id, error.code, &error.message),
                 };
             }
+            Method::ProjectSessionRename(params) => {
+                return match self
+                    .project_service
+                    .rename_session(params.session_key, params.title)
+                {
+                    Ok(revision) => responses::encode_success(
+                        request.id,
+                        ResponseResult::ProjectSessionRenamed { revision },
+                    ),
+                    Err(error) => responses::encode_error(request.id, error.code, &error.message),
+                };
+            }
             Method::ProjectSessionUnlock(params) => {
                 let observed_at = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -2434,6 +2446,35 @@ mod tests {
         assert_eq!(
             page_response["result"]["page"]["sessions"][0]["stable_key"],
             session_key
+        );
+
+        app.apply_context_menu_action_via_api(
+            crate::app::state::ContextMenuState {
+                kind: crate::app::state::ContextMenuKind::Session {
+                    session_key: session_key.clone(),
+                    title: "original".into(),
+                },
+                x: 1,
+                y: 1,
+                list: crate::app::state::MenuListState::new(0),
+            },
+            0,
+        );
+        assert_eq!(app.state.mode, crate::app::state::Mode::RenameSession);
+        let enter = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        );
+        app.state.name_input = "  ".into();
+        app.handle_rename_key_via_api(enter);
+        assert_eq!(app.state.mode, crate::app::state::Mode::RenameSession);
+        assert!(!app.state.rename_session_error.is_empty());
+        app.state.name_input = "照片迁移和备份".into();
+        app.handle_rename_key_via_api(enter);
+        assert_ne!(app.state.mode, crate::app::state::Mode::RenameSession);
+        assert_eq!(
+            app.project_service.snapshot().projects[0].sessions[0].title,
+            "照片迁移和备份"
         );
 
         let assign_response = app.handle_api_request(crate::api::schema::Request {

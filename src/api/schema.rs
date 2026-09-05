@@ -73,6 +73,8 @@ pub enum Method {
     ProjectSessionAssign(ProjectSessionAssignParams),
     #[serde(rename = "project.session.unlock")]
     ProjectSessionUnlock(ProjectSessionUnlockParams),
+    #[serde(rename = "project.session.rename")]
+    ProjectSessionRename(ProjectSessionRenameParams),
     #[serde(rename = "workspace.create")]
     WorkspaceCreate(WorkspaceCreateParams),
     #[serde(rename = "workspace.list")]

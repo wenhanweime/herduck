@@ -348,6 +348,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::ProjectSessionsPage(_) => "project.sessions.page",
         Method::ProjectSessionAssign(_) => "project.session.assign",
         Method::ProjectSessionUnlock(_) => "project.session.unlock",
+        Method::ProjectSessionRename(_) => "project.session.rename",
         Method::WorkspaceCreate(_) => "workspace.create",
         Method::WorkspaceList(_) => "workspace.list",
         Method::WorkspaceGet(_) => "workspace.get",

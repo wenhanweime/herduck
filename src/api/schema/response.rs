@@ -58,6 +58,9 @@ pub enum ResponseResult {
     ProjectSessionsPage {
         page: Box<ProjectSessionsPage>,
     },
+    ProjectSessionRenamed {
+        revision: u64,
+    },
     ProjectSessionAssigned {
         revision: u64,
         locked: bool,

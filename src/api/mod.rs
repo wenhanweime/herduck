@@ -27,6 +27,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::ServerReloadAgentManifests(_)
             | Method::ProjectSessionAssign(_)
             | Method::ProjectSessionUnlock(_)
+            | Method::ProjectSessionRename(_)
             | Method::NotificationShow(_)
             | Method::WorkspaceCreate(_)
             | Method::WorkspaceFocus(_)

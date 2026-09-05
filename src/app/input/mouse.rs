@@ -387,7 +387,10 @@ impl AppState {
 
                 if matches!(
                     self.mode,
-                    Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane
+                    Mode::RenameWorkspace
+                        | Mode::RenameTab
+                        | Mode::RenamePane
+                        | Mode::RenameSession
                 ) {
                     let action = self
                         .rename_modal_inner()
@@ -1130,6 +1133,30 @@ impl AppState {
             MouseEventKind::Down(MouseButton::Right) if in_sidebar && !self.sidebar_collapsed => {
                 self.workspace_press = None;
                 self.tab_press = None;
+                if let Some(hit) = self
+                    .view
+                    .project_row_hit_areas
+                    .iter()
+                    .find(|hit| hit.rect.contains((mouse.column, mouse.row).into()))
+                {
+                    let rows = crate::ui::project_tree_rows(self);
+                    if let Some(crate::ui::ProjectTreeRow::Session(session)) =
+                        rows.get(hit.row_index)
+                    {
+                        self.projects.selected_row = hit.row_index;
+                        self.context_menu = Some(ContextMenuState {
+                            kind: ContextMenuKind::Session {
+                                session_key: session.stable_key.clone(),
+                                title: session.title.clone(),
+                            },
+                            x: mouse.column,
+                            y: mouse.row,
+                            list: MenuListState::new(0),
+                        });
+                        self.mode = Mode::ContextMenu;
+                        return None;
+                    }
+                }
                 if self
                     .workspace_list_scrollbar_target_at(mouse.column, mouse.row)
                     .is_some()
@@ -4070,6 +4097,19 @@ mod tests {
             })
             .cloned()
             .expect("session row should be clickable");
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            session_hit.rect.x + 1,
+            session_hit.rect.y,
+        ));
+        assert!(
+            matches!(&app.state.context_menu.as_ref().expect("session menu").kind,
+            ContextMenuKind::Session { session_key, title } if session_key == "hist-1" && title == "fix sidebar click")
+        );
+        assert_eq!(app.state.mode, Mode::ContextMenu);
+        app.state.context_menu = None;
+        app.state.mode = Mode::Navigate;
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),

@@ -310,6 +310,14 @@ pub(super) fn open_rename_workspace(
     state.mode = Mode::RenameWorkspace;
 }
 
+fn open_rename_session(state: &mut AppState, session_key: String, title: String) {
+    state.rename_session_error.clear();
+    state.rename_session_target = Some(session_key);
+    state.name_input = title;
+    state.name_input_replace_on_type = false;
+    state.mode = Mode::RenameSession;
+}
+
 pub(super) fn open_rename_active_tab(state: &mut AppState, replace_on_type: bool) {
     state.creating_new_tab = false;
     state.requested_new_tab_name = None;
@@ -672,6 +680,9 @@ pub(super) fn apply_context_menu_action(
 ) {
     let item = menu.items().get(idx).copied();
     match (menu.kind, item) {
+        (ContextMenuKind::Session { session_key, title }, Some("Rename")) => {
+            open_rename_session(state, session_key, title);
+        }
         (ContextMenuKind::GitWorkspace { ws_idx, .. }, Some("New worktree")) => {
             state.request_new_linked_worktree = Some(ws_idx);
             leave_modal(state);
@@ -916,6 +927,29 @@ impl App {
         };
 
         match self.state.mode {
+            Mode::RenameSession => {
+                if let Some(session_key) = self.state.rename_session_target.clone() {
+                    let response = self.dispatch_runtime_mutation(
+                        "tui.session.rename",
+                        crate::api::schema::Method::ProjectSessionRename(
+                            crate::api::schema::ProjectSessionRenameParams {
+                                session_key,
+                                title: new_name,
+                            },
+                        ),
+                    );
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&response) {
+                        if let Some(error) = value.get("error") {
+                            self.state.rename_session_error = error
+                                .get("message")
+                                .and_then(|message| message.as_str())
+                                .unwrap_or("Could not rename session")
+                                .to_string();
+                            return;
+                        }
+                    }
+                }
+            }
             Mode::RenameWorkspace if !self.state.workspaces.is_empty() && !new_name.is_empty() => {
                 let workspace_id = self.public_workspace_id(self.state.selected);
                 self.runtime_workspace_rename(
@@ -1087,6 +1121,9 @@ impl App {
     pub(crate) fn apply_context_menu_action_via_api(&mut self, menu: ContextMenuState, idx: usize) {
         let item = menu.items().get(idx).copied();
         match (menu.kind, item) {
+            (ContextMenuKind::Session { session_key, title }, Some("Rename")) => {
+                open_rename_session(&mut self.state, session_key, title);
+            }
             (ContextMenuKind::GitWorkspace { ws_idx, .. }, Some("New worktree")) => {
                 self.state.request_new_linked_worktree = Some(ws_idx);
                 leave_modal(&mut self.state);
@@ -1254,6 +1291,8 @@ impl App {
 }
 
 fn cancel_rename_modal(state: &mut AppState) {
+    state.rename_session_target = None;
+    state.rename_session_error.clear();
     state.creating_new_tab = false;
     state.requested_new_tab_name = None;
     state.rename_pane_target = None;

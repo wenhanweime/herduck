@@ -3277,6 +3277,21 @@
           ],
           "type": "object"
         },
+        "ProjectSessionRenameParams": {
+          "properties": {
+            "session_key": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "session_key",
+            "title"
+          ],
+          "type": "object"
+        },
         "ProjectSessionUnlockParams": {
           "properties": {
             "session_key": {
@@ -4345,6 +4360,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/ProjectSessionUnlockParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.session.rename",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ProjectSessionRenameParams"
             }
           },
           "required": [
@@ -8608,6 +8639,24 @@
               "required": [
                 "type",
                 "page"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "project_session_renamed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "revision"
               ],
               "type": "object"
             },

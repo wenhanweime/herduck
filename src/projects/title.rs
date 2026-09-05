@@ -597,6 +597,13 @@ pub(crate) fn run_title_generation_worker(
                 .enumerate()
                 .map(|(offset, session)| envelope_for_session(offset + 1, session))
                 .collect::<Vec<_>>();
+            // A greeting/continuation alone is not enough to establish a permanent name.
+            // Revisit these placeholders only after new activity arrives.
+            let ready_envelopes = envelopes
+                .iter()
+                .filter(|envelope| !envelope.intents.is_empty())
+                .cloned()
+                .collect::<Vec<_>>();
             let fingerprints = chunk
                 .iter()
                 .zip(envelopes.iter())
@@ -612,7 +619,8 @@ pub(crate) fn run_title_generation_worker(
                     )
                 })
                 .collect::<Vec<_>>();
-            let generated = if config.mode == SummaryModeConfig::Local {
+            let generated = if config.mode == SummaryModeConfig::Local || ready_envelopes.is_empty()
+            {
                 None
             } else {
                 title_backends(config).iter().find_map(|backend| {
@@ -626,11 +634,11 @@ pub(crate) fn run_title_generation_worker(
                             .collect()
                     };
                     models.into_iter().find_map(|model| {
-                        let prompt = build_prompt(&envelopes);
+                        let prompt = build_prompt(&ready_envelopes);
                         let output =
                             super::semantic::run_provider(backend, model, &prompt, config.timeout)
                                 .ok()?;
-                        parse_response(&output, &envelopes)
+                        parse_response(&output, &ready_envelopes)
                             .ok()
                             .map(|items| (backend.name.clone(), model.map(str::to_string), items))
                     })
@@ -671,16 +679,43 @@ pub(crate) fn run_title_generation_worker(
                         } else {
                             "heuristic".to_string()
                         },
-                        status: if config.mode == SummaryModeConfig::Local {
+                        status: if envelope.intents.is_empty() {
+                            "provisional".to_string()
+                        } else if config.mode == SummaryModeConfig::Local {
                             "done".to_string()
                         } else {
                             "failed".to_string()
                         },
-                        error: (config.mode != SummaryModeConfig::Local)
-                            .then(|| "all title backends failed".to_string()),
+                        error: (config.mode != SummaryModeConfig::Local
+                            && !envelope.intents.is_empty())
+                        .then(|| "all title backends failed".to_string()),
                         backend: None,
                         model: None,
                         fingerprint: fingerprint.clone(),
+                        generated_at: super::runtime::unix_time_ms(),
+                    });
+                }
+            }
+            for (session, envelope) in chunk.iter().zip(&envelopes) {
+                if envelope.intents.is_empty()
+                    && !updates
+                        .iter()
+                        .any(|update| update.stable_key == session.stable_key)
+                {
+                    updates.push(SessionTitleUpdate {
+                        stable_key: session.stable_key.clone(),
+                        title: fallback_title(envelope),
+                        source: "heuristic".into(),
+                        status: "provisional".into(),
+                        error: None,
+                        backend: None,
+                        model: None,
+                        fingerprint: title_input_fingerprint(
+                            &envelope.backend,
+                            envelope.folder.as_deref(),
+                            &envelope.intents,
+                            envelope.outcome.as_deref(),
+                        ),
                         generated_at: super::runtime::unix_time_ms(),
                     });
                 }

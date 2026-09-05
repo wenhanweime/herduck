@@ -54,6 +54,11 @@ impl ProjectServiceError {
 }
 
 pub(crate) enum ProjectCommand {
+    RenameSession {
+        session_key: String,
+        title: String,
+        reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
+    },
     Upsert {
         candidate: Box<SessionCandidate>,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
@@ -330,6 +335,25 @@ impl ProjectService {
             project_key,
             locked,
             observed_at,
+            reply,
+        })
+    }
+
+    pub(crate) fn rename_session(
+        &self,
+        session_key: String,
+        title: String,
+    ) -> Result<u64, ProjectServiceError> {
+        let title = title.trim().to_string();
+        if title.is_empty() || title.chars().count() > 200 || title.chars().any(char::is_control) {
+            return Err(ProjectServiceError {
+                code: "invalid_title",
+                message: "Title must contain 1–200 characters without control characters".into(),
+            });
+        }
+        self.request(|reply| ProjectCommand::RenameSession {
+            session_key,
+            title,
             reply,
         })
     }
@@ -697,6 +721,13 @@ fn process_command(
             reply,
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.assign_session(&session_key, &project_key, locked, observed_at)
+        }),
+        ProjectCommand::RenameSession {
+            session_key,
+            title,
+            reply,
+        } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
+            catalog.rename_session(&session_key, &title)
         }),
         ProjectCommand::Unlock {
             session_key,
