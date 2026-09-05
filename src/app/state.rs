@@ -1080,6 +1080,7 @@ pub enum AgentPanelSort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     Theme,
+    Titles,
     Sound,
     Toast,
     PaneLabels,
@@ -1090,6 +1091,7 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::Theme,
+        Self::Titles,
         Self::Sound,
         Self::Toast,
         Self::PaneLabels,
@@ -1100,6 +1102,7 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             Self::Theme => "theme",
+            Self::Titles => "titles",
             Self::Sound => "sound",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
@@ -1649,6 +1652,7 @@ pub struct AppState {
     pub palette: Palette,
     /// Currently applied theme name (for settings UI).
     pub theme_name: String,
+    pub title_language: crate::config::TitleLanguage,
     /// Runtime theme configuration used to resolve manual and auto-switch palettes.
     pub theme_runtime: ThemeRuntimeConfig,
     /// Last known foreground host terminal appearance.
@@ -2023,6 +2027,7 @@ impl AppState {
             spinner_tick: 0,
             palette: Palette::catppuccin(),
             theme_name: "catppuccin".to_string(),
+            title_language: crate::config::TitleLanguage::Chinese,
             theme_runtime: ThemeRuntimeConfig {
                 manual_name: "catppuccin".to_string(),
                 dark_name: "catppuccin".to_string(),

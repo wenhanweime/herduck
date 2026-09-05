@@ -549,6 +549,7 @@ pub(crate) fn run_title_generation_worker(
     shutdown: &AtomicBool,
 ) {
     while !shutdown.load(Ordering::Acquire) {
+        let language = service::request_title_language(sender).unwrap_or_default();
         let pending = match service::request_pending_titles(sender, config.max_sessions_per_run) {
             Ok(value) => value,
             Err(error) => {
@@ -567,7 +568,7 @@ pub(crate) fn run_title_generation_worker(
                 category = "title_idle",
                 "No sessions awaiting title generation"
             );
-            std::thread::sleep(config.idle_backfill);
+            wait_for_titles(sender, config.idle_backfill, language, shutdown);
             continue;
         }
         tracing::info!(
@@ -610,11 +611,15 @@ pub(crate) fn run_title_generation_worker(
                 .map(|(session, envelope)| {
                     (
                         session.stable_key.clone(),
-                        title_input_fingerprint(
-                            &envelope.backend,
-                            envelope.folder.as_deref(),
-                            &envelope.intents,
-                            envelope.outcome.as_deref(),
+                        format!(
+                            "language:{}:{}",
+                            language.as_str(),
+                            title_input_fingerprint(
+                                &envelope.backend,
+                                envelope.folder.as_deref(),
+                                &envelope.intents,
+                                envelope.outcome.as_deref(),
+                            )
                         ),
                     )
                 })
@@ -634,12 +639,17 @@ pub(crate) fn run_title_generation_worker(
                             .collect()
                     };
                     models.into_iter().find_map(|model| {
-                        let prompt = build_prompt(&ready_envelopes);
+                        let prompt = build_prompt_for_language(&ready_envelopes, language);
                         let output =
                             super::semantic::run_provider(backend, model, &prompt, config.timeout)
                                 .ok()?;
                         parse_response(&output, &ready_envelopes)
                             .ok()
+                            .filter(|items| {
+                                items
+                                    .iter()
+                                    .all(|(_, title)| title_matches_language(title, language))
+                            })
                             .map(|items| (backend.name.clone(), model.map(str::to_string), items))
                     })
                 })
@@ -673,7 +683,7 @@ pub(crate) fn run_title_generation_worker(
                     let envelope = &envelopes[offset];
                     updates.push(SessionTitleUpdate {
                         stable_key: session.stable_key.clone(),
-                        title: fallback_title(envelope),
+                        title: localized_fallback(envelope, language),
                         source: if config.mode == SummaryModeConfig::Local {
                             "local".to_string()
                         } else {
@@ -704,7 +714,7 @@ pub(crate) fn run_title_generation_worker(
                 {
                     updates.push(SessionTitleUpdate {
                         stable_key: session.stable_key.clone(),
-                        title: fallback_title(envelope),
+                        title: localized_fallback(envelope, language),
                         source: "heuristic".into(),
                         status: "provisional".into(),
                         error: None,
@@ -722,6 +732,11 @@ pub(crate) fn run_title_generation_worker(
             }
         }
         if !updates.is_empty() {
+            // A preference change invalidates work already in flight. Its rows were requeued
+            // by the same Catalog writer that changed the language.
+            if service::request_title_language(sender).ok() != Some(language) {
+                continue;
+            }
             let update_count = updates.len();
             if let Err(error) = service::request_apply_titles(sender, updates) {
                 tracing::warn!(
@@ -737,9 +752,67 @@ pub(crate) fn run_title_generation_worker(
         }
         if !backend_succeeded {
             // Keep failed rows retryable, but do not spin on them while every backend is down.
-            std::thread::sleep(config.idle_backfill);
+            wait_for_titles(sender, config.idle_backfill, language, shutdown);
         }
     }
+}
+
+fn wait_for_titles(
+    sender: &Sender<ProjectCommand>,
+    delay: std::time::Duration,
+    language: crate::config::TitleLanguage,
+    shutdown: &AtomicBool,
+) {
+    let deadline = std::time::Instant::now() + delay;
+    while !shutdown.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
+        std::thread::sleep(
+            std::time::Duration::from_secs(1)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
+        if service::request_title_language(sender).ok() != Some(language) {
+            break;
+        }
+    }
+}
+
+fn build_prompt_for_language(
+    batch: &[TitleEnvelope],
+    language: crate::config::TitleLanguage,
+) -> String {
+    let instruction = match language {
+        crate::config::TitleLanguage::Chinese => "\n语言要求：标题的任务部分必须使用简体中文；产品名、代码标识符可以保留英文。即使 native_title 是英文也必须概括为中文。\n",
+        crate::config::TitleLanguage::English => "\nLanguage requirement: Write the task portion of every title in English, translating Chinese requests. Keep product names unchanged. Preserve the 【subject】task format.\n",
+    };
+    format!("{}{instruction}", build_prompt(batch))
+}
+
+fn title_matches_language(title: &str, language: crate::config::TitleLanguage) -> bool {
+    let task = title
+        .split_once('】')
+        .map(|(_, task)| task)
+        .unwrap_or(title);
+    match language {
+        crate::config::TitleLanguage::Chinese => task.chars().any(is_cjk),
+        crate::config::TitleLanguage::English => {
+            task.chars().any(|c| c.is_ascii_alphabetic()) && !task.chars().any(is_cjk)
+        }
+    }
+}
+
+fn localized_fallback(envelope: &TitleEnvelope, language: crate::config::TitleLanguage) -> String {
+    let title = fallback_title(envelope);
+    if title_matches_language(&title, language) {
+        return title;
+    }
+    let subject = title
+        .split_once('】')
+        .map(|(subject, _)| subject)
+        .unwrap_or("【Grok");
+    let task = match language {
+        crate::config::TitleLanguage::Chinese => "会话标题待生成",
+        crate::config::TitleLanguage::English => "Session title pending",
+    };
+    format!("{subject}】{task}")
 }
 
 /// Removes whole ANSI escape sequences.

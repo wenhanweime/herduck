@@ -55,6 +55,19 @@ impl App {
         }
     }
 
+    pub(super) fn save_title_language(&mut self, language: crate::config::TitleLanguage) {
+        if self.update_config_file("session title language", |content| {
+            crate::config::upsert_section_value(
+                content,
+                "projects.summary",
+                "title_language",
+                &format!("\"{}\"", language.as_str()),
+            )
+        }) {
+            self.apply_config_from_disk(false);
+        }
+    }
+
     pub(super) fn save_sound(&mut self, enabled: bool) {
         if self.update_config_file("sound setting", |content| {
             crate::config::upsert_section_bool(content, "ui.sound", "enabled", enabled)

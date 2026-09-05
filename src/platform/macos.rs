@@ -13,6 +13,66 @@ use super::{
 };
 
 const PROC_PGRP_ONLY: u32 = 2;
+
+/// Kernel-owned file paths, used to associate agents without session hooks with their history.
+pub(crate) fn process_open_files(pid: u32) -> Vec<PathBuf> {
+    #[repr(C)]
+    struct FileInfo {
+        flags: u32,
+        status: u32,
+        offset: i64,
+        kind: i32,
+        guardflags: u32,
+    }
+    #[repr(C)]
+    struct VnodeFilePath {
+        info: FileInfo,
+        path: libc::vnode_info_path,
+    }
+    // Bound both allocation and syscall count even for a process with many descriptors.
+    let mut descriptors: Vec<libc::proc_fdinfo> =
+        (0..1024).map(|_| unsafe { std::mem::zeroed() }).collect();
+    let bytes = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDLISTFDS,
+            0,
+            descriptors.as_mut_ptr().cast(),
+            (descriptors.len() * std::mem::size_of::<libc::proc_fdinfo>()) as i32,
+        )
+    };
+    let count =
+        (bytes.max(0) as usize / std::mem::size_of::<libc::proc_fdinfo>()).min(descriptors.len());
+    descriptors[..count]
+        .iter()
+        .filter(|fd| fd.proc_fdtype == libc::PROX_FDTYPE_VNODE as u32)
+        .filter_map(|fd| {
+            let mut info: VnodeFilePath = unsafe { std::mem::zeroed() };
+            let size = std::mem::size_of::<VnodeFilePath>();
+            let read = unsafe {
+                libc::proc_pidfdinfo(
+                    pid as i32,
+                    fd.proc_fd,
+                    2,
+                    (&mut info as *mut VnodeFilePath).cast(),
+                    size as i32,
+                )
+            };
+            if read != size as i32 {
+                return None;
+            }
+            let bytes: Vec<u8> = info
+                .path
+                .vip_path
+                .iter()
+                .flatten()
+                .take_while(|byte| **byte != 0)
+                .map(|byte| *byte as u8)
+                .collect();
+            (!bytes.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(&bytes)))
+        })
+        .collect()
+}
 const SERVER_NOFILE_LIMIT_TARGET: libc::rlim_t = 8192;
 const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
@@ -1046,6 +1106,16 @@ pub fn process_exists(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_open_files_includes_an_owned_file() {
+        let path = std::env::temp_dir().join(format!("ork3-open-files-{}", std::process::id()));
+        let file = std::fs::File::create(&path).expect("fixture");
+        let expected = std::fs::canonicalize(&path).expect("path");
+        assert!(process_open_files(std::process::id()).contains(&expected));
+        drop(file);
+        std::fs::remove_file(path).expect("cleanup");
+    }
 
     #[test]
     fn nofile_target_raises_low_soft_limit_to_cap_when_hard_is_unlimited() {

@@ -14,6 +14,7 @@ use crate::{
 #[allow(clippy::enum_variant_names)]
 pub(super) enum SettingsAction {
     SaveTheme(String),
+    SaveTitleLanguage(crate::config::TitleLanguage),
     SaveSound(bool),
     SaveToastDelivery(ToastDelivery),
     SaveAgentBorderLabels(bool),
@@ -42,6 +43,7 @@ impl App {
         if let Some(action) = update_settings_state(&mut self.state, key) {
             match action {
                 SettingsAction::SaveTheme(name) => self.save_theme(&name),
+                SettingsAction::SaveTitleLanguage(language) => self.save_title_language(language),
                 SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
                 SettingsAction::SaveToastDelivery(delivery) => self.save_toast_delivery(delivery),
                 SettingsAction::SaveAgentBorderLabels(enabled) => {
@@ -167,12 +169,40 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 }
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                state.settings.section = SettingsSection::Sound;
-                state.settings.list.selected = usize::from(!state.sound_enabled());
+                state.settings.section = SettingsSection::Titles;
+                state.settings.list.selected =
+                    usize::from(state.title_language == crate::config::TitleLanguage::English);
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
                 state.settings.section = SettingsSection::Experiments;
                 state.settings.list.selected = 0;
+            }
+            _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
+                Some(super::modal::ModalAction::Apply) => return apply_settings(state),
+                Some(super::modal::ModalAction::Close) => cancel_settings(state),
+                _ => {}
+            },
+        },
+        SettingsSection::Titles => match key.code {
+            KeyCode::Up | KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('k') => {
+                state.settings.list.selected = 1 - state.settings.list.selected.min(1)
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                return Some(SettingsAction::SaveTitleLanguage(
+                    if state.settings.list.selected == 0 {
+                        crate::config::TitleLanguage::Chinese
+                    } else {
+                        crate::config::TitleLanguage::English
+                    },
+                ))
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                state.settings.section = SettingsSection::Sound;
+                state.settings.list.selected = usize::from(!state.sound_enabled());
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                state.settings.section = SettingsSection::Theme;
+                state.settings.list.selected = current_theme_index(&state.theme_name);
             }
             _ => match super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS) {
                 Some(super::modal::ModalAction::Apply) => return apply_settings(state),
@@ -193,8 +223,9 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = toast_delivery_index(state.toast_delivery());
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                state.settings.section = SettingsSection::Theme;
-                state.settings.list.selected = current_theme_index(&state.theme_name);
+                state.settings.section = SettingsSection::Titles;
+                state.settings.list.selected =
+                    usize::from(state.title_language == crate::config::TitleLanguage::English);
             }
             _ => {
                 if let Some(super::modal::ModalAction::Close) =
@@ -308,6 +339,9 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
     state.settings.original_theme = Some(state.theme_name.clone());
     state.settings.section = section;
     state.settings.list.selected = match section {
+        SettingsSection::Titles => {
+            usize::from(state.title_language == crate::config::TitleLanguage::English)
+        }
         SettingsSection::Theme => current_theme_index(&state.theme_name),
         SettingsSection::Sound => usize::from(!state.sound_enabled()),
         SettingsSection::Toast => toast_delivery_index(state.toast_delivery()),
@@ -383,7 +417,7 @@ impl AppState {
                 let idx = scroll + (row - area.y) as usize;
                 (idx < THEME_NAMES.len()).then_some(idx)
             }
-            SettingsSection::Sound => {
+            SettingsSection::Titles | SettingsSection::Sound => {
                 let list_y = area.y + 3;
                 if row >= list_y && row < list_y + 2 {
                     Some((row - list_y) as usize)
@@ -425,6 +459,9 @@ impl AppState {
                 if let Some(section) = self.settings_tab_at(mouse.column, mouse.row) {
                     self.settings.section = section;
                     self.settings.list.select(match section {
+                        SettingsSection::Titles => usize::from(
+                            self.title_language == crate::config::TitleLanguage::English,
+                        ),
                         SettingsSection::Theme => current_theme_index(&self.theme_name),
                         SettingsSection::Sound => usize::from(!self.sound_enabled()),
                         SettingsSection::Toast => toast_delivery_index(self.toast_delivery()),
@@ -439,6 +476,13 @@ impl AppState {
                 if let Some(idx) = self.settings_list_index_at(mouse.column, mouse.row) {
                     self.settings.list.select(idx);
                     return match self.settings.section {
+                        SettingsSection::Titles => {
+                            Some(SettingsAction::SaveTitleLanguage(if idx == 0 {
+                                crate::config::TitleLanguage::Chinese
+                            } else {
+                                crate::config::TitleLanguage::English
+                            }))
+                        }
                         SettingsSection::Theme => {
                             preview_selected_theme(self);
                             None
@@ -493,6 +537,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn title_language_setting_supports_keyboard_and_mouse() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Titles);
+        update_settings_state(&mut state, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(
+            update_settings_state(
+                &mut state,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            Some(SettingsAction::SaveTitleLanguage(
+                crate::config::TitleLanguage::English
+            ))
+        );
+        crate::ui::compute_view(&mut state, Rect::new(0, 0, 110, 30));
+        let area = state.settings_content_rect();
+        assert_eq!(
+            state.handle_settings_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                area.x + 2,
+                area.y + 3
+            )),
+            Some(SettingsAction::SaveTitleLanguage(
+                crate::config::TitleLanguage::Chinese
+            ))
+        );
+    }
+
+    #[test]
     fn settings_cancel_restores_previewed_theme_from_other_sections() {
         let mut state = state_with_workspaces(&["test"]);
         let original_palette = state.palette.clone();
@@ -511,7 +583,7 @@ mod tests {
         );
         assert_eq!(
             state.settings.section,
-            crate::app::state::SettingsSection::Sound
+            crate::app::state::SettingsSection::Titles
         );
 
         update_settings_state(

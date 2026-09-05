@@ -55,6 +55,10 @@ pub fn current_process_is_detached_server_daemon() -> bool {
 }
 
 /// Unsupported platform stub.
+pub(crate) fn process_open_files(_pid: u32) -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
 pub fn foreground_job(_child_pid: u32) -> Option<ForegroundJob> {
     None
 }

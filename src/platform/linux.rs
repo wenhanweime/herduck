@@ -98,6 +98,15 @@ fn shell_quote(value: &str) -> String {
 }
 
 /// Collect the foreground terminal job for a given child PID.
+pub(crate) fn process_open_files(pid: u32) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .into_iter()
+        .flatten()
+        .take(1024)
+        .filter_map(|entry| std::fs::read_link(entry.ok()?.path()).ok())
+        .collect()
+}
+
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
     let tpgid = foreground_process_group_id(child_pid)?;
     let members = foreground_process_group_members(child_pid, tpgid)?;

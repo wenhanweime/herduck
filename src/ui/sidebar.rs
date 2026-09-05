@@ -189,7 +189,7 @@ fn catalog_session_title_for_pane(
     let workspace = app.workspaces.get(ws_idx)?;
     let pane = workspace.pane_state(pane_id)?;
     let terminal = app.terminals.get(&pane.attached_terminal_id)?;
-    let persisted = terminal.persisted_agent_session.as_ref()?;
+    let persisted = terminal.persisted_agent_session.as_ref();
     let pane_key = workspace
         .public_pane_number(pane_id)
         .map(|number| crate::workspace::public_pane_id_for_number(&workspace.id, number))?;
@@ -206,18 +206,20 @@ fn catalog_session_title_for_pane(
             // provider's original first-message label when a provider changes ref formatting.
             (session.workspace_id.as_deref() == Some(workspace.id.as_str())
                 && session.pane_id.as_deref() == Some(pane_key.as_str()))
-                || (session.backend == persisted.agent
-                    && session.ref_value == persisted.session_ref.value
-                    && matches!(
-                        (session.ref_kind, persisted.session_ref.kind),
-                        (
-                            crate::projects::SessionRefKind::Id,
-                            crate::agent_resume::AgentSessionRefKind::Id
-                        ) | (
-                            crate::projects::SessionRefKind::Path,
-                            crate::agent_resume::AgentSessionRefKind::Path
+                || persisted.is_some_and(|persisted| {
+                    session.backend == persisted.agent
+                        && session.ref_value == persisted.session_ref.value
+                        && matches!(
+                            (session.ref_kind, persisted.session_ref.kind),
+                            (
+                                crate::projects::SessionRefKind::Id,
+                                crate::agent_resume::AgentSessionRefKind::Id
+                            ) | (
+                                crate::projects::SessionRefKind::Path,
+                                crate::agent_resume::AgentSessionRefKind::Path
+                            )
                         )
-                    ))
+                })
         })?;
     Some(
         crate::ui::session_label::session_label(&session.title, session.topic_label.as_deref())
@@ -1988,6 +1990,21 @@ mod tests {
                 ResolvedToken::SessionTitle("继续修复标题一致性".into()),
                 ResolvedToken::Agent("claude".into()),
             ]
+        );
+        // Hookless agents must use the server's runtime association too.
+        app.terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .persisted_agent_session = None;
+        let session = &mut app.projects.snapshot.projects[0].sessions[0];
+        session.workspace_id = Some(app.workspaces[0].id.clone());
+        session.pane_id = Some(crate::workspace::public_pane_id_for_number(
+            &app.workspaces[0].id,
+            app.workspaces[0].public_pane_number(pane_id).unwrap(),
+        ));
+        assert_eq!(
+            agent_panel_entries(&app)[0].session_title.as_deref(),
+            Some("继续修复标题一致性")
         );
     }
 

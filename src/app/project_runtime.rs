@@ -31,23 +31,69 @@ impl App {
         }
         let report = self.find_pane(pane_id).and_then(|(ws_idx, pane)| {
             let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
-            let session = terminal.persisted_agent_session.clone()?;
+            let session = terminal.persisted_agent_session.clone();
             Some((
                 session,
                 terminal.cwd.clone(),
                 self.public_workspace_id(ws_idx),
                 self.public_pane_id(ws_idx, pane_id)?,
+                terminal.effective_agent_label().map(str::to_string),
+                terminal.terminal_title.clone().unwrap_or_default(),
+                pane.attached_terminal_id.clone(),
             ))
         });
-        let Some((session, cwd, workspace_id, public_pane_id)) = report else {
+        let Some((session, cwd, workspace_id, public_pane_id, agent, title, terminal_id)) = report
+        else {
             self.clear_project_runtime_for_pane(pane_id);
             return;
         };
-        let Some(identity) = crate::projects::runtime::identity_from_report(
-            &self.project_roots,
-            &session.agent,
-            &session.session_ref,
-        ) else {
+        let mut discovered = None;
+        let identity = if let Some(session) = session.as_ref() {
+            crate::projects::runtime::identity_from_report(
+                &self.project_roots,
+                &session.agent,
+                &session.session_ref,
+            )
+        } else if let Some(agent) = agent.as_deref() {
+            let job = self
+                .terminal_runtimes
+                .get(&terminal_id)
+                .and_then(|runtime| runtime.child_pid())
+                .and_then(crate::detect::foreground_job);
+            if agent == "grok" {
+                let files: Vec<_> = job
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|job| job.processes.iter())
+                    .filter(|process| {
+                        crate::detect::identify_agent(&process.name)
+                            == Some(crate::detect::Agent::Grok)
+                            || process.argv0.as_deref() == Some("grok")
+                    })
+                    .flat_map(|process| crate::platform::process_open_files(process.pid))
+                    .collect();
+                discovered = crate::projects::runtime::grok_session_from_open_files(
+                    &self.project_roots,
+                    &files,
+                    &title,
+                );
+            }
+            discovered
+                .as_ref()
+                .map(|(identity, _, _)| identity.clone())
+                .or_else(|| {
+                    job.and_then(|_| {
+                        crate::projects::SessionIdentity::id(
+                            agent,
+                            &format!("ork3-live:{terminal_id:?}"),
+                        )
+                        .ok()
+                    })
+                })
+        } else {
+            None
+        };
+        let Some(identity) = identity else {
             self.clear_project_runtime_for_pane(pane_id);
             return;
         };
@@ -78,7 +124,7 @@ impl App {
                 .map(|lease| lease.observed_at.saturating_add(1))
                 .unwrap_or_default(),
         );
-        let candidate = crate::projects::runtime::candidate_from_report(
+        let mut candidate = crate::projects::runtime::candidate_from_report(
             crate::projects::runtime::RuntimeCandidateInput {
                 identity: identity.clone(),
                 cwd,
@@ -88,6 +134,32 @@ impl App {
                 observed_at,
             },
         );
+        if let Some((_, path, native_title)) = discovered {
+            let source_key = candidate.source_key.clone();
+            candidate.transcript_ref = Some(crate::projects::CandidateField {
+                value: path.to_string_lossy().into_owned(),
+                observed_at,
+                priority: crate::projects::SourcePriority::RuntimeReport,
+                source_key: source_key.clone(),
+            });
+            candidate.title = Some(crate::projects::CandidateField {
+                value: native_title,
+                observed_at,
+                priority: crate::projects::SourcePriority::RuntimeReport,
+                source_key,
+            });
+        } else if session.is_none() {
+            candidate.title = Some(crate::projects::CandidateField {
+                value: if title.is_empty() {
+                    format!("{} · 运行中", agent.as_deref().unwrap_or("agent"))
+                } else {
+                    title
+                },
+                observed_at,
+                priority: crate::projects::SourcePriority::RuntimeReport,
+                source_key: candidate.source_key.clone(),
+            });
+        }
         match self.project_service.upsert_candidate(candidate) {
             Ok(_) => {
                 self.project_runtime_leases.insert(
@@ -103,7 +175,7 @@ impl App {
                 self.replace_projects_snapshot(self.project_service.snapshot());
             }
             Err(error) => tracing::warn!(
-                adapter = session.agent,
+                adapter = agent.as_deref().unwrap_or("unknown"),
                 category = error.code,
                 "Project runtime report was not committed"
             ),
@@ -147,6 +219,11 @@ impl App {
             self.event_hub.clone(),
             self.loaded_projects_config.automation_title_threshold,
         );
+        if let Err(error) =
+            service.set_title_language(self.loaded_projects_config.summary.title_language)
+        {
+            tracing::warn!("Could not configure title language: {}", error.message);
+        }
         service.start_background_scan(self.project_roots.roots());
         let summary_config =
             crate::projects::semantic::SemanticConfig::from_projects(&self.loaded_projects_config);

@@ -1029,6 +1029,7 @@ impl ProjectCatalog {
             "DELETE FROM runtime_mappings WHERE session_key = ?1 AND generation = ?2",
             params![stable_key, expected_generation as i64],
         )?;
+        transaction.execute("DELETE FROM sessions WHERE stable_key = ?1 AND ref_value LIKE 'ork3-live:%' AND NOT EXISTS (SELECT 1 FROM runtime_mappings WHERE session_key = ?1)", [stable_key])?;
         let revision = bump_revision(&transaction)?;
         transaction.commit()?;
         Ok(revision)
@@ -1039,6 +1040,10 @@ impl ProjectCatalog {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = transaction.execute("DELETE FROM runtime_mappings", [])?;
+        transaction.execute(
+            "DELETE FROM sessions WHERE ref_value LIKE 'ork3-live:%'",
+            [],
+        )?;
         let revision = if changed == 0 {
             let value: i64 = transaction.query_row(
                 "SELECT value FROM catalog_meta WHERE key = 'revision'",
@@ -1258,6 +1263,7 @@ impl ProjectCatalog {
              FROM sessions
              WHERE session_class = 'interactive'
                AND custom_title IS NULL
+               AND ref_value NOT LIKE 'ork3-live:%'
                AND NOT (title_status = 'done' AND COALESCE(generated_title, '') != '')
                AND (title_status IN ('pending', 'failed')
                     OR title_input_fingerprint IS NULL
@@ -1281,6 +1287,75 @@ impl ProjectCatalog {
             .collect::<Result<Vec<_>, _>>()
             .map_err(CatalogError::from);
         rows
+    }
+
+    pub(crate) fn title_language(&self) -> Result<crate::config::TitleLanguage, CatalogError> {
+        let value: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT CAST(value AS TEXT) FROM catalog_meta WHERE key = 'title_language'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(if value.as_deref() == Some("en") {
+            crate::config::TitleLanguage::English
+        } else {
+            crate::config::TitleLanguage::Chinese
+        })
+    }
+
+    pub(crate) fn set_title_language(
+        &mut self,
+        language: crate::config::TitleLanguage,
+    ) -> Result<u64, CatalogError> {
+        let previous: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT CAST(value AS TEXT) FROM catalog_meta WHERE key = 'title_language'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous
+            .as_deref()
+            .is_some_and(|value| value != language.as_str())
+        {
+            transaction.execute("INSERT OR REPLACE INTO catalog_meta(key, value) SELECT 'title_language_refresh:' || stable_key, 1 FROM sessions WHERE custom_title IS NULL AND ref_value NOT LIKE 'ork3-live:%'", [])?;
+            transaction.execute("UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL WHERE custom_title IS NULL AND ref_value NOT LIKE 'ork3-live:%'", [])?;
+        } else if previous.is_none() {
+            // One-time repair of old Grok English/placeholder names; preserve meaningful Chinese names.
+            let keys = {
+                let mut statement = transaction.prepare("SELECT stable_key, COALESCE(generated_title, title) FROM sessions WHERE backend = 'grok' AND custom_title IS NULL")?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+                rows
+            };
+            for (key, title) in keys {
+                if language == crate::config::TitleLanguage::English
+                    || !title
+                        .chars()
+                        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+                    || title.contains("session ·")
+                {
+                    transaction.execute(
+                        "INSERT OR REPLACE INTO catalog_meta(key, value) VALUES (?1, 1)",
+                        [format!("title_language_refresh:{key}")],
+                    )?;
+                    transaction.execute("UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL WHERE stable_key = ?1", [key])?;
+                }
+            }
+        }
+        transaction.execute("INSERT INTO catalog_meta(key, value) VALUES ('title_language', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [language.as_str()])?;
+        let revision = bump_revision(&transaction)?;
+        transaction.commit()?;
+        Ok(revision)
     }
 
     pub(crate) fn rename_session(&mut self, key: &str, title: &str) -> Result<u64, CatalogError> {
@@ -1346,6 +1421,19 @@ impl ProjectCatalog {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for update in updates {
+            if let Some(rest) = update.fingerprint.strip_prefix("language:") {
+                let current: String = transaction
+                    .query_row(
+                        "SELECT CAST(value AS TEXT) FROM catalog_meta WHERE key = 'title_language'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .unwrap_or_else(|| "zh".into());
+                if rest.split(':').next() != Some(current.as_str()) {
+                    continue;
+                }
+            }
             // A transient provider failure must not replace a useful model-generated title with
             // a much worse heuristic fallback. Preserve the existing title and provenance while
             // recording the failed attempt so the worker can retry it later.
@@ -1404,6 +1492,23 @@ impl ProjectCatalog {
                         update.fingerprint,
                     ],
                 )?;
+            }
+            let language_key = format!("title_language_refresh:{}", update.stable_key);
+            let language_refresh: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM catalog_meta WHERE key = ?1)",
+                [&language_key],
+                |row| row.get(0),
+            )?;
+            if language_refresh && update.status == "done" {
+                let (title, cwd, backend): (String, Option<String>, String) = transaction.query_row("SELECT COALESCE(custom_title, generated_title, title), cwd, backend FROM sessions WHERE stable_key = ?1", [&update.stable_key], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                transaction.execute(
+                    "UPDATE semantic_assignments SET fingerprint = ?2 WHERE session_key = ?1",
+                    params![
+                        update.stable_key,
+                        super::semantic_fingerprint(&title, cwd.as_deref(), &backend)
+                    ],
+                )?;
+                transaction.execute("DELETE FROM catalog_meta WHERE key = ?1", [&language_key])?;
             }
             // A changed title makes the existing fingerprint stale, which places the session
             // back in the pending queue. Keep the previous Topic visible until a valid new
@@ -3100,6 +3205,82 @@ mod tests {
 
         assert!(catalog
             .pending_semantic_sessions(10)
+            .expect("pending")
+            .is_empty());
+    }
+
+    #[test]
+    fn title_language_change_preserves_manual_names_and_topic_and_rejects_stale_results() {
+        use crate::config::TitleLanguage;
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let session = candidate("grok", "language-test", 20);
+        let key = session.identity.stable_key.clone();
+        catalog.upsert_candidate(&session).expect("session");
+        catalog
+            .set_title_language(TitleLanguage::Chinese)
+            .expect("zh");
+        let mut update = SessionTitleUpdate {
+            stable_key: key.clone(),
+            title: "【Pixel】照片迁移备份".into(),
+            source: "model".into(),
+            status: "done".into(),
+            error: None,
+            backend: None,
+            model: None,
+            fingerprint: "language:zh:initial".into(),
+            generated_at: 30,
+        };
+        catalog
+            .apply_title_batch(&[update.clone()])
+            .expect("initial name");
+        let topic: String = catalog
+            .connection
+            .query_row(
+                "SELECT topic_key FROM semantic_assignments WHERE session_key = ?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .expect("topic");
+        catalog
+            .set_title_language(TitleLanguage::English)
+            .expect("en");
+        update.title = "【Pixel】不应该写入旧语言".into();
+        catalog
+            .apply_title_batch(&[update.clone()])
+            .expect("stale result");
+        let title: String = catalog
+            .connection
+            .query_row(
+                "SELECT generated_title FROM sessions WHERE stable_key = ?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .expect("title");
+        assert_eq!(title, "【Pixel】照片迁移备份");
+        update.title = "【Pixel】Photo migration and backup".into();
+        update.fingerprint = "language:en:next".into();
+        catalog.apply_title_batch(&[update]).expect("translation");
+        let (after, fingerprint): (String, String) = catalog
+            .connection
+            .query_row(
+                "SELECT topic_key, fingerprint FROM semantic_assignments WHERE session_key = ?1",
+                [&key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("topic after");
+        assert_eq!(after, topic);
+        assert_eq!(
+            fingerprint,
+            super::super::semantic_fingerprint("【Pixel】Photo migration and backup", None, "grok")
+        );
+        catalog
+            .rename_session(&key, "My chosen name")
+            .expect("manual");
+        catalog
+            .set_title_language(TitleLanguage::Chinese)
+            .expect("zh again");
+        assert!(catalog
+            .pending_title_sessions(10)
             .expect("pending")
             .is_empty());
     }

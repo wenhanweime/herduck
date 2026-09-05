@@ -735,6 +735,10 @@ impl App {
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.next_agent_idle_reap_deadline(),
+            self.project_service
+                .is_available()
+                .then_some(self.next_project_identity_check)
+                .flatten(),
             self.agent_metadata_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,

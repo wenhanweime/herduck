@@ -18,7 +18,7 @@ use crate::{
     config::ToastDelivery,
 };
 
-pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 76;
+pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 86;
 pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 22;
 
 pub(crate) fn settings_popup_height(app: &AppState) -> u16 {
@@ -106,6 +106,22 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
     let content_area = stack.content;
 
     match app.settings.section {
+        SettingsSection::Titles => {
+            render_modal_choice_list(
+                frame,
+                content_area,
+                "Session titles / 会话标题",
+                "自动标题语言 · 切换后后台更新，手动名称保留",
+                &[
+                    ("中文", crate::config::TitleLanguage::Chinese),
+                    ("English", crate::config::TitleLanguage::English),
+                ],
+                app.title_language,
+                app.settings.list.selected,
+                p,
+                1,
+            );
+        }
         SettingsSection::Theme => {
             render_settings_theme(app, frame, content_area);
         }

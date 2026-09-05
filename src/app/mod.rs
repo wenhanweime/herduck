@@ -109,6 +109,7 @@ pub struct App {
     /// Merely previewing or entering history never adds an entry here and never starts a runtime.
     pub(crate) pending_catalog_submissions: HashMap<crate::layout::PaneId, String>,
     pub(crate) next_project_runtime_generation: u64,
+    pub(crate) next_project_identity_check: Option<Instant>,
     pub(crate) loaded_projects_config: crate::config::ProjectsConfig,
     pub(crate) last_focus: Option<(usize, crate::layout::PaneId)>,
     pub(crate) no_session: bool,
@@ -678,6 +679,7 @@ impl App {
             spinner_tick: 0,
             palette: theme_palette,
             theme_name,
+            title_language: config.projects.summary.title_language,
             theme_runtime,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
@@ -751,6 +753,11 @@ impl App {
             )
         };
         if !no_session {
+            if let Err(error) =
+                project_service.set_title_language(config.projects.summary.title_language)
+            {
+                tracing::warn!("Could not configure title language: {}", error.message);
+            }
             project_service.start_background_scan(project_roots.roots());
             // Topic clustering runs after the scan is queued so the tree is usable from
             // path-based grouping immediately, then regroups as classification lands.
@@ -807,6 +814,7 @@ impl App {
             project_runtime_leases: HashMap::new(),
             pending_catalog_submissions: HashMap::new(),
             next_project_runtime_generation: 1,
+            next_project_identity_check: None,
             loaded_projects_config: config.projects.clone(),
             last_focus,
             no_session,
@@ -1582,6 +1590,22 @@ impl App {
                 crate::worktree::expand_tilde_absolute_path(&config.worktrees.directory);
         }
 
+        if !invalid_section("projects")
+            && config.projects.summary.title_language
+                != self.loaded_projects_config.summary.title_language
+        {
+            match self
+                .project_service
+                .set_title_language(config.projects.summary.title_language)
+            {
+                Ok(_) => {
+                    self.loaded_projects_config.summary.title_language =
+                        config.projects.summary.title_language;
+                    self.state.title_language = config.projects.summary.title_language;
+                }
+                Err(error) => diagnostics.push(error.message),
+            }
+        }
         if !invalid_section("projects") && config.projects != self.loaded_projects_config {
             diagnostics.push(
                 "projects catalog settings require an ORK3 restart; keeping current settings"
@@ -1656,10 +1680,21 @@ impl App {
         self.normalize_project_selection();
     }
 
-    fn sync_projects_snapshot(&mut self) -> bool {
+    pub(crate) fn sync_projects_snapshot(&mut self) -> bool {
+        let now = Instant::now();
+        let mut mappings_changed = false;
+        if self
+            .next_project_identity_check
+            .is_none_or(|deadline| now >= deadline)
+        {
+            let revision = self.project_service.snapshot().revision;
+            self.next_project_identity_check = Some(now + std::time::Duration::from_secs(5));
+            self.sync_all_project_runtime_mappings();
+            mappings_changed = revision != self.project_service.snapshot().revision;
+        }
         let latest = self.project_service.snapshot();
         if latest == self.state.projects.snapshot {
-            return false;
+            return mappings_changed;
         }
         if latest.revision < self.state.projects.snapshot.revision
             && latest.diagnostic_category.is_none()

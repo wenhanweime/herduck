@@ -156,6 +156,10 @@ pub fn current_process_is_detached_server_daemon() -> bool {
     unsafe { IsProcessInJob(GetCurrentProcess(), null_mut(), &mut in_job) != 0 && in_job == 0 }
 }
 
+pub(crate) fn process_open_files(_pid: u32) -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
 pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
     let entries = snapshot_processes();
     select_pane_foreground_job(child_pid, &entries)

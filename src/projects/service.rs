@@ -54,6 +54,13 @@ impl ProjectServiceError {
 }
 
 pub(crate) enum ProjectCommand {
+    SetTitleLanguage {
+        language: crate::config::TitleLanguage,
+        reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
+    },
+    TitleLanguage {
+        reply: mpsc::Sender<Result<crate::config::TitleLanguage, ProjectServiceError>>,
+    },
     RenameSession {
         session_key: String,
         title: String,
@@ -337,6 +344,13 @@ impl ProjectService {
             observed_at,
             reply,
         })
+    }
+
+    pub(crate) fn set_title_language(
+        &self,
+        language: crate::config::TitleLanguage,
+    ) -> Result<u64, ProjectServiceError> {
+        self.request(|reply| ProjectCommand::SetTitleLanguage { language, reply })
     }
 
     pub(crate) fn rename_session(
@@ -634,6 +648,18 @@ pub(crate) fn request_apply_semantic(
     })
 }
 
+pub(crate) fn request_title_language(
+    sender: &mpsc::Sender<ProjectCommand>,
+) -> Result<crate::config::TitleLanguage, ProjectServiceError> {
+    let (reply, receiver) = mpsc::channel();
+    sender
+        .send(ProjectCommand::TitleLanguage { reply })
+        .map_err(|_| ProjectServiceError::unavailable())?;
+    receiver
+        .recv()
+        .map_err(|_| ProjectServiceError::unavailable())?
+}
+
 pub(crate) fn request_pending_titles(
     sender: &mpsc::Sender<ProjectCommand>,
     limit: usize,
@@ -722,6 +748,18 @@ fn process_command(
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.assign_session(&session_key, &project_key, locked, observed_at)
         }),
+        ProjectCommand::SetTitleLanguage { language, reply } => {
+            finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
+                catalog.set_title_language(language)
+            })
+        }
+        ProjectCommand::TitleLanguage { reply } => {
+            let _ = reply.send(
+                catalog
+                    .title_language()
+                    .map_err(ProjectServiceError::catalog),
+            );
+        }
         ProjectCommand::RenameSession {
             session_key,
             title,

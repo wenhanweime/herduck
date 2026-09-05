@@ -22,8 +22,8 @@ pub use self::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, ProjectsConfig,
         ShellModeConfig, SidebarCollapsedModeConfig, SummaryModeConfig, SummaryProviderConfig,
-        SummaryProviderKind, ToastClipboardPosition, ToastConfig, ToastDelivery, ToastOrk3Position,
-        UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+        SummaryProviderKind, TitleLanguage, ToastClipboardPosition, ToastConfig, ToastDelivery,
+        ToastOrk3Position, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
         AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpaceSidebarToken,

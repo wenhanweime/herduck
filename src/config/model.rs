@@ -441,6 +441,7 @@ impl SummaryProviderConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct SummaryConfig {
+    pub title_language: TitleLanguage,
     pub mode: SummaryModeConfig,
     /// Ordered provider chain. An empty list disables LLM attempts and uses local fallback.
     pub providers: Vec<SummaryProviderConfig>,
@@ -455,6 +456,7 @@ pub struct SummaryConfig {
 impl Default for SummaryConfig {
     fn default() -> Self {
         Self {
+            title_language: TitleLanguage::Chinese,
             mode: SummaryModeConfig::Auto,
             providers: SummaryProviderConfig::default_presets(),
             batch_size: 40,
@@ -462,6 +464,24 @@ impl Default for SummaryConfig {
             timeout_secs: 120,
             startup_grace_secs: 120,
             idle_backfill_secs: 600,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum TitleLanguage {
+    #[default]
+    #[serde(rename = "zh", alias = "zh-CN")]
+    Chinese,
+    #[serde(rename = "en")]
+    English,
+}
+
+impl TitleLanguage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chinese => "zh",
+            Self::English => "en",
         }
     }
 }
