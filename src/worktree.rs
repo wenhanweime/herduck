@@ -605,11 +605,11 @@ prunable stale
     #[test]
     fn expand_tilde_path_uses_home_when_available() {
         assert_eq!(
-            expand_tilde_path_from_env("~/.ork3/worktrees", false, |key| match key {
+            expand_tilde_path_from_env("~/.herduck/worktrees", false, |key| match key {
                 "HOME" => Some("/home/me".into()),
                 _ => None,
             }),
-            PathBuf::from("/home/me/.ork3/worktrees")
+            PathBuf::from("/home/me/.herduck/worktrees")
         );
         assert_eq!(
             expand_tilde_path_from_env("/tmp/worktrees", false, |_| None),
@@ -665,11 +665,11 @@ prunable stale
     #[test]
     fn non_windows_tilde_expansion_keeps_windows_separator_literal() {
         assert_eq!(
-            expand_tilde_path_from_env(r"~\.ork3\worktrees", false, |key| match key {
+            expand_tilde_path_from_env(r"~\.herduck\worktrees", false, |key| match key {
                 "HOME" => Some("/home/me".into()),
                 _ => None,
             }),
-            PathBuf::from(r"~\.ork3\worktrees")
+            PathBuf::from(r"~\.herduck\worktrees")
         );
     }
 
@@ -684,18 +684,18 @@ prunable stale
             }
         }
 
-        let default_path = expand_tilde_path_from_env("~/.ork3/worktrees", true, env);
+        let default_path = expand_tilde_path_from_env("~/.herduck/worktrees", true, env);
         assert_eq!(
             default_path,
-            PathBuf::from(r"C:\Users\herdr\.ork3\worktrees")
+            PathBuf::from(r"C:\Users\herdr\.herduck\worktrees")
         );
         assert_eq!(
             default_path.display().to_string(),
-            r"C:\Users\herdr\.ork3\worktrees"
+            r"C:\Users\herdr\.herduck\worktrees"
         );
         assert_eq!(
-            expand_tilde_path_from_env(r"~\.ork3\worktrees", true, env),
-            PathBuf::from(r"C:\Users\herdr\.ork3\worktrees")
+            expand_tilde_path_from_env(r"~\.herduck\worktrees", true, env),
+            PathBuf::from(r"C:\Users\herdr\.herduck\worktrees")
         );
     }
 
@@ -703,11 +703,11 @@ prunable stale
     fn default_checkout_path_appends_repo_and_branch_slug() {
         assert_eq!(
             default_checkout_path(
-                Path::new("/home/me/.ork3/worktrees"),
+                Path::new("/home/me/.herduck/worktrees"),
                 "herdr",
                 "worktree/brave-river",
             ),
-            PathBuf::from("/home/me/.ork3/worktrees/herdr/worktree-brave-river")
+            PathBuf::from("/home/me/.herduck/worktrees/herdr/worktree-brave-river")
         );
     }
 

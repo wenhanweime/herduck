@@ -2,8 +2,8 @@
 //!
 //! The server:
 //! - Does not enter raw mode or read stdin
-//! - Creates and listens on both `ork3.sock` (existing JSON API) and
-//!   `ork3-client.sock` (new binary protocol)
+//! - Creates and listens on both `herduck.sock` (existing JSON API) and
+//!   `herduck-client.sock` (new binary protocol)
 //! - Initializes AppState and all PTYs from session restore or fresh state
 //! - Runs the main event loop (drain events, drain API requests, scheduled tasks)
 //! - Renders to a virtual ratatui Buffer in memory
@@ -239,7 +239,7 @@ const CLIENT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 // Headless server
 // ---------------------------------------------------------------------------
 
-/// The headless server — runs the ORK3 event loop without a real terminal.
+/// The headless server — runs the HERDUCK event loop without a real terminal.
 pub struct HeadlessServer {
     app: app::App,
     #[cfg(unix)]
@@ -762,6 +762,11 @@ impl HeadlessServer {
             self.app.open_settings_from_onboarding();
             needs_render = true;
             crate::render_prof::event("full_render_cause.deferred_onboarding");
+        }
+        if self.app.state.request_skip_onboarding {
+            self.app.state.request_skip_onboarding = false;
+            self.app.finish_onboarding();
+            needs_render = true;
         }
 
         if self.app.state.request_new_workspace {
@@ -1900,7 +1905,7 @@ impl HeadlessServer {
                 })
                 .unwrap_or_else(|_| "{}".to_string());
             }
-            config::ToastDelivery::Ork3 => {
+            config::ToastDelivery::Herduck => {
                 let sound = params.sound;
                 let response = self.app.handle_api_request_after_internal_events_drained(
                     api::schema::Request {
@@ -3941,7 +3946,7 @@ impl HeadlessServer {
             self.app.start_background_session_save();
         }
 
-        changed |= self.app.reap_idle_agents(now);
+        changed |= self.app.refresh_agent_inactivity(now);
 
         if let Some(deadline) = self
             .app
@@ -4019,7 +4024,7 @@ impl HeadlessServer {
 
         // Stop accepting API connections and remove the API socket before the
         // potentially slower session save that runs after this loop exits.
-        // `ork3 server stop` treats socket unreachability as the shutdown
+        // `herduck server stop` treats socket unreachability as the shutdown
         // acknowledgement, so keeping this handle alive during persistence can
         // produce false timeout failures on slower machines.
         drop(self.api_server.take());
@@ -4199,7 +4204,7 @@ pub fn run_server() -> io::Result<()> {
     let _api_server = match api::start_server(api_tx.clone(), event_hub.clone()) {
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            eprintln!("error: ork3 server is already running");
+            eprintln!("error: herduck server is already running");
             eprintln!("api socket: {}", api::socket_path().display());
             std::process::exit(1);
         }
@@ -4222,7 +4227,7 @@ pub fn run_server() -> io::Result<()> {
             api_rx,
             event_hub,
         );
-        seed_startup_workspace_if_empty(&mut app);
+        seed_startup_workspace_if_empty(&mut app, take_startup_cwd());
 
         // The server runs headless — disable local notification side effects.
         // Sound and terminal notifications are forwarded to connected clients
@@ -4242,7 +4247,7 @@ pub fn run_server() -> io::Result<()> {
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-                eprintln!("error: ork3 server is already running");
+                eprintln!("error: herduck server is already running");
                 eprintln!("client socket: {}", client_socket_path().display());
                 std::process::exit(1);
             }
@@ -4252,7 +4257,7 @@ pub fn run_server() -> io::Result<()> {
         info!(
             api_socket = %api::socket_path().display(),
             client_socket = %client_socket_path().display(),
-            "ork3 server started"
+            "herduck server started"
         );
         print_ready_message(&api::socket_path(), &client_socket_path());
 
@@ -4264,8 +4269,8 @@ pub fn run_server() -> io::Result<()> {
     result
 }
 
-fn seed_startup_workspace_if_empty(app: &mut app::App) {
-    let Some(cwd) = take_startup_cwd() else {
+fn seed_startup_workspace_if_empty(app: &mut app::App, startup_cwd: Option<PathBuf>) {
+    let Some(cwd) = startup_cwd else {
         return;
     };
 
@@ -4277,8 +4282,16 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
         return;
     }
 
+    let startup_mode = app.state.mode;
     match app.create_workspace_with_options(cwd.clone(), true) {
         Ok(_) => {
+            // Creating the initial terminal focuses it, but must not dismiss startup dialogs.
+            if matches!(
+                startup_mode,
+                app::Mode::Onboarding | app::Mode::ProductAnnouncement
+            ) {
+                app.state.mode = startup_mode;
+            }
             info!(cwd = %cwd.display(), "created startup workspace");
         }
         Err(err) => {
@@ -4399,7 +4412,9 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
     eprintln!("client socket: {}", client_socket.display());
     eprintln!(
         "logs: {}",
-        crate::session::data_dir().join("ork3-server.log").display()
+        crate::session::data_dir()
+            .join("herduck-server.log")
+            .display()
     );
     eprintln!(
         "did you mean to open the {product} TUI? run `{product}`; you do not need `{product} server`."
@@ -4408,7 +4423,7 @@ fn print_ready_message(api_socket: &Path, client_socket: &Path) {
 
 /// Initialize logging for the server process.
 fn init_logging() {
-    crate::logging::init_file_logging("ork3-server.log");
+    crate::logging::init_file_logging("herduck-server.log");
 }
 
 // ---------------------------------------------------------------------------
@@ -4498,6 +4513,99 @@ mod tests {
         for (_, runtime) in server.app.terminal_runtimes.drain() {
             runtime.shutdown();
         }
+    }
+
+    #[tokio::test]
+    async fn startup_workspace_keeps_welcome_and_announcement_visible() {
+        for mode in [app::Mode::Onboarding, app::Mode::ProductAnnouncement] {
+            let mut server = test_headless_server();
+            server.app.state.mode = mode;
+            let cwd = std::env::temp_dir();
+
+            seed_startup_workspace_if_empty(&mut server.app, Some(cwd.clone()));
+
+            let actual_mode = server.app.state.mode;
+            let workspace_count = server.app.state.workspaces.len();
+            let active = server.app.state.active;
+            let actual_cwd = server.app.state.workspaces[0].identity_cwd.clone();
+            server.app.state.assert_invariants_for_test();
+            shutdown_test_runtimes(&mut server);
+            assert_eq!(actual_mode, mode);
+            assert_eq!(workspace_count, 1);
+            assert_eq!(active, Some(0));
+            assert_eq!(actual_cwd, cwd);
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_workspace_without_modal_focuses_terminal() {
+        let mut server = test_headless_server();
+        server.app.state.mode = app::Mode::Navigate;
+
+        seed_startup_workspace_if_empty(&mut server.app, Some(std::env::temp_dir()));
+
+        let actual_mode = server.app.state.mode;
+        let active = server.app.state.active;
+        server.app.state.assert_invariants_for_test();
+        shutdown_test_runtimes(&mut server);
+        assert_eq!(actual_mode, app::Mode::Terminal);
+        assert_eq!(active, Some(0));
+    }
+
+    #[tokio::test]
+    async fn startup_workspace_missing_cwd_or_failed_launch_leaves_no_partial_workspace() {
+        let mut server = test_headless_server();
+        seed_startup_workspace_if_empty(&mut server.app, None);
+        assert_eq!(server.app.state.mode, app::Mode::Onboarding);
+        assert!(server.app.state.workspaces.is_empty());
+        assert_eq!(server.app.terminal_runtimes.len(), 0);
+
+        server.app.state.default_shell = server
+            .client_socket_path
+            .with_extension("missing-shell")
+            .to_string_lossy()
+            .into_owned();
+        seed_startup_workspace_if_empty(&mut server.app, Some(std::env::temp_dir()));
+
+        assert_eq!(server.app.state.mode, app::Mode::Navigate);
+        assert!(server.app.state.workspaces.is_empty());
+        assert_eq!(server.app.state.active, None);
+        assert_eq!(server.app.terminal_runtimes.len(), 0);
+        server.app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn startup_workspace_keeps_restored_identity_and_focus() {
+        let mut server = test_headless_server();
+        server.app.state = AppState::test_with_adversarial_identity_state();
+        server.app.state.mode = app::Mode::Onboarding;
+        let workspaces = server
+            .app
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id.clone())
+            .collect::<Vec<_>>();
+        let active = server.app.state.active;
+        let selected = server.app.state.selected;
+
+        seed_startup_workspace_if_empty(&mut server.app, Some(std::env::temp_dir()));
+
+        assert_eq!(server.app.state.mode, app::Mode::Onboarding);
+        assert_eq!(server.app.state.active, active);
+        assert_eq!(server.app.state.selected, selected);
+        assert_eq!(
+            server
+                .app
+                .state
+                .workspaces
+                .iter()
+                .map(|workspace| workspace.id.clone())
+                .collect::<Vec<_>>(),
+            workspaces
+        );
+        assert_eq!(server.app.terminal_runtimes.len(), 0);
+        server.app.state.assert_invariants_for_test();
     }
 
     fn read_server_message(bytes: Vec<u8>) -> ServerMessage {
@@ -4969,7 +5077,7 @@ next_tab = ""
             .any(|binding| binding.label == "prefix+n"));
         assert!(server.app.state.toast.is_none());
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("delivery = \"herdr\""));
+        assert!(content.contains("delivery = \"herduck\""));
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_file(path);
@@ -7001,10 +7109,11 @@ next_tab = ""
         assert_eq!(server.app.state.mode, crate::app::Mode::Terminal);
     }
 
-    #[test]
-    fn semantic_client_input_events_route_through_app_input() {
+    #[tokio::test]
+    async fn semantic_client_input_events_route_through_app_input() {
         let mut server = test_headless_server();
-        server.app.state.mode = crate::app::Mode::Onboarding;
+        assert_eq!(server.app.state.mode, app::Mode::Onboarding);
+        seed_startup_workspace_if_empty(&mut server.app, Some(std::env::temp_dir()));
         server.clients.insert(
             1,
             ClientConnection::new(
@@ -7029,10 +7138,12 @@ next_tab = ""
             }],
         }));
 
-        assert_eq!(server.app.state.mode, crate::app::Mode::Settings);
+        let mode = server.app.state.mode;
+        shutdown_test_runtimes(&mut server);
+        assert_eq!(mode, crate::app::Mode::Settings);
         assert_eq!(
             server.app.state.settings.section,
-            crate::app::state::SettingsSection::Integrations
+            crate::app::state::SettingsSection::Sessions
         );
     }
 
@@ -8676,7 +8787,7 @@ next_tab = ""
             ),
         );
         server.foreground_client_id = Some(1);
-        server.app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
             version: "9.9.9".to_string(),
@@ -8768,7 +8879,7 @@ next_tab = ""
                     api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
-                        position: Some(crate::config::ToastOrk3Position::TopLeft),
+                        position: Some(crate::config::ToastHerduckPosition::TopLeft),
                         sound: api::schema::NotificationShowSound::Request,
                     },
                 ),
@@ -8964,7 +9075,7 @@ next_tab = ""
     #[test]
     fn notification_show_api_herdr_toast_expires_headless() {
         let mut server = test_headless_server();
-        server.app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         let (respond_to, response_rx) = std::sync::mpsc::channel();
         assert!(
@@ -9020,7 +9131,7 @@ next_tab = ""
             ),
         );
         server.foreground_client_id = Some(1);
-        server.app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         let (respond_to, response_rx) = std::sync::mpsc::channel();
         assert!(

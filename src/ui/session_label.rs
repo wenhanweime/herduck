@@ -317,8 +317,8 @@ mod tests {
             "fix now"
         );
         assert_eq!(
-            clean_title("paseo-multica cluster work"),
-            "paseo-multica cluster work"
+            clean_title("sample-project cluster work"),
+            "sample-project cluster work"
         );
     }
 
@@ -369,7 +369,7 @@ mod tests {
     /// Sibling rows that clip to the same clause stop being a list.
     #[test]
     fn adjacent_duplicate_rows_reveal_a_later_clause() {
-        let title = "仓库 ork3 的审阅任务。请修复侧栏高亮的具体问题";
+        let title = "仓库 herduck 的审阅任务。请修复侧栏高亮的具体问题";
         let first = session_label(title, None).task;
         let second = disambiguate_from(&first, Some(&first), title);
         assert_ne!(second, first, "the second row must not repeat the first");
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn topic_and_task_share_the_width_budget() {
-        let label = session_label(&"看".repeat(96), Some("paseo-multica 聚类与开发"));
+        let label = session_label(&"看".repeat(96), Some("sample-project 聚类与开发"));
         let topic = label.topic.expect("topic");
         assert!(display_width(&topic) <= TOPIC_MAX_WIDTH);
         assert!(

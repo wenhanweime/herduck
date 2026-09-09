@@ -2,13 +2,24 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph, Tabs},
+    widgets::{List, ListItem, ListState, Paragraph},
     Frame,
 };
 
+mod forms;
+mod layout;
+mod source_form;
+
+pub(crate) use forms::settings_form;
+pub(crate) use layout::{
+    settings_button_rects, settings_can_start_session, settings_layout, settings_new_session_rect,
+    settings_tab_rects,
+};
+use layout::{settings_buttons, SettingsButtonKind};
+
 use super::widgets::{
-    action_button_row_rects, centered_popup_rect, modal_stack_areas, panel_contrast_fg,
-    render_action_button, render_modal_choice_list, render_panel_shell, ActionButtonSpec,
+    centered_popup_rect, panel_contrast_fg, render_action_button, render_modal_choice_list,
+    render_panel_shell,
 };
 use crate::{
     app::{
@@ -18,17 +29,16 @@ use crate::{
     config::ToastDelivery,
 };
 
-pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 86;
-pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 22;
+pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 96;
+pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 30;
 
 pub(crate) fn settings_popup_height(app: &AppState) -> u16 {
     if app.settings.section != crate::app::state::SettingsSection::Integrations {
         return SETTINGS_POPUP_BASE_HEIGHT;
     }
     let list_rows = app.integration_recommendations.len().max(1) as u16;
-    let footer_rows = integrations_footer_height(app, SETTINGS_POPUP_WIDTH - 2);
-    // borders 2 + header 3 + stack gaps 2 + modal footer 2
-    // + section title 1 + description 2 + spacers 2
+    let footer_rows = integrations_footer_height(app, SETTINGS_POPUP_WIDTH - 23);
+    // Leave room for navigation, section description, and installation feedback.
     (14 + list_rows + footer_rows).max(SETTINGS_POPUP_BASE_HEIGHT)
 }
 
@@ -50,77 +60,50 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
         return;
     }
 
-    let stack = modal_stack_areas(inner, 3, 2, 0, 1);
-    let header_rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas::<3>(stack.header);
-
+    let layout = settings_layout(inner);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            " settings",
-            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
-        )])),
-        header_rows[0],
+        Paragraph::new(format!(" settings · {}", app.settings.section.label()))
+            .style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+        layout.title,
     );
-
-    let tab_labels = SettingsSection::ALL.iter().map(|section| {
-        if app.settings_section_has_badge(*section) {
-            Line::from(vec![
-                Span::styled(
-                    "● ",
-                    Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(section.label()),
-            ])
-        } else {
-            Line::from(section.label())
-        }
-    });
-    let tabs = Tabs::new(tab_labels)
-        .select(
-            SettingsSection::ALL
-                .iter()
-                .position(|section| *section == app.settings.section)
-                .unwrap_or(0),
-        )
-        .style(Style::default().fg(p.overlay1))
-        .highlight_style(
+    for (section, rect) in &layout.navigation {
+        let style = if *section == app.settings.section {
             Style::default()
                 .fg(panel_contrast_fg(p))
                 .bg(p.accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .divider(" ")
-        .padding(" ", " ");
-    frame.render_widget(tabs, header_rows[1]);
-
-    let sep = "─".repeat(inner.width as usize);
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.overlay1)
+        };
+        let badge = if app.settings_section_has_badge(*section) {
+            "●"
+        } else {
+            " "
+        };
+        let label = if layout.compact_navigation {
+            section.compact_label()
+        } else {
+            section.label()
+        };
+        frame.render_widget(
+            Paragraph::new(format!(" {badge}{label}")).style(style),
+            *rect,
+        );
+    }
+    let divider = if layout.compact_navigation {
+        vec![Line::from("─".repeat(layout.divider.width as usize))]
+    } else {
+        vec![Line::from("│"); layout.divider.height as usize]
+    };
     frame.render_widget(
-        Paragraph::new(Span::styled(&sep, Style::default().fg(p.surface0))),
-        header_rows[2],
+        Paragraph::new(divider).style(Style::default().fg(p.surface0)),
+        layout.divider,
     );
-
-    let content_area = stack.content;
+    let content_area = layout.content;
 
     match app.settings.section {
-        SettingsSection::Titles => {
-            render_modal_choice_list(
-                frame,
-                content_area,
-                "Session titles / 会话标题",
-                "自动标题语言 · 切换后后台更新，手动名称保留",
-                &[
-                    ("中文", crate::config::TitleLanguage::Chinese),
-                    ("English", crate::config::TitleLanguage::English),
-                ],
-                app.title_language,
-                app.settings.list.selected,
-                p,
-                1,
-            );
+        SettingsSection::Sessions | SettingsSection::Summaries | SettingsSection::Titles => {
+            render_setup_form(app, frame, content_area)
         }
         SettingsSection::Theme => {
             render_settings_theme(app, frame, content_area);
@@ -144,7 +127,7 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 "choose where background popup notifications should appear",
                 &[
                     ("off", ToastDelivery::Off),
-                    ("inside herdr", ToastDelivery::Ork3),
+                    ("inside herduck", ToastDelivery::Herduck),
                     ("via terminal", ToastDelivery::Terminal),
                     ("via system", ToastDelivery::System),
                 ],
@@ -173,101 +156,75 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
         }
     }
 
-    if let Some(footer_area) = stack.footer {
-        let footer_rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-            .areas::<2>(footer_area);
-        let primary_label = settings_primary_button_label(app.settings.section);
-        let show_primary = settings_show_primary_action(app);
-        let (apply_rect, close_rect) =
-            settings_button_rects(inner, app.settings.section, show_primary);
-        if let Some(apply_rect) = apply_rect {
-            render_action_button(
-                frame,
-                apply_rect,
-                Some("↵"),
-                primary_label,
-                Style::default()
-                    .fg(panel_contrast_fg(p))
-                    .bg(p.accent)
-                    .add_modifier(Modifier::BOLD),
-            );
-        }
+    for button in settings_buttons(app, inner) {
+        let style = if button.kind == SettingsButtonKind::Apply {
+            Style::default().fg(panel_contrast_fg(p)).bg(p.accent)
+        } else {
+            Style::default().fg(p.text).bg(p.surface0)
+        };
         render_action_button(
             frame,
-            close_rect,
-            Some("esc"),
-            "close",
-            Style::default()
-                .fg(p.text)
-                .bg(p.surface0)
-                .add_modifier(Modifier::BOLD),
-        );
-
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" ↑↓", Style::default().fg(p.overlay0)),
-                Span::styled(" select  ", Style::default().fg(p.overlay1)),
-                Span::styled("tab", Style::default().fg(p.overlay0)),
-                Span::styled(" section", Style::default().fg(p.overlay1)),
-            ])),
-            footer_rows[0],
+            button.rect,
+            button.hint,
+            button.label,
+            style.add_modifier(Modifier::BOLD),
         );
     }
-}
-
-pub(crate) fn settings_primary_button_label(
-    section: crate::app::state::SettingsSection,
-) -> &'static str {
-    match section {
-        crate::app::state::SettingsSection::Integrations => "install",
-        _ => "apply",
-    }
-}
-
-pub(crate) fn settings_show_primary_action(app: &AppState) -> bool {
-    match app.settings.section {
-        crate::app::state::SettingsSection::Integrations => app
-            .integration_recommendations
-            .iter()
-            .any(crate::integration::IntegrationRecommendation::needs_install),
-        _ => true,
-    }
-}
-
-pub(crate) fn settings_button_rects(
-    inner: Rect,
-    section: crate::app::state::SettingsSection,
-    show_primary: bool,
-) -> (Option<Rect>, Rect) {
-    if !show_primary {
-        let rects = action_button_row_rects(
-            inner,
-            &[ActionButtonSpec {
-                hint: Some("esc"),
-                label: "close",
-            }],
-            2,
-            inner.height.saturating_sub(1),
-        );
-        return (None, rects[0]);
-    }
-
-    let rects = action_button_row_rects(
-        inner,
-        &[
-            ActionButtonSpec {
-                hint: Some("↵"),
-                label: settings_primary_button_label(section),
-            },
-            ActionButtonSpec {
-                hint: Some("esc"),
-                label: "close",
-            },
-        ],
-        2,
-        inner.height.saturating_sub(1),
+    let status = if !app.settings.status.is_empty() {
+        app.settings.status.as_str()
+    } else if let Some(diagnostic) = &app.config_diagnostic {
+        diagnostic.as_str()
+    } else if app.session_setup.history_restart_required {
+        "History saved; restart HERDUCK."
+    } else {
+        ""
+    };
+    let hint = match app.settings.section {
+        SettingsSection::Sessions | SettingsSection::Summaries | SettingsSection::Titles => {
+            "Enter opens config · ↑↓ scroll · Tab section · Esc close"
+        }
+        SettingsSection::Theme => "↑↓ preview · Enter save · Esc cancel · Tab section",
+        SettingsSection::Integrations => "Install adds available integrations · Tab section",
+        _ => "Click / Enter saves immediately · Tab section",
+    };
+    frame.render_widget(
+        Paragraph::new(if status.is_empty() { hint } else { status })
+            .style(Style::default().fg(if status.is_empty() {
+                p.overlay1
+            } else {
+                p.yellow
+            }))
+            .wrap(ratatui::widgets::Wrap { trim: false }),
+        layout.status,
     );
-    (Some(rects[0]), rects[1])
+}
+
+fn render_setup_form(app: &AppState, frame: &mut Frame, area: Rect) {
+    if area.is_empty() {
+        return;
+    }
+    let Some(form) = settings_form(app, area.width) else {
+        return;
+    };
+    let offset = form.scroll_offset(area.height, app.settings.scroll);
+    let max_scroll = form.max_scroll(area.height);
+    frame.render_widget(
+        Paragraph::new(form.lines)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .scroll((offset, 0)),
+        area,
+    );
+    for (visible, row, marker) in [
+        (offset > 0, area.y, "↑"),
+        (offset < max_scroll, area.bottom() - 1, "↓"),
+    ] {
+        if visible {
+            frame.render_widget(
+                Paragraph::new(marker).style(Style::default().fg(app.palette.overlay1)),
+                Rect::new(area.right(), row, 1, 1),
+            );
+        }
+    }
 }
 
 fn integrations_footer_paragraph(app: &AppState) -> Paragraph<'static> {
@@ -469,6 +426,167 @@ mod tests {
     use crate::app::{state::SettingsSection, Mode};
     use ratatui::{backend::TestBackend, Terminal};
 
+    fn render(app: &AppState, width: u16, height: u16) -> Terminal<TestBackend> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| render_settings_overlay(app, frame, frame.area()))
+            .unwrap();
+        terminal
+    }
+
+    fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    fn form_text(app: &AppState) -> String {
+        settings_form(app, 40)
+            .unwrap()
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn sources_display_order_and_full_details_without_editing_controls() {
+        let mut app = AppState::test_new();
+        app.settings.section = SettingsSection::Summaries;
+        let config: crate::config::Config = toml::from_str(r#"
+[projects.summary]
+mode = "auto"
+providers = [
+    { id = "my-api", kind = "openai_compatible", endpoint = "https://example.invalid/a/long/目录/v1/chat/completions", models = ["first", "second"], api_key_env = "SUMMARY_TEST_KEY" },
+    { id = "codex", kind = "cli", command = "/opt/agent tools/codex", models = [] },
+]
+"#).unwrap();
+        app.summary_config = config.projects.summary;
+        let text = form_text(&app);
+        for detail in [
+            "read only",
+            "Ordered fallback",
+            "1. API · my-api",
+            "2. Agent · codex",
+            "first → second",
+            "https://example.invalid/a/long/目录/v1/chat/completions",
+            "from $SUMMARY_TEST_KEY",
+            "/opt/agent tools/codex",
+            "Agent default",
+            "/tmp/herduck/config.toml",
+            "reopen Settings",
+        ] {
+            assert!(text.contains(detail), "missing {detail}: {text}");
+        }
+        assert!(text.find("1. API").unwrap() < text.find("2. Agent").unwrap());
+        for old_control in ["+ Add source", "Save to", "Choose model", "▏"] {
+            assert!(!text.contains(old_control));
+        }
+        let rendered = screen_text(&render(&app, 110, 32));
+        assert!(rendered.contains("open config file"));
+        assert!(!rendered.contains("start session"));
+    }
+
+    #[test]
+    fn naming_inheritance_is_distinct_from_an_explicit_local_only_list() {
+        let mut app = AppState::test_new();
+        app.settings.section = SettingsSection::Titles;
+        let config: crate::config::Config = toml::from_str("[projects.summary]\nmode='auto'\nproviders=[{id='codex',kind='cli',models=['name-model']}]\n").unwrap();
+        app.summary_config = config.projects.summary;
+        let inherited = form_text(&app);
+        assert!(inherited.contains("use Summary priorities (default)"));
+        assert!(inherited.contains("1. Agent · codex"));
+        app.summary_config.title_providers = Some(vec![]);
+        let local = form_text(&app);
+        assert!(local.contains("independent naming priorities"));
+        assert!(local.contains("No model sources configured."));
+        assert!(local.contains("Final fallback: a name from local session text"));
+        assert!(!local.contains("1. Agent"));
+    }
+
+    #[test]
+    fn disabled_sources_show_saved_details_without_claiming_they_are_active() {
+        let mut app = AppState::test_new();
+        app.settings.section = SettingsSection::Summaries;
+        let initial = form_text(&app);
+        assert!(initial.contains("Generation: Off"));
+        assert!(initial.contains("No model sources configured."));
+        assert!(!initial.contains("opencode_free"));
+        app.summary_config.providers_explicit = true;
+        app.summary_config.providers = vec![crate::config::SummaryProviderConfig::cli(
+            "codex",
+            &["saved-model"],
+        )];
+        let saved = form_text(&app);
+        assert!(saved.contains("These sources are not being used."));
+        assert!(saved.contains("saved-model"));
+    }
+
+    #[test]
+    fn session_paths_and_default_agent_scope_are_read_only_and_untruncated() {
+        let mut app = AppState::test_new();
+        app.settings.section = SettingsSection::Sessions;
+        let active = crate::config::ProjectsConfig::default();
+        let mut saved = active.clone();
+        saved
+            .adapters
+            .codex
+            .roots
+            .push(std::path::PathBuf::from(format!(
+                "/tmp/{}/newly-added-history",
+                "long-path/".repeat(12)
+            )));
+        app.session_setup.set_history_locations(&saved, &active);
+        let text = form_text(&app);
+        for detail in [
+            "Sessions · read only",
+            "Default Agent: shell",
+            "Start session uses this Agent",
+            "Tabs and splits open a shell",
+            "Resume uses the original Agent",
+            "newly-added-history",
+            "restarting HERDUCK",
+        ] {
+            assert!(text.contains(detail), "missing {detail}: {text}");
+        }
+    }
+
+    #[test]
+    fn read_only_pages_keep_actions_and_scrolled_config_location_visible() {
+        for (width, height) in [(32, 16), (40, 16), (80, 24), (110, 32)] {
+            for section in [
+                SettingsSection::Sessions,
+                SettingsSection::Summaries,
+                SettingsSection::Titles,
+            ] {
+                let mut app = AppState::test_new();
+                app.settings.section = section;
+                app.settings.scroll = u16::MAX;
+                let text = screen_text(&render(&app, width, height));
+                assert!(text.contains("config"), "{width}x{height}: {text}");
+                assert!(text.contains("close"), "{width}x{height}: {text}");
+                assert!(!text.contains("save setup"));
+                assert!(
+                    text.contains("changes."),
+                    "end of details must be reachable: {text}"
+                );
+            }
+        }
+        let mut app = AppState::test_new();
+        app.settings.section = SettingsSection::Summaries;
+        app.session_setup.history_restart_required = true;
+        assert!(screen_text(&render(&app, 40, 16)).contains("History saved; restart HERDUCK."));
+        app.config_diagnostic = Some("config.toml invalid; keeping current config".into());
+        assert!(screen_text(&render(&app, 110, 32)).contains("keeping current config"));
+        app.settings.status = "Cannot open config: editor unavailable".into();
+        assert!(screen_text(&render(&app, 110, 32)).contains("Cannot open config"));
+    }
+
     #[test]
     fn experiments_pane_history_uses_settings_checkmark_marker() {
         let mut app = AppState::test_new();
@@ -542,6 +660,6 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(rendered.contains("switch to ascii input source in prefix (macOS) [✓]"));
+        assert!(rendered.contains("ASCII input in prefix mode (macOS) [✓]"));
     }
 }

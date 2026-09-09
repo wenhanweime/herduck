@@ -31,7 +31,7 @@ pub(super) fn run_workspace_command(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_list(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 workspace list");
+        eprintln!("usage: herduck workspace list");
         return Ok(2);
     }
 
@@ -103,11 +103,11 @@ fn workspace_create(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: ork3 workspace get <workspace_id>");
+        eprintln!("usage: herduck workspace get <workspace_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 workspace get <workspace_id>");
+        eprintln!("usage: herduck workspace get <workspace_id>");
         return Ok(2);
     }
 
@@ -116,11 +116,11 @@ fn workspace_get(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: ork3 workspace focus <workspace_id>");
+        eprintln!("usage: herduck workspace focus <workspace_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 workspace focus <workspace_id>");
+        eprintln!("usage: herduck workspace focus <workspace_id>");
         return Ok(2);
     }
 
@@ -129,7 +129,7 @@ fn workspace_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_rename(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: ork3 workspace rename <workspace_id> <label>");
+        eprintln!("usage: herduck workspace rename <workspace_id> <label>");
         return Ok(2);
     }
 
@@ -141,7 +141,7 @@ fn workspace_rename(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: ork3 workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+        eprintln!("usage: herduck workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
         return Ok(2);
     };
     let workspace_id = super::normalize_workspace_id(raw_workspace_id);
@@ -226,11 +226,11 @@ fn workspace_report_metadata(args: &[String]) -> std::io::Result<i32> {
 
 fn workspace_close(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_workspace_id) = args.first() else {
-        eprintln!("usage: ork3 workspace close <workspace_id>");
+        eprintln!("usage: herduck workspace close <workspace_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 workspace close <workspace_id>");
+        eprintln!("usage: herduck workspace close <workspace_id>");
         return Ok(2);
     }
 
@@ -238,12 +238,12 @@ fn workspace_close(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_workspace_help() {
-    eprintln!("ork3 workspace commands:");
-    eprintln!("  ork3 workspace list");
-    eprintln!("  ork3 workspace create [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]");
-    eprintln!("  ork3 workspace get <workspace_id>");
-    eprintln!("  ork3 workspace focus <workspace_id>");
-    eprintln!("  ork3 workspace rename <workspace_id> <label>");
-    eprintln!("  ork3 workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-    eprintln!("  ork3 workspace close <workspace_id>");
+    eprintln!("herduck workspace commands:");
+    eprintln!("  herduck workspace list");
+    eprintln!("  herduck workspace create [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]");
+    eprintln!("  herduck workspace get <workspace_id>");
+    eprintln!("  herduck workspace focus <workspace_id>");
+    eprintln!("  herduck workspace rename <workspace_id> <label>");
+    eprintln!("  herduck workspace report-metadata <workspace_id> --source ID [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+    eprintln!("  herduck workspace close <workspace_id>");
 }

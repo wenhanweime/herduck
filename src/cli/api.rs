@@ -1,4 +1,4 @@
-const API_SCHEMA_JSON: &str = include_str!("../../docs/api/ork3-api.schema.json");
+const API_SCHEMA_JSON: &str = include_str!("../../docs/api/herduck-api.schema.json");
 
 use crate::api::schema::{EmptyParams, Method, Request};
 
@@ -55,7 +55,7 @@ fn api_schema(args: &[String]) -> std::io::Result<i32> {
 
 fn api_snapshot(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 api snapshot");
+        eprintln!("usage: herduck api snapshot");
         return Ok(2);
     }
 
@@ -89,7 +89,7 @@ fn schema_summary_text() -> std::io::Result<String> {
     schemas.sort();
 
     Ok(format!(
-        "ORK3 API schema\nprotocol: {}\nschema_version: {}\nschemas: {}\n\nUse `ork3 api schema --json` to print the full schema.\nUse `ork3 api schema --output PATH` to write it to a file.\n",
+        "HERDUCK API schema\nprotocol: {}\nschema_version: {}\nschemas: {}\n\nUse `herduck api schema --json` to print the full schema.\nUse `herduck api schema --output PATH` to write it to a file.\n",
         protocol,
         schema_version,
         schemas.join(", ")
@@ -97,13 +97,13 @@ fn schema_summary_text() -> std::io::Result<String> {
 }
 
 fn print_api_help() {
-    eprintln!("ork3 api commands:");
-    eprintln!("  ork3 api snapshot");
-    eprintln!("  ork3 api schema [--json | --output PATH]");
+    eprintln!("herduck api commands:");
+    eprintln!("  herduck api snapshot");
+    eprintln!("  herduck api schema [--json | --output PATH]");
 }
 
 fn print_api_schema_help() {
-    eprintln!("usage: ork3 api schema [--json | --output PATH]");
+    eprintln!("usage: herduck api schema [--json | --output PATH]");
 }
 
 #[cfg(test)]
@@ -111,8 +111,8 @@ mod tests {
     #[test]
     fn schema_summary_text_stays_human_sized() {
         let text = super::schema_summary_text().unwrap();
-        assert!(text.contains("ORK3 API schema"));
-        assert!(text.contains("Use `ork3 api schema --json`"));
+        assert!(text.contains("HERDUCK API schema"));
+        assert!(text.contains("Use `herduck api schema --json`"));
         assert!(text.len() < 400);
     }
 }

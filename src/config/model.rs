@@ -40,8 +40,8 @@ impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
             channel: default_update_channel(),
-            version_check: true,
-            manifest_check: true,
+            version_check: false,
+            manifest_check: false,
         }
     }
 }
@@ -59,8 +59,8 @@ fn default_update_channel() -> UpdateChannelConfig {
 pub enum ToastDelivery {
     #[default]
     Off,
-    #[serde(alias = "herdr")]
-    Ork3,
+    #[serde(alias = "herdr", alias = "ork3")]
+    Herduck,
     Terminal,
     System,
 }
@@ -69,7 +69,7 @@ pub enum ToastDelivery {
     Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema, Default,
 )]
 #[serde(rename_all = "kebab-case")]
-pub enum ToastOrk3Position {
+pub enum ToastHerduckPosition {
     TopLeft,
     TopRight,
     BottomLeft,
@@ -181,14 +181,14 @@ fn parse_right_click_passthrough_modifier(value: &str) -> Option<Option<KeyModif
 pub struct ToastConfig {
     pub delivery: ToastDelivery,
     pub delay_seconds: u64,
-    pub ork3: Ork3ToastConfig,
+    pub herduck: HerduckToastConfig,
     pub clipboard: ClipboardToastConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
-pub struct Ork3ToastConfig {
-    pub position: ToastOrk3Position,
+pub struct HerduckToastConfig {
+    pub position: ToastHerduckPosition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -245,18 +245,21 @@ pub struct TerminalConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct SessionConfig {
+    /// Executable suggested by Settings → Sessions; empty or "shell" creates a plain terminal.
+    pub default_agent: String,
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
-    /// Stop an identified idle Agent after this many seconds without terminal
-    /// input or output. The pane and its shell remain available when possible.
-    /// Set to 0 to disable automatic Agent process reclamation. Default: 3600.
+    /// Mark an idle Agent inactive after this many seconds without terminal
+    /// input, output, or state changes. Its process and conversation stay alive.
+    /// Set to 0 to disable inactivity marking. Default: 3600.
     pub agent_idle_timeout_secs: u64,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
+            default_agent: String::new(),
             resume_agents_on_restore: true,
             agent_idle_timeout_secs: 60 * 60,
         }
@@ -311,6 +314,9 @@ pub struct Config {
 #[serde(default)]
 pub struct ProjectsConfig {
     pub adapters: ProjectAdaptersConfig,
+    /// Literal directory-name prefixes for disposable runners directly under a system temp root.
+    #[serde(deserialize_with = "deserialize_ephemeral_cwd_prefixes")]
+    pub ephemeral_cwd_prefixes: Vec<String>,
     /// Repeated normalized titles at or above this count are treated as automation templates.
     pub automation_title_threshold: usize,
     /// Session title and semantic topic provider configuration.
@@ -321,22 +327,41 @@ impl Default for ProjectsConfig {
     fn default() -> Self {
         Self {
             adapters: ProjectAdaptersConfig::default(),
+            ephemeral_cwd_prefixes: Vec::new(),
             automation_title_threshold: 20,
             summary: SummaryConfig::default(),
         }
     }
 }
 
+fn deserialize_ephemeral_cwd_prefixes<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let prefixes = Vec::<String>::deserialize(deserializer)?;
+    if prefixes
+        .iter()
+        .any(|prefix| prefix.trim().is_empty() || prefix.contains(['/', '\\']))
+    {
+        return Err(de::Error::custom(
+            "ephemeral_cwd_prefixes must contain nonempty directory-name prefixes, not paths",
+        ));
+    }
+    Ok(prefixes)
+}
+
 /// Controls how session titles and semantic topics are produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SummaryModeConfig {
-    /// Prefer configured LLM providers and fall back to the deterministic local algorithm.
+    /// Await an explicit summary source choice; do not generate titles or topics.
     #[default]
+    Pending,
+    /// Prefer configured LLM providers; titles fall back locally and topics await classification.
     Auto,
-    /// Never start an Agent process or make a network request.
+    /// Generate titles locally and retain cached topics without starting a classification worker.
     Local,
-    /// Prefer configured LLM providers; local fallback keeps the catalog usable on failure.
+    /// Prefer configured LLM providers; keep existing topics when classification is unavailable.
     Llm,
 }
 
@@ -362,7 +387,7 @@ pub struct SummaryProviderConfig {
     pub endpoint: Option<String>,
     /// Name of the environment variable containing the API key. The key itself is never stored.
     pub api_key_env: Option<String>,
-    /// Models are tried in order and rotated between passes.
+    /// Models are tried in order until one succeeds.
     pub models: Vec<String>,
 }
 
@@ -402,7 +427,7 @@ impl SummaryProviderConfig {
         }
     }
 
-    fn cli(id: &str, models: &[&str]) -> Self {
+    pub(crate) fn cli(id: &str, models: &[&str]) -> Self {
         Self {
             id: id.to_string(),
             kind: SummaryProviderKind::Cli,
@@ -425,13 +450,7 @@ impl SummaryProviderConfig {
                     "opencode/mimo-v2.5-free",
                 ],
             ),
-            Self::cli(
-                "pi",
-                &[
-                    "NewAPIConn/deepseek-v4-flash-free",
-                    "NewAPIConn/glm-4.7-flash",
-                ],
-            ),
+            Self::cli("pi", &[]),
             Self::cli("codex", &[]),
             Self::cli("hermes", &[]),
         ]
@@ -440,11 +459,16 @@ impl SummaryProviderConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
+#[serde(from = "SummaryConfigInput")]
 pub struct SummaryConfig {
     pub title_language: TitleLanguage,
     pub mode: SummaryModeConfig,
-    /// Ordered provider chain. An empty list disables LLM attempts and uses local fallback.
+    /// Ordered provider chain. An empty list uses local titles and retains cached topics.
     pub providers: Vec<SummaryProviderConfig>,
+    /// Session naming sources. None inherits providers; an empty list uses local names only.
+    pub title_providers: Option<Vec<SummaryProviderConfig>>,
+    /// Source metadata, never a TOML option: distinguishes saved, disabled providers from defaults.
+    pub(crate) providers_explicit: bool,
     pub batch_size: usize,
     pub max_sessions_per_run: usize,
     pub timeout_secs: u64,
@@ -456,9 +480,11 @@ pub struct SummaryConfig {
 impl Default for SummaryConfig {
     fn default() -> Self {
         Self {
-            title_language: TitleLanguage::Chinese,
-            mode: SummaryModeConfig::Auto,
+            title_language: TitleLanguage::default(),
+            mode: SummaryModeConfig::Pending,
             providers: SummaryProviderConfig::default_presets(),
+            title_providers: None,
+            providers_explicit: false,
             batch_size: 40,
             max_sessions_per_run: 500,
             timeout_secs: 120,
@@ -468,12 +494,67 @@ impl Default for SummaryConfig {
     }
 }
 
+// Preserve legacy explicit summary configurations without enabling fresh installs.
+#[derive(Deserialize)]
+#[serde(default)]
+struct SummaryConfigInput {
+    title_language: TitleLanguage,
+    mode: Option<SummaryModeConfig>,
+    providers: Option<Vec<SummaryProviderConfig>>,
+    title_providers: Option<Vec<SummaryProviderConfig>>,
+    batch_size: usize,
+    max_sessions_per_run: usize,
+    timeout_secs: u64,
+    startup_grace_secs: u64,
+    idle_backfill_secs: u64,
+}
+impl Default for SummaryConfigInput {
+    fn default() -> Self {
+        let defaults = SummaryConfig::default();
+        Self {
+            title_language: defaults.title_language,
+            mode: None,
+            providers: None,
+            title_providers: None,
+            batch_size: defaults.batch_size,
+            max_sessions_per_run: defaults.max_sessions_per_run,
+            timeout_secs: defaults.timeout_secs,
+            startup_grace_secs: defaults.startup_grace_secs,
+            idle_backfill_secs: defaults.idle_backfill_secs,
+        }
+    }
+}
+impl From<SummaryConfigInput> for SummaryConfig {
+    fn from(input: SummaryConfigInput) -> Self {
+        let providers_explicit = input.providers.is_some();
+        let mode = input.mode.unwrap_or(if input.providers.is_some() {
+            SummaryModeConfig::Auto
+        } else {
+            SummaryModeConfig::Pending
+        });
+        Self {
+            title_language: input.title_language,
+            mode,
+            providers: input
+                .providers
+                .unwrap_or_else(SummaryProviderConfig::default_presets),
+            providers_explicit,
+            title_providers: input.title_providers,
+            batch_size: input.batch_size,
+            max_sessions_per_run: input.max_sessions_per_run,
+            timeout_secs: input.timeout_secs,
+            startup_grace_secs: input.startup_grace_secs,
+            idle_backfill_secs: input.idle_backfill_secs,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 pub enum TitleLanguage {
-    #[default]
-    #[serde(rename = "zh", alias = "zh-CN")]
+    #[serde(rename = "zh", alias = "zh-CN", alias = "chinese")]
     Chinese,
-    #[serde(rename = "en")]
+    #[default]
+    #[serde(rename = "en", alias = "english")]
     English,
 }
 
@@ -1181,7 +1262,12 @@ impl Default for KeysConfig {
 impl Default for WorktreesConfig {
     fn default() -> Self {
         Self {
-            directory: "~/.ork3/worktrees".into(),
+            directory: if crate::config::uses_legacy_namespace() {
+                "~/.ork3/worktrees"
+            } else {
+                "~/.herduck/worktrees"
+            }
+            .into(),
         }
     }
 }
@@ -1232,16 +1318,16 @@ impl Default for ToastConfig {
         Self {
             delivery: ToastDelivery::Off,
             delay_seconds: 1,
-            ork3: Ork3ToastConfig::default(),
+            herduck: HerduckToastConfig::default(),
             clipboard: ClipboardToastConfig::default(),
         }
     }
 }
 
-impl Default for Ork3ToastConfig {
+impl Default for HerduckToastConfig {
     fn default() -> Self {
         Self {
-            position: ToastOrk3Position::BottomRight,
+            position: ToastHerduckPosition::BottomRight,
         }
     }
 }
@@ -1266,14 +1352,14 @@ impl<'de> Deserialize<'de> for ToastConfig {
             delivery: Option<ToastDelivery>,
             enabled: Option<bool>,
             delay_seconds: Option<u64>,
-            #[serde(alias = "herdr")]
-            ork3: Ork3ToastConfig,
+            #[serde(alias = "herdr", alias = "ork3")]
+            herduck: HerduckToastConfig,
             clipboard: ClipboardToastConfig,
         }
 
         let raw = RawToastConfig::deserialize(deserializer)?;
         let legacy_delivery = match raw.enabled {
-            Some(true) => ToastDelivery::Ork3,
+            Some(true) => ToastDelivery::Herduck,
             Some(false) | None => ToastDelivery::Off,
         };
         let delivery = raw.delivery.unwrap_or(legacy_delivery);
@@ -1287,7 +1373,7 @@ impl<'de> Deserialize<'de> for ToastConfig {
         Ok(Self {
             delivery,
             delay_seconds,
-            ork3: raw.ork3,
+            herduck: raw.herduck,
             clipboard: raw.clipboard,
         })
     }
@@ -1306,23 +1392,88 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_product_toast_settings_load_without_rewriting_configuration() {
+        for name in ["herdr", "ork3", "herduck"] {
+            let source = format!(
+                "[ui.toast]\ndelivery = \"{name}\"\n[ui.toast.{name}]\nposition = \"top-left\"\n"
+            );
+            let config: Config = toml::from_str(&source).expect("legacy toast config");
+            assert_eq!(config.ui.toast.delivery, ToastDelivery::Herduck);
+            assert_eq!(
+                config.ui.toast.herduck.position,
+                ToastHerduckPosition::TopLeft
+            );
+        }
+    }
+
+    #[test]
+    fn public_defaults_and_personal_project_overrides_parse() {
+        for input in [
+            "",
+            "[projects]",
+            "[projects.summary]",
+            crate::DEFAULT_CONFIG,
+        ] {
+            let config: Config = toml::from_str(input).expect("default config");
+            assert!(config.projects.ephemeral_cwd_prefixes.is_empty());
+            assert_eq!(
+                config.projects.summary.title_language,
+                TitleLanguage::English
+            );
+            assert!(!config.update.version_check);
+            assert!(!config.update.manifest_check);
+        }
+
+        for (language, expected) in [
+            ("zh", TitleLanguage::Chinese),
+            ("zh-CN", TitleLanguage::Chinese),
+            ("chinese", TitleLanguage::Chinese),
+            ("en", TitleLanguage::English),
+            ("english", TitleLanguage::English),
+        ] {
+            let input = format!(
+                "[projects]\nephemeral_cwd_prefixes = ['ci-%_worker-']\n\
+                 [projects.summary]\ntitle_language = '{language}'"
+            );
+            let config: Config = toml::from_str(&input).expect("personal config");
+            assert_eq!(config.projects.summary.title_language, expected);
+            assert_eq!(config.projects.ephemeral_cwd_prefixes, ["ci-%_worker-"]);
+        }
+    }
+
+    #[test]
+    fn ephemeral_prefix_config_rejects_empty_values_and_paths() {
+        for prefix in [
+            "",
+            " ",
+            "/tmp/worker-",
+            "parent/worker-",
+            "C:\\Temp\\worker-",
+        ] {
+            let input = format!("[projects]\nephemeral_cwd_prefixes = ['{prefix}']");
+            let error = toml::from_str::<Config>(&input).expect_err("invalid prefix");
+            assert!(error.to_string().contains("directory-name prefixes"));
+        }
+    }
+
+    #[test]
     fn update_config_defaults_and_parses() {
         let default_config = Config::default();
         assert_eq!(default_config.update.channel, default_update_channel());
-        assert!(default_config.update.version_check);
-        assert!(default_config.update.manifest_check);
+        assert!(!default_config.update.version_check);
+        assert!(!default_config.update.manifest_check);
 
         let toml = r#"
 [update]
 channel = "preview"
-version_check = false
-manifest_check = false
+version_check = true
+manifest_check = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.update.channel, UpdateChannelConfig::Preview);
         assert_eq!(config.update.channel.as_str(), "preview");
-        assert!(!config.update.version_check);
-        assert!(!config.update.manifest_check);
+        assert!(config.update.version_check);
+        assert!(config.update.manifest_check);
     }
 
     #[cfg(windows)]
@@ -1459,7 +1610,14 @@ hide_tab_bar_when_single_tab = true
     #[test]
     fn worktrees_directory_defaults_and_parses() {
         let default_config = Config::default();
-        assert_eq!(default_config.worktrees.directory, "~/.ork3/worktrees");
+        assert_eq!(
+            default_config.worktrees.directory,
+            if crate::config::uses_legacy_namespace() {
+                "~/.ork3/worktrees"
+            } else {
+                "~/.herduck/worktrees"
+            }
+        );
 
         let toml = r#"
 [worktrees]
@@ -1492,7 +1650,7 @@ roots = ["~/history/pi"]
     #[test]
     fn summary_defaults_and_custom_provider_parse() {
         let defaults = Config::default();
-        assert_eq!(defaults.projects.summary.mode, SummaryModeConfig::Auto);
+        assert_eq!(defaults.projects.summary.mode, SummaryModeConfig::Pending);
         assert_eq!(
             defaults
                 .projects
@@ -1810,7 +1968,7 @@ mouse_scroll_lines = 0
 delivery = "terminal"
 delay_seconds = 2
 
-[ui.toast.ork3]
+[ui.toast.herduck]
 position = "top-left"
 
 [ui.toast.clipboard]
@@ -1820,7 +1978,10 @@ position = "top-center"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Terminal);
         assert_eq!(config.ui.toast.delay_seconds, 2);
-        assert_eq!(config.ui.toast.ork3.position, ToastOrk3Position::TopLeft);
+        assert_eq!(
+            config.ui.toast.herduck.position,
+            ToastHerduckPosition::TopLeft
+        );
         assert!(!config.ui.toast.clipboard.enabled);
         assert_eq!(
             config.ui.toast.clipboard.position,
@@ -1834,8 +1995,8 @@ position = "top-center"
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Off);
         assert_eq!(config.ui.toast.delay_seconds, 1);
         assert_eq!(
-            config.ui.toast.ork3.position,
-            ToastOrk3Position::BottomRight
+            config.ui.toast.herduck.position,
+            ToastHerduckPosition::BottomRight
         );
         assert!(config.ui.toast.clipboard.enabled);
         assert_eq!(
@@ -1861,7 +2022,7 @@ delivery = "system"
 enabled = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.toast.delivery, ToastDelivery::Ork3);
+        assert_eq!(config.ui.toast.delivery, ToastDelivery::Herduck);
     }
 
     #[test]

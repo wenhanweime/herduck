@@ -72,8 +72,7 @@ const TOPIC_SESSIONS_PAGE_SQL: &str = "SELECT s.stable_key, s.backend, s.ref_kin
             COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title), s.cwd,
             s.first_activity_at, s.last_activity_at,
             r.workspace_id, r.pane_id, r.generation, s.session_class,
-            s.user_weight_known, s.user_turns, s.user_chars, sa.topic_label,
-            s.transcript_ref
+            sa.topic_label, s.transcript_ref
      FROM sessions s
      CROSS JOIN semantic_assignments sa ON sa.session_key = s.stable_key
      LEFT JOIN runtime_mappings r ON r.session_key = s.stable_key
@@ -177,28 +176,40 @@ impl ScanCompletion {
 pub(crate) struct ProjectCatalog {
     connection: Connection,
     automation_title_threshold: usize,
+    ephemeral_cwd_prefixes: Vec<String>,
 }
 
 impl ProjectCatalog {
     #[cfg(test)]
     pub(crate) fn open(path: &Path) -> Result<Self, CatalogError> {
-        Self::open_with_threshold(path, 20)
+        Self::open_with_config(path, &crate::config::ProjectsConfig::default())
     }
 
-    pub(crate) fn open_with_threshold(
+    pub(crate) fn open_with_config(
         path: &Path,
-        automation_title_threshold: usize,
+        config: &crate::config::ProjectsConfig,
     ) -> Result<Self, CatalogError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let connection = Connection::open(path)?;
-        Self::initialize(connection, true, Some(path), automation_title_threshold)
+        Self::initialize(
+            connection,
+            true,
+            Some(path),
+            config.automation_title_threshold,
+            &config.ephemeral_cwd_prefixes,
+        )
     }
 
     #[cfg(test)]
     pub(crate) fn open_in_memory() -> Result<Self, CatalogError> {
-        Self::initialize(Connection::open_in_memory()?, false, None, 20)
+        Self::open_in_memory_with_prefixes(&[])
+    }
+
+    #[cfg(test)]
+    fn open_in_memory_with_prefixes(prefixes: &[String]) -> Result<Self, CatalogError> {
+        Self::initialize(Connection::open_in_memory()?, false, None, 20, prefixes)
     }
 
     fn initialize(
@@ -206,6 +217,7 @@ impl ProjectCatalog {
         use_wal: bool,
         path: Option<&Path>,
         automation_title_threshold: usize,
+        ephemeral_cwd_prefixes: &[String],
     ) -> Result<Self, CatalogError> {
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
@@ -222,14 +234,15 @@ impl ProjectCatalog {
         let mut catalog = Self {
             connection,
             automation_title_threshold: automation_title_threshold.max(1),
+            ephemeral_cwd_prefixes: ephemeral_cwd_prefixes.to_vec(),
         };
         catalog.migrate()?;
         catalog.refresh_automation_classes()?;
         catalog.restore_legacy_semantic_assignments()?;
-        catalog.exclude_ephemeral_agent_assignments()?;
+        catalog.reconcile_ephemeral_agent_assignments()?;
         catalog.reconcile_stale_semantic_assignments()?;
         catalog.purge_junk_semantic_assignments()?;
-        catalog.backfill_local_topic_assignments()?;
+        catalog.purge_local_topic_assignments()?;
         Ok(catalog)
     }
 
@@ -659,9 +672,9 @@ impl ProjectCatalog {
 
         let mut classifications = HashMap::<Option<String>, ProjectClassification>::new();
         for (_, cwd, _) in &rows {
-            classifications
-                .entry(cwd.clone())
-                .or_insert_with(|| classifier::classify(cwd.as_deref().map(Path::new)));
+            classifications.entry(cwd.clone()).or_insert_with(|| {
+                classifier::classify(cwd.as_deref().map(Path::new), &self.ephemeral_cwd_prefixes)
+            });
         }
 
         let transaction = self
@@ -684,30 +697,27 @@ impl ProjectCatalog {
         Ok(())
     }
 
-    /// Rehomes disposable Paseo/Multica execution cwds into a hidden internal assignment.
+    /// Reconciles disposable execution cwds with the currently configured runner prefixes.
     ///
     /// Older Catalogs classified each temporary OpenCode cwd as a standalone directory while it
     /// existed, then classified it as `Unclassified` after macOS removed it. The sessions remain
     /// indexed and available to topic clustering; only the false directory ownership is hidden.
-    fn exclude_ephemeral_agent_assignments(&mut self) -> Result<(), CatalogError> {
+    /// Removing a prefix restores automatic assignments without requiring a transcript rescan.
+    fn reconcile_ephemeral_agent_assignments(&mut self) -> Result<(), CatalogError> {
         if !table_has_column(&self.connection, "assignments", "evidence")?
             || !table_has_column(&self.connection, "assignments", "locked")?
             || !table_has_column(&self.connection, "sessions", "cwd")?
+            || !table_has_column(&self.connection, "assignments", "source")?
         {
             return Ok(());
         }
         let rows = {
             let mut statement = self.connection.prepare(
-                "SELECT a.session_key, s.cwd, a.updated_at
+                "SELECT a.session_key, s.cwd, a.updated_at, a.evidence, a.source
                  FROM assignments a
                  JOIN sessions s ON s.stable_key = a.session_key
                  WHERE a.locked = 0
-                   AND a.evidence != 'ephemeral-agent-cwd'
-                   AND (s.cwd LIKE '%paseo-multica-agent-%'
-                        OR s.cwd LIKE '%paseo-topics-agent-%'
-                        OR s.cwd LIKE '%-temp-%'
-                        OR s.cwd LIKE '%/general'
-                        OR s.cwd LIKE '%ork-direct-accept%')
+                   AND s.cwd IS NOT NULL
                  ORDER BY a.session_key ASC",
             )?;
             let rows = statement
@@ -716,30 +726,47 @@ impl ProjectCatalog {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
-        let rows = rows
-            .into_iter()
-            .filter(|(_, cwd, _)| classifier::is_ephemeral_agent_cwd(Path::new(cwd)))
-            .collect::<Vec<_>>();
-        if rows.is_empty() {
+        // Match in Rust so prefixes stay literal (including '%' and '_') and the repair uses
+        // exactly the same rules as live reports and scans. Cache by cwd for large catalogs.
+        let mut ephemeral_by_cwd = HashMap::new();
+        let mut classifications = HashMap::new();
+        let mut changes = Vec::new();
+        for (session_key, cwd, updated_at, evidence, source) in rows {
+            let ephemeral = *ephemeral_by_cwd.entry(cwd.clone()).or_insert_with(|| {
+                classifier::is_ephemeral_agent_cwd(Path::new(&cwd), &self.ephemeral_cwd_prefixes)
+            });
+            let was_ephemeral = evidence == "ephemeral-agent-cwd";
+            if ephemeral == was_ephemeral || (was_ephemeral && source != "automatic") {
+                continue;
+            }
+            classifications.entry(cwd.clone()).or_insert_with(|| {
+                if ephemeral {
+                    ProjectClassification::ephemeral_agent()
+                } else {
+                    classifier::classify(Some(Path::new(&cwd)), &self.ephemeral_cwd_prefixes)
+                }
+            });
+            changes.push((session_key, cwd, updated_at));
+        }
+        if changes.is_empty() {
             return Ok(());
         }
 
-        let project = ProjectClassification::ephemeral_agent();
-        let observed_at = rows
-            .iter()
-            .map(|(_, _, observed_at)| *observed_at)
-            .max()
-            .unwrap_or_default();
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let project_id = upsert_project(&transaction, &project, observed_at)?;
-        for (session_key, _, updated_at) in rows {
+        for (session_key, cwd, updated_at) in changes {
+            let Some(project) = classifications.get(&cwd) else {
+                continue;
+            };
+            let project_id = upsert_project(&transaction, project, updated_at)?;
             transaction.execute(
                 "UPDATE assignments
                  SET project_id = ?2, source = 'automatic', evidence = ?3, updated_at = ?4
@@ -820,11 +847,19 @@ impl ProjectCatalog {
         }
         let has_title_priority = table_has_column(&self.connection, "sessions", "title_priority")?;
         let has_assignment_lock = table_has_column(&self.connection, "assignments", "locked")?;
-        let fallback_guard = if has_title_priority {
+        let mut fallback_guard = if has_title_priority {
             "s.title_priority = 0 OR s.title LIKE '% session · %'"
         } else {
             "s.title LIKE '% session · %'"
-        };
+        }
+        .to_string();
+        // A generated or manual title is valid classification evidence even when the original
+        // provider title was a placeholder. Do not discard a successful model classification.
+        for column in ["generated_title", "custom_title"] {
+            if table_has_column(&self.connection, "sessions", column)? {
+                fallback_guard = format!("({fallback_guard}) AND COALESCE(s.{column}, '') = ''");
+            }
+        }
         let lock_guard = if has_assignment_lock {
             "AND NOT EXISTS (
                  SELECT 1 FROM assignments a
@@ -857,50 +892,29 @@ impl ProjectCatalog {
         Ok(())
     }
 
-    /// Gives every interactive session a deterministic Topic before any model-backed worker runs.
-    ///
-    /// Older Catalogs can contain sessions that never entered Topics because they were thin, had a
-    /// fallback title, or arrived after the semantic worker went idle. Backfilling the missing rows
-    /// on open makes the Topics index complete without making provider availability a UI concern.
-    fn backfill_local_topic_assignments(&mut self) -> Result<(), CatalogError> {
-        if !table_exists(&self.connection, "assignments")?
-            || !table_exists(&self.connection, "semantic_assignments")?
-            || !table_has_column(&self.connection, "sessions", "session_class")?
-            || !table_has_column(&self.connection, "sessions", "custom_title")?
-            || !table_has_column(&self.connection, "sessions", "generated_title")?
+    /// Remove automatic topic guesses written by older builds. Keep explicit locks and all
+    /// model classifications, including genuine topics whose names happen to match a directory.
+    fn purge_local_topic_assignments(&mut self) -> Result<(), CatalogError> {
+        if !table_has_column(&self.connection, "semantic_assignments", "backend_used")?
+            || !table_has_column(&self.connection, "semantic_assignments", "model_used")?
+            || !table_has_column(&self.connection, "assignments", "locked")?
         {
             return Ok(());
         }
-        let keys = {
-            let mut statement = self.connection.prepare(
-                "SELECT s.stable_key, s.last_activity_at
-                 FROM sessions s
-                 JOIN assignments a ON a.session_key = s.stable_key
-                 LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
-                 WHERE s.session_class = 'interactive'
-                   AND a.locked = 0
-                   AND sa.session_key IS NULL
-                 ORDER BY s.last_activity_at DESC, s.stable_key ASC",
-            )?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                })?
-                .collect::<Result<Vec<_>, _>>()?;
-            rows
-        };
-        if keys.is_empty() {
-            return Ok(());
-        }
-
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut changed = false;
-        for (stable_key, last_activity_at) in keys {
-            changed |= ensure_local_topic_assignment(&transaction, &stable_key, last_activity_at)?;
-        }
-        if changed {
+        let deleted = transaction.execute(
+            "DELETE FROM semantic_assignments
+             WHERE backend_used IN ('local', 'local-pending')
+               AND model_used IS NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM assignments a
+                   WHERE a.session_key = semantic_assignments.session_key AND a.locked = 1
+               )",
+            [],
+        )?;
+        if deleted > 0 {
             bump_revision(&transaction)?;
         }
         transaction.commit()?;
@@ -924,9 +938,16 @@ impl ProjectCatalog {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let candidate = resolve_alias_primary(&transaction, candidate)?;
-        let preserve_assignment = can_preserve_existing_assignment(&transaction, &candidate)?;
+        let preserve_assignment = can_preserve_existing_assignment(
+            &transaction,
+            &candidate,
+            &self.ephemeral_cwd_prefixes,
+        )?;
         let project = (!preserve_assignment).then(|| {
-            classifier::classify(candidate.cwd.as_ref().map(|field| field.value.as_path()))
+            classifier::classify(
+                candidate.cwd.as_ref().map(|field| field.value.as_path()),
+                &self.ephemeral_cwd_prefixes,
+            )
         });
         upsert_session(&transaction, &candidate)?;
         if let Some(project) = project {
@@ -940,11 +961,6 @@ impl ProjectCatalog {
             )?;
         }
         reconcile_semantic_assignment(&transaction, &candidate.identity.stable_key)?;
-        ensure_local_topic_assignment(
-            &transaction,
-            &candidate.identity.stable_key,
-            candidate.observed_at,
-        )?;
         upsert_source(&transaction, &candidate)?;
         upsert_aliases(&transaction, &candidate)?;
         upsert_runtime(&transaction, &candidate)?;
@@ -974,14 +990,23 @@ impl ProjectCatalog {
         let mut classifications = HashMap::new();
         for candidate in candidates {
             let candidate = resolve_alias_primary(&transaction, candidate)?;
-            let preserve_assignment = can_preserve_existing_assignment(&transaction, &candidate)?;
+            let preserve_assignment = can_preserve_existing_assignment(
+                &transaction,
+                &candidate,
+                &self.ephemeral_cwd_prefixes,
+            )?;
             let project = if preserve_assignment {
                 None
             } else {
                 Some(match candidate.cwd.as_ref() {
                     Some(field) => classifications
                         .entry(field.value.clone())
-                        .or_insert_with(|| classifier::classify(Some(field.value.as_path())))
+                        .or_insert_with(|| {
+                            classifier::classify(
+                                Some(field.value.as_path()),
+                                &self.ephemeral_cwd_prefixes,
+                            )
+                        })
                         .clone(),
                     None => ProjectClassification::unclassified(),
                 })
@@ -998,11 +1023,6 @@ impl ProjectCatalog {
                 )?;
             }
             reconcile_semantic_assignment(&transaction, &candidate.identity.stable_key)?;
-            ensure_local_topic_assignment(
-                &transaction,
-                &candidate.identity.stable_key,
-                candidate.observed_at,
-            )?;
             upsert_source(&transaction, &candidate)?;
             upsert_aliases(&transaction, &candidate)?;
             upsert_runtime(&transaction, &candidate)?;
@@ -1184,7 +1204,8 @@ impl ProjectCatalog {
                             session.cwd.as_deref(),
                             &session.backend,
                         );
-                        if backend.as_deref() == Some(super::semantic::LOCAL_PENDING_BACKEND)
+                        if (matches!(backend.as_deref(), Some("local" | "local-pending"))
+                            && model.is_none())
                             || session.stored_fingerprint.as_deref() != Some(fingerprint.as_str())
                         {
                             return None;
@@ -1198,13 +1219,14 @@ impl ProjectCatalog {
                     });
             let mut stale = group
                 .into_iter()
-                .filter_map(|(session, _, _, backend, _)| {
+                .filter_map(|(session, _, _, backend, model)| {
                     let fingerprint = super::semantic_fingerprint(
                         &session.title,
                         session.cwd.as_deref(),
                         &session.backend,
                     );
-                    (backend.as_deref() == Some(super::semantic::LOCAL_PENDING_BACKEND)
+                    ((matches!(backend.as_deref(), Some("local" | "local-pending"))
+                        && model.is_none())
                         || session.stored_fingerprint.as_deref() != Some(fingerprint.as_str()))
                     .then_some((session, fingerprint))
                 })
@@ -1238,10 +1260,14 @@ impl ProjectCatalog {
                 (SELECT latest.topic_label
                    FROM semantic_assignments latest
                   WHERE latest.topic_key = grouped.topic_key
+                    AND NOT (latest.backend_used IN ('local', 'local-pending')
+                             AND latest.model_used IS NULL)
                   ORDER BY latest.classified_at DESC, latest.session_key ASC
                   LIMIT 1),
                 MAX(grouped.classified_at) recent
                FROM semantic_assignments grouped
+              WHERE NOT (grouped.backend_used IN ('local', 'local-pending')
+                         AND grouped.model_used IS NULL)
               GROUP BY grouped.topic_key
               ORDER BY recent DESC, grouped.topic_key ASC
               LIMIT ?1",
@@ -1547,9 +1573,13 @@ impl ProjectCatalog {
                 (SELECT latest.topic_label
                    FROM semantic_assignments latest
                   WHERE latest.topic_key = grouped.topic_key
+                    AND NOT (latest.backend_used IN ('local', 'local-pending')
+                             AND latest.model_used IS NULL)
                   ORDER BY latest.classified_at DESC, latest.session_key ASC
                   LIMIT 1)
                FROM semantic_assignments grouped
+              WHERE NOT (grouped.backend_used IN ('local', 'local-pending')
+                         AND grouped.model_used IS NULL)
               GROUP BY grouped.topic_key
               ORDER BY MAX(grouped.classified_at) DESC, grouped.topic_key ASC",
         )?;
@@ -1921,7 +1951,6 @@ impl ProjectCatalog {
                 "semantic".to_string(),
             );
             let (sessions, next_cursor) = self.topic_sessions_page(&topic_key, None, page_size)?;
-            let thin_count = self.thin_count_for_topic(&topic_key)?;
             topics.push(ProjectSummary {
                 canonical_key: classification.canonical_key,
                 kind: ProjectKind::Semantic,
@@ -1929,7 +1958,7 @@ impl ProjectCatalog {
                 canonical_path: topic_key,
                 sessions,
                 automation: Vec::new(),
-                thin_count,
+                thin_count: 0,
                 next_cursor,
             });
         }
@@ -1968,23 +1997,6 @@ impl ProjectCatalog {
                         AND (s.user_turns >= ?3 OR s.user_chars >= ?4))",
             params![
                 project_id,
-                super::adapters::MIN_ANY_CHARS as i64,
-                super::adapters::MIN_SUBSTANTIVE_TURNS as i64,
-                super::adapters::MIN_SUBSTANTIVE_CHARS as i64,
-            ],
-            |row| row.get::<_, i64>(0),
-        )? as u64)
-    }
-
-    fn thin_count_for_topic(&self, topic_key: &str) -> Result<u64, CatalogError> {
-        Ok(self.connection.query_row(
-            "SELECT COUNT(*) FROM sessions s
-             JOIN semantic_assignments sa ON sa.session_key = s.stable_key
-             WHERE sa.topic_key = ?1 AND s.session_class = 'interactive'
-               AND NOT (s.user_weight_known = 1 AND s.user_chars >= ?2
-                        AND (s.user_turns >= ?3 OR s.user_chars >= ?4))",
-            params![
-                topic_key,
                 super::adapters::MIN_ANY_CHARS as i64,
                 super::adapters::MIN_SUBSTANTIVE_TURNS as i64,
                 super::adapters::MIN_SUBSTANTIVE_CHARS as i64,
@@ -2099,7 +2111,7 @@ impl ProjectCatalog {
                 |row| {
                     let ref_kind: String = row.get(2)?;
                     let workspace_id: Option<String> = row.get(8)?;
-                    let summary = IndexedSessionSummary {
+                    Ok(IndexedSessionSummary {
                         stable_key: row.get(0)?,
                         backend: row.get(1)?,
                         ref_kind: parse_ref_kind(&ref_kind),
@@ -2115,39 +2127,26 @@ impl ProjectCatalog {
                             .get::<_, Option<i64>>(10)?
                             .map(|value| value as u64),
                         session_class: parse_session_class(&row.get::<_, String>(11)?),
-                        topic_label: row.get(15)?,
-                        transcript_ref: row.get(16)?,
-                    };
-                    let thin = row.get::<_, i64>(12)? == 0
-                        || row.get::<_, i64>(14)? < super::adapters::MIN_ANY_CHARS as i64
-                        || (row.get::<_, i64>(13)? < super::adapters::MIN_SUBSTANTIVE_TURNS as i64
-                            && row.get::<_, i64>(14)?
-                                < super::adapters::MIN_SUBSTANTIVE_CHARS as i64);
-                    Ok((summary, thin))
+                        topic_label: row.get(12)?,
+                        transcript_ref: row.get(13)?,
+                    })
                 },
             )?
             .collect::<Result<Vec<_>, _>>()?;
         let has_more = sessions.len() > limit;
-        sessions.sort_by(|left, right| {
-            left.1
-                .cmp(&right.1)
-                .then_with(|| right.0.last_activity_at.cmp(&left.0.last_activity_at))
-                .then_with(|| left.0.stable_key.cmp(&right.0.stable_key))
-        });
+        // Keep the SQL order for both display and cursor traversal. Reordering by session weight
+        // before trimming the look-ahead row can drop the newest session from every page.
         if has_more {
             sessions.pop();
         }
         let next_cursor = (has_more && !sessions.is_empty()).then(|| {
-            let last = &sessions[sessions.len() - 1].0;
+            let last = &sessions[sessions.len() - 1];
             SessionCursor {
                 last_activity_at: last.last_activity_at,
                 stable_key: last.stable_key.clone(),
             }
         });
-        Ok((
-            sessions.into_iter().map(|(summary, _)| summary).collect(),
-            next_cursor,
-        ))
+        Ok((sessions, next_cursor))
     }
 
     fn automation_templates_for_project(
@@ -2517,6 +2516,7 @@ fn upsert_session(
 fn can_preserve_existing_assignment(
     transaction: &Transaction<'_>,
     candidate: &SessionCandidate,
+    ephemeral_cwd_prefixes: &[String],
 ) -> Result<bool, CatalogError> {
     let existing = transaction
         .query_row(
@@ -2544,7 +2544,7 @@ fn can_preserve_existing_assignment(
     let Some(incoming_cwd) = candidate.cwd.as_ref() else {
         return Ok(true);
     };
-    if classifier::is_ephemeral_agent_cwd(&incoming_cwd.value) {
+    if classifier::is_ephemeral_agent_cwd(&incoming_cwd.value, ephemeral_cwd_prefixes) {
         return Ok(false);
     }
     Ok(existing_cwd.as_deref() == incoming_cwd.value.to_str())
@@ -2576,71 +2576,6 @@ fn reconcile_semantic_assignment(
         return Ok(deleted > 0);
     }
     Ok(false)
-}
-
-/// Creates the first Topic assignment locally and synchronously.
-///
-/// The marker in `backend_used` deliberately keeps this row in the semantic pending queue. A later
-/// classifier pass can refine it, but until then Sessions and Topics still have a stable parent and
-/// never depend on an LLM or its polling interval for basic visibility.
-fn ensure_local_topic_assignment(
-    transaction: &Transaction<'_>,
-    stable_key: &str,
-    observed_at: i64,
-) -> Result<bool, CatalogError> {
-    let metadata = transaction
-        .query_row(
-            "SELECT s.session_class, COALESCE(a.locked, 0),
-                    COALESCE(NULLIF(s.custom_title, ''), NULLIF(s.generated_title, ''), s.title),
-                    s.cwd, s.backend
-             FROM sessions s
-             JOIN assignments a ON a.session_key = s.stable_key
-             LEFT JOIN semantic_assignments sa ON sa.session_key = s.stable_key
-             WHERE s.stable_key = ?1 AND sa.session_key IS NULL",
-            [stable_key],
-            |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((session_class, locked, title, cwd, backend)) = metadata else {
-        return Ok(false);
-    };
-    if session_class != SessionClass::Interactive.as_str() || locked != 0 {
-        return Ok(false);
-    }
-
-    let topic_label =
-        super::semantic::local_topic_label_for_metadata(&title, cwd.as_deref(), &backend);
-    let topic_key = super::semantic_topic_key(&topic_label);
-    let fingerprint = super::semantic_fingerprint(&title, cwd.as_deref(), &backend);
-    let classification = ProjectClassification::new(
-        ProjectKind::Semantic,
-        topic_key.clone(),
-        topic_label.clone(),
-        "semantic".to_string(),
-    );
-    upsert_project(transaction, &classification, observed_at)?;
-    transaction.execute(
-        "INSERT INTO semantic_assignments(session_key, topic_key, topic_label, fingerprint,
-                                           backend_used, model_used, classified_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
-        params![
-            stable_key,
-            topic_key,
-            topic_label,
-            fingerprint,
-            super::semantic::LOCAL_PENDING_BACKEND,
-            observed_at,
-        ],
-    )?;
-    Ok(true)
 }
 
 fn update_string_field(
@@ -2884,7 +2819,7 @@ mod tests {
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "ork3-catalog-{label}-{}-{}",
+            "herduck-catalog-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -3082,8 +3017,8 @@ mod tests {
     #[test]
     fn repeated_titles_become_one_automation_template_idempotently() {
         let connection = Connection::open_in_memory().expect("database");
-        let mut catalog =
-            ProjectCatalog::initialize(connection, false, None, 2).expect("low-threshold catalog");
+        let mut catalog = ProjectCatalog::initialize(connection, false, None, 2, &[])
+            .expect("low-threshold catalog");
         let mut first = candidate("codex", "repeat-a", 10);
         let mut second = candidate("codex", "repeat-b", 20);
         first.title.as_mut().expect("title").value = "Nightly   Watchdog".to_string();
@@ -3175,7 +3110,7 @@ mod tests {
     }
 
     #[test]
-    fn current_local_fallback_is_not_requeued_after_provider_change() {
+    fn legacy_local_topics_are_requeued_even_with_current_fingerprints() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let mut item = candidate("claude", "stable-local-topic", 20);
         item.weight = super::super::adapters::SessionWeight {
@@ -3203,10 +3138,10 @@ mod tests {
             )
             .expect("local fallback");
 
-        assert!(catalog
-            .pending_semantic_sessions(10)
-            .expect("pending")
-            .is_empty());
+        let pending = catalog.pending_semantic_sessions(10).expect("pending");
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].inherited_topic.is_none());
+        assert!(catalog.known_topics(10).expect("known topics").is_empty());
     }
 
     #[test]
@@ -3233,6 +3168,19 @@ mod tests {
         catalog
             .apply_title_batch(&[update.clone()])
             .expect("initial name");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: key.clone(),
+                    topic_key: super::super::semantic_topic_key("照片迁移与备份"),
+                    topic_label: "照片迁移与备份".into(),
+                    fingerprint: super::super::semantic_fingerprint(&update.title, None, "grok"),
+                    backend_used: "test".into(),
+                    model_used: None,
+                }],
+                31,
+            )
+            .expect("classify topic from generated title");
         let topic: String = catalog
             .connection
             .query_row(
@@ -3326,6 +3274,23 @@ mod tests {
         let session = candidate("pi", "provisional-title", 20);
         let key = session.identity.stable_key.clone();
         catalog.upsert_candidate(&session).expect("session");
+        catalog
+            .apply_semantic_batch(
+                &[SemanticAssignment {
+                    session_key: key.clone(),
+                    topic_key: super::super::semantic_topic_key("照片迁移与备份"),
+                    topic_label: "照片迁移与备份".into(),
+                    fingerprint: super::super::semantic_fingerprint(
+                        &session.title.as_ref().expect("title").value,
+                        None,
+                        "pi",
+                    ),
+                    backend_used: "test".into(),
+                    model_used: None,
+                }],
+                21,
+            )
+            .expect("existing semantic classification");
         let mut update = SessionTitleUpdate {
             stable_key: key.clone(),
             title: "等待补充具体任务信息".into(),
@@ -3481,7 +3446,8 @@ mod tests {
             .expect("offline title refresh");
 
         let ProjectCatalog { connection, .. } = catalog;
-        let reopened = ProjectCatalog::initialize(connection, false, None, 40).expect("reopen");
+        let reopened =
+            ProjectCatalog::initialize(connection, false, None, 40, &[]).expect("reopen");
         let snapshot = reopened.snapshot(50).expect("snapshot");
         assert_eq!(snapshot.topics.len(), 1);
         assert_eq!(snapshot.topics[0].display_name, "旧主题");
@@ -3918,7 +3884,8 @@ mod tests {
             )
             .expect("legacy schema");
 
-        let catalog = ProjectCatalog::initialize(connection, false, None, 20).expect("migrate v1");
+        let catalog =
+            ProjectCatalog::initialize(connection, false, None, 20, &[]).expect("migrate v1");
         let columns = catalog.table_columns("sessions").expect("session columns");
         assert!(columns.iter().any(|column| column == "user_turns"));
         assert!(columns.iter().any(|column| column == "user_chars"));
@@ -3964,8 +3931,8 @@ mod tests {
             )
             .expect("partial v1 schema");
 
-        let catalog =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("migrate partial v1");
+        let catalog = ProjectCatalog::initialize(connection, false, None, 20, &[])
+            .expect("migrate partial v1");
         let version: u32 = catalog
             .connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -4063,14 +4030,14 @@ mod tests {
         catalog.upsert_candidate(&older).expect("older upsert");
         catalog.upsert_candidate(&newer).expect("newer upsert");
 
-        let topic_key = super::super::semantic_topic_key("ORK3 repair");
+        let topic_key = super::super::semantic_topic_key("HERDUCK repair");
         catalog
             .apply_semantic_batch(
                 &[
                     SemanticAssignment {
                         session_key: older.identity.stable_key.clone(),
                         topic_key: topic_key.clone(),
-                        topic_label: "ORK3 repair".into(),
+                        topic_label: "HERDUCK repair".into(),
                         fingerprint: super::super::semantic_fingerprint(
                             older.title.as_ref().unwrap().value.as_str(),
                             older_dir.to_str(),
@@ -4082,7 +4049,7 @@ mod tests {
                     SemanticAssignment {
                         session_key: newer.identity.stable_key.clone(),
                         topic_key,
-                        topic_label: "ORK3 repair".into(),
+                        topic_label: "HERDUCK repair".into(),
                         fingerprint: super::super::semantic_fingerprint(
                             newer.title.as_ref().unwrap().value.as_str(),
                             newer_dir.to_str(),
@@ -4107,7 +4074,7 @@ mod tests {
             older.identity.stable_key
         );
         assert_eq!(snapshot.topics.len(), 1);
-        assert_eq!(snapshot.topics[0].display_name, "ORK3 repair");
+        assert_eq!(snapshot.topics[0].display_name, "HERDUCK repair");
         assert_eq!(snapshot.topics[0].sessions.len(), 2);
         assert_eq!(
             snapshot.topics[0].sessions[0].stable_key,
@@ -4196,6 +4163,96 @@ mod tests {
     }
 
     #[test]
+    fn topics_pages_keep_latest_thin_sessions_and_timestamp_ties_without_loss() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut sessions = vec![
+            candidate("codex", "latest-thin", 40),
+            candidate("codex", "equal-a", 30),
+            candidate("pi", "equal-b", 30),
+            candidate("pi", "older-thin", 20),
+            candidate("codex", "oldest", 10),
+        ];
+        for (index, session) in sessions.iter_mut().enumerate() {
+            session.weight = super::super::adapters::SessionWeight {
+                turns: if index == 0 || index == 3 { 1 } else { 8 },
+                chars: if index == 0 || index == 3 { 30 } else { 400 },
+                known: true,
+            };
+        }
+        let other = candidate("claude", "other-topic", 35);
+        catalog
+            .upsert_scanned_candidates(&sessions)
+            .expect("sessions");
+        catalog
+            .upsert_candidate(&other)
+            .expect("other topic session");
+        let assignments = sessions
+            .iter()
+            .map(|session| (session, "latest topic"))
+            .chain(std::iter::once((&other, "other topic")))
+            .map(|(session, label)| SemanticAssignment {
+                session_key: session.identity.stable_key.clone(),
+                topic_key: super::super::semantic_topic_key(label),
+                topic_label: label.into(),
+                fingerprint: super::super::semantic_fingerprint(
+                    &session.title.as_ref().expect("title").value,
+                    None,
+                    &session.identity.backend,
+                ),
+                backend_used: "test".into(),
+                model_used: None,
+            })
+            .collect::<Vec<_>>();
+        catalog
+            .apply_semantic_batch(&assignments, 50)
+            .expect("topics");
+
+        let snapshot = catalog.snapshot(1).expect("one-row pages");
+        assert_eq!(snapshot.topics[0].display_name, "latest topic");
+        assert_eq!(
+            snapshot.topics[0].sessions[0].stable_key,
+            sessions[0].identity.stable_key
+        );
+        assert_eq!(
+            snapshot.topics[0].thin_count, 0,
+            "Topics never collapse sessions by weight"
+        );
+        sessions.sort_by(|left, right| {
+            right
+                .last_activity_at
+                .cmp(&left.last_activity_at)
+                .then_with(|| left.identity.stable_key.cmp(&right.identity.stable_key))
+        });
+        let expected = sessions
+            .iter()
+            .map(|session| session.identity.stable_key.clone())
+            .collect::<Vec<_>>();
+        for page_size in [1, 2, 3] {
+            let mut cursor = None;
+            let mut seen = Vec::new();
+            loop {
+                let (page, next) = catalog
+                    .sessions_page(
+                        &snapshot.topics[0].canonical_key,
+                        cursor.as_ref(),
+                        page_size,
+                    )
+                    .expect("topic page");
+                seen.extend(page.into_iter().map(|session| session.stable_key));
+                assert!(
+                    seen.len() <= expected.len(),
+                    "pagination must make progress"
+                );
+                if next.is_none() {
+                    break;
+                }
+                cursor = next;
+            }
+            assert_eq!(seen, expected, "page size {page_size}");
+        }
+    }
+
+    #[test]
     fn opening_catalog_restores_legacy_semantic_overwrite_without_losing_topic() {
         let root = std::env::temp_dir().join(format!(
             "herdr-project-legacy-semantic-{}-{}",
@@ -4253,7 +4310,7 @@ mod tests {
 
         let ProjectCatalog { connection, .. } = catalog;
         let restored =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("restore legacy");
+            ProjectCatalog::initialize(connection, false, None, 20, &[]).expect("restore legacy");
         let snapshot = restored.snapshot(50).expect("snapshot");
         assert_eq!(snapshot.projects.len(), 1);
         assert_ne!(snapshot.projects[0].kind, ProjectKind::Semantic);
@@ -4273,10 +4330,11 @@ mod tests {
 
     #[test]
     fn ephemeral_agent_cwd_is_kept_out_of_directory_snapshot() {
-        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut catalog =
+            ProjectCatalog::open_in_memory_with_prefixes(&["ci-worker-".into()]).expect("catalog");
         let mut item = candidate("opencode", "ephemeral-current", 20);
         item.cwd = Some(CandidateField {
-            value: std::env::temp_dir().join("paseo-multica-agent-current-test"),
+            value: std::env::temp_dir().join("ci-worker-current-test"),
             observed_at: 20,
             priority: SourcePriority::PrimaryIndex,
             source_key: "opencode-index".into(),
@@ -4299,9 +4357,9 @@ mod tests {
     }
 
     #[test]
-    fn catalog_open_repairs_existing_paseo_temp_directory_assignment() {
+    fn catalog_open_repairs_existing_configured_temp_directory_assignment() {
         let root = std::env::temp_dir().join(format!(
-            "herdr-project-legacy-paseo-{}-{}",
+            "herdr-project-legacy-runner-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4324,7 +4382,7 @@ mod tests {
             1
         );
 
-        let disposable = std::env::temp_dir().join("paseo-multica-agent-legacy-test");
+        let disposable = std::env::temp_dir().join("ci-worker-legacy-test");
         catalog
             .connection
             .execute(
@@ -4335,7 +4393,8 @@ mod tests {
 
         let ProjectCatalog { connection, .. } = catalog;
         let repaired =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("repair catalog");
+            ProjectCatalog::initialize(connection, false, None, 20, &["ci-worker-".into()])
+                .expect("repair catalog");
         assert!(repaired
             .snapshot(50)
             .expect("after repair")
@@ -4351,6 +4410,149 @@ mod tests {
             .expect("assignment evidence");
         assert_eq!(evidence, "ephemeral-agent-cwd");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_prefix_changes_preserve_catalog_data_and_manual_locks() {
+        let database = temp_dir("prefix-database");
+        let runner = temp_dir("runner%_");
+        let path = database.join("catalog.sqlite3");
+        let mut config = crate::config::ProjectsConfig::default();
+        let mut catalog = ProjectCatalog::open_with_config(&path, &config).expect("catalog");
+        let mut items = Vec::new();
+        for (index, id) in ["prefix-single", "prefix-batch", "prefix-locked"]
+            .iter()
+            .enumerate()
+        {
+            let mut item = candidate("codex", id, 20 + index as i64);
+            item.cwd = Some(CandidateField {
+                value: runner.clone(),
+                observed_at: item.observed_at,
+                priority: SourcePriority::PrimaryIndex,
+                source_key: "configured-cwd".into(),
+            });
+            item.runtime = Some(RuntimeMapping {
+                workspace_id: "workspace".into(),
+                pane_id: format!("pane-{index}"),
+                generation: index as u64 + 1,
+            });
+            items.push(item);
+        }
+        catalog.upsert_candidate(&items[0]).expect("runtime report");
+        catalog
+            .upsert_scanned_candidates(&items[1..])
+            .expect("scan");
+        let project_key = catalog.snapshot(50).unwrap().projects[0]
+            .canonical_key
+            .clone();
+        catalog
+            .assign_session(&items[2].identity.stable_key, &project_key, true, 30)
+            .unwrap();
+        let before = catalog.snapshot(50).unwrap();
+        drop(catalog);
+
+        config.ephemeral_cwd_prefixes = vec![runner.file_name().unwrap().to_str().unwrap().into()];
+        let filtered = ProjectCatalog::open_with_config(&path, &config).expect("add prefix");
+        let snapshot = filtered.snapshot(50).unwrap();
+        assert_eq!(snapshot.projects.len(), 1);
+        assert_eq!(snapshot.projects[0].sessions.len(), 1);
+        assert_eq!(
+            snapshot.projects[0].sessions[0].stable_key,
+            items[2].identity.stable_key
+        );
+        assert_eq!(
+            snapshot.topics, before.topics,
+            "topics and live mappings survive repair"
+        );
+        let revision = filtered.revision().unwrap();
+        drop(filtered);
+
+        let unchanged = ProjectCatalog::open_with_config(&path, &config).expect("unchanged reopen");
+        assert_eq!(unchanged.revision().unwrap(), revision);
+        drop(unchanged);
+
+        config.ephemeral_cwd_prefixes.clear();
+        let restored = ProjectCatalog::open_with_config(&path, &config).expect("remove prefix");
+        let snapshot = restored.snapshot(50).unwrap();
+        assert_eq!(snapshot.projects, before.projects);
+        assert_eq!(snapshot.topics, before.topics);
+        drop(restored);
+        let _ = std::fs::remove_dir_all(database);
+        let _ = std::fs::remove_dir_all(runner);
+    }
+
+    #[test]
+    fn removed_prefix_restores_missing_cwd_but_keeps_generic_scratch_hidden() {
+        let prefixes = ["ci-worker-".into()];
+        let mut catalog = ProjectCatalog::open_in_memory_with_prefixes(&prefixes).unwrap();
+        let root = temp_dir("missing-prefix");
+        let runner = std::env::temp_dir().join(format!(
+            "ci-worker-{}",
+            root.file_name().unwrap().to_string_lossy()
+        ));
+        let mut items = Vec::new();
+        for (index, cwd) in [runner.clone(), runner.join("codex-temp-17234567890")]
+            .into_iter()
+            .enumerate()
+        {
+            let mut item = candidate("codex", &format!("missing-{index}"), 20 + index as i64);
+            item.cwd = Some(CandidateField {
+                value: cwd,
+                observed_at: item.observed_at,
+                priority: SourcePriority::PrimaryIndex,
+                source_key: "missing-cwd".into(),
+            });
+            catalog.upsert_candidate(&item).unwrap();
+            items.push(item);
+        }
+        assert!(catalog.snapshot(50).unwrap().projects.is_empty());
+        let ProjectCatalog { connection, .. } = catalog;
+        let restored = ProjectCatalog::initialize(connection, false, None, 20, &[]).unwrap();
+        let projects = restored.snapshot(50).unwrap().projects;
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].kind, ProjectKind::Unclassified);
+        assert_eq!(projects[0].sessions.len(), 1);
+        assert_eq!(
+            projects[0].sessions[0].stable_key,
+            items[0].identity.stable_key
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn configured_prefixes_apply_to_runtime_reports_and_scan_batches_literally() {
+        for scan in [false, true] {
+            let mut catalog =
+                ProjectCatalog::open_in_memory_with_prefixes(&["ci%_worker-".into()]).unwrap();
+            let mut items = Vec::new();
+            for (index, name) in ["ci%_worker-private", "ciABworker-public"]
+                .iter()
+                .enumerate()
+            {
+                let mut item = candidate("codex", &format!("literal-{index}"), 20 + index as i64);
+                item.cwd = Some(CandidateField {
+                    value: std::env::temp_dir().join(name),
+                    observed_at: item.observed_at,
+                    priority: SourcePriority::PrimaryIndex,
+                    source_key: "literal-cwd".into(),
+                });
+                items.push(item);
+            }
+            if scan {
+                catalog.upsert_scanned_candidates(&items).unwrap();
+            } else {
+                for item in &items {
+                    catalog.upsert_candidate(item).unwrap();
+                }
+            }
+            let projects = catalog.snapshot(50).unwrap().projects;
+            assert_eq!(projects.len(), 1);
+            assert_eq!(projects[0].sessions.len(), 1);
+            assert_eq!(
+                projects[0].sessions[0].stable_key,
+                items[1].identity.stable_key
+            );
+        }
     }
 
     #[test]
@@ -4406,7 +4608,7 @@ mod tests {
 
         let ProjectCatalog { connection, .. } = catalog;
         let repaired =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("repair catalog");
+            ProjectCatalog::initialize(connection, false, None, 20, &[]).expect("repair catalog");
         assert!(repaired
             .snapshot(50)
             .expect("after repair")
@@ -4433,7 +4635,7 @@ mod tests {
     fn short_greeting_titles_are_not_heuristic_automation() {
         let connection = rusqlite::Connection::open_in_memory().expect("memory");
         let mut catalog =
-            ProjectCatalog::initialize(connection, false, None, 2).expect("low threshold");
+            ProjectCatalog::initialize(connection, false, None, 2, &[]).expect("low threshold");
         let items = (0..3)
             .map(|index| {
                 let mut item = candidate("codex", &format!("hi-{index}"), 10 + index);
@@ -4467,8 +4669,8 @@ mod tests {
             )
             .expect("seed mislabel");
         let ProjectCatalog { connection, .. } = catalog;
-        let repaired =
-            ProjectCatalog::initialize(connection, false, None, 2).expect("reverse short titles");
+        let repaired = ProjectCatalog::initialize(connection, false, None, 2, &[])
+            .expect("reverse short titles");
         let automation: i64 = repaired
             .connection
             .query_row(
@@ -4481,7 +4683,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_titles_keep_a_deterministic_local_topic() {
+    fn fallback_titles_do_not_create_topics() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let mut item = candidate("grok", "fallback-semantic", 10);
         item.title = None;
@@ -4494,17 +4696,8 @@ mod tests {
 
         let ProjectCatalog { connection, .. } = catalog;
         let repaired =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("reopen fallback");
-        let assignment: (String, String) = repaired
-            .connection
-            .query_row(
-                "SELECT topic_label, backend_used FROM semantic_assignments WHERE session_key = ?1",
-                [&item.identity.stable_key],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("local semantic assignment");
-        assert_eq!(assignment.0, "grok");
-        assert_eq!(assignment.1, super::super::semantic::LOCAL_PENDING_BACKEND);
+            ProjectCatalog::initialize(connection, false, None, 20, &[]).expect("reopen fallback");
+        assert!(repaired.snapshot(50).expect("snapshot").topics.is_empty());
         assert!(repaired
             .pending_semantic_sessions(10)
             .expect("pending")
@@ -4512,7 +4705,7 @@ mod tests {
     }
 
     #[test]
-    fn new_interactive_session_gets_an_immediate_refinable_local_topic() {
+    fn new_interactive_sessions_wait_for_classification_before_entering_topics() {
         let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
         let mut item = candidate("codex", "fresh-topic", 10);
         item.weight = super::super::adapters::SessionWeight {
@@ -4524,28 +4717,198 @@ mod tests {
         catalog.upsert_candidate(&item).expect("session");
 
         let snapshot = catalog.snapshot(50).expect("snapshot");
-        assert!(snapshot
-            .topics
-            .iter()
-            .flat_map(|topic| &topic.sessions)
-            .any(|session| session.stable_key == item.identity.stable_key));
-        let backend_used: String = catalog
-            .connection
-            .query_row(
-                "SELECT backend_used FROM semantic_assignments WHERE session_key = ?1",
-                [&item.identity.stable_key],
-                |row| row.get(0),
-            )
-            .expect("local backend marker");
-        assert_eq!(backend_used, super::super::semantic::LOCAL_PENDING_BACKEND);
+        assert!(snapshot.topics.is_empty());
+        assert_eq!(
+            snapshot.projects[0].sessions[0].stable_key,
+            item.identity.stable_key
+        );
         assert_eq!(
             catalog
                 .pending_semantic_sessions(10)
                 .expect("refinement queue")
                 .len(),
             1,
-            "a synchronous local Topic must remain eligible for later refinement"
+            "new sessions must remain eligible for semantic classification"
         );
+    }
+
+    #[test]
+    fn model_providers_named_local_keep_classifications_and_do_not_requeue() {
+        for provider in ["local", "local-pending", "provider:local"] {
+            let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+            let session = candidate("codex", "local-provider", 10);
+            catalog.upsert_candidate(&session).expect("session");
+            catalog
+                .apply_semantic_batch(
+                    &[SemanticAssignment {
+                        session_key: session.identity.stable_key.clone(),
+                        topic_key: super::super::semantic_topic_key("真实模型主题"),
+                        topic_label: "真实模型主题".into(),
+                        fingerprint: super::super::semantic_fingerprint(
+                            &session.title.as_ref().expect("title").value,
+                            None,
+                            "codex",
+                        ),
+                        backend_used: provider.into(),
+                        model_used: (provider != "provider:local").then(|| "local-model".into()),
+                    }],
+                    20,
+                )
+                .expect("model result");
+            let ProjectCatalog { connection, .. } = catalog;
+            let mut reopened =
+                ProjectCatalog::initialize(connection, false, None, 2, &[]).expect("reopen");
+            assert_eq!(
+                reopened.snapshot(50).expect("snapshot").topics[0].display_name,
+                "真实模型主题"
+            );
+            assert!(reopened
+                .pending_semantic_sessions(10)
+                .expect("pending")
+                .is_empty());
+            assert_eq!(
+                reopened.known_topics(10).expect("known"),
+                vec!["真实模型主题"]
+            );
+            assert_eq!(
+                reopened.begin_topic_merge(30).expect("merge"),
+                vec!["真实模型主题"]
+            );
+        }
+    }
+
+    #[test]
+    fn reopening_catalog_removes_only_unlocked_local_topics_without_recreating_them() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let cases = [
+            ("local", "local", "Workspace"),
+            ("pending", "local-pending", "目录兜底"),
+            ("classified", "codex", "Workspace"),
+            ("locked", "local", "手动保留"),
+        ];
+        let candidates = cases
+            .iter()
+            .map(|(id, _, _)| candidate("codex", id, 10))
+            .collect::<Vec<_>>();
+        catalog
+            .upsert_scanned_candidates(&candidates)
+            .expect("sessions");
+        let assignments = cases
+            .iter()
+            .zip(&candidates)
+            .map(|((_, backend, label), session)| SemanticAssignment {
+                session_key: session.identity.stable_key.clone(),
+                topic_key: super::super::semantic_topic_key(label),
+                topic_label: (*label).into(),
+                fingerprint: super::super::semantic_fingerprint(
+                    &session.title.as_ref().expect("title").value,
+                    None,
+                    "codex",
+                ),
+                backend_used: (*backend).into(),
+                model_used: None,
+            })
+            .collect::<Vec<_>>();
+        catalog
+            .apply_semantic_batch(&assignments, 10)
+            .expect("legacy topics");
+        catalog.connection.execute(
+            "UPDATE sessions SET title_priority = 0, generated_title = title WHERE stable_key = ?1",
+            [&candidates[2].identity.stable_key],
+        ).expect("model classification based on a generated title");
+        let directory_snapshot = |catalog: &ProjectCatalog| {
+            let mut projects = catalog.snapshot(50).expect("directory snapshot").projects;
+            for session in projects
+                .iter_mut()
+                .flat_map(|project| &mut project.sessions)
+            {
+                session.topic_label = None;
+            }
+            projects
+        };
+        let projects_before = directory_snapshot(&catalog);
+        catalog
+            .assign_session(
+                &candidates[3].identity.stable_key,
+                &projects_before[0].canonical_key,
+                true,
+                11,
+            )
+            .expect("lock explicit assignment");
+
+        let ProjectCatalog { connection, .. } = catalog;
+        let mut repaired =
+            ProjectCatalog::initialize(connection, false, None, 2, &[]).expect("repair");
+        let remaining = repaired
+            .connection
+            .prepare(
+                "SELECT session_key, backend_used FROM semantic_assignments ORDER BY session_key",
+            )
+            .expect("assignments query")
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .expect("assignments")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("rows");
+        let mut expected = vec![
+            (candidates[2].identity.stable_key.clone(), "codex".into()),
+            (candidates[3].identity.stable_key.clone(), "local".into()),
+        ];
+        expected.sort();
+        assert_eq!(remaining, expected);
+        assert_eq!(directory_snapshot(&repaired), projects_before);
+        assert_eq!(
+            repaired.known_topics(50).expect("classifier labels"),
+            vec!["Workspace"]
+        );
+        assert_eq!(
+            repaired.begin_topic_merge(20).expect("merge labels"),
+            vec!["Workspace"]
+        );
+        let pending = repaired.pending_semantic_sessions(10).expect("pending");
+        assert_eq!(pending.len(), 2);
+        assert!(pending.iter().all(|session| candidates[..2]
+            .iter()
+            .any(|candidate| { candidate.identity.stable_key == session.stable_key })));
+        repaired
+            .upsert_candidate(&candidates[0])
+            .expect("runtime refresh");
+        repaired
+            .upsert_scanned_candidates(&candidates[1..2])
+            .expect("scan refresh");
+        let revision = repaired.revision().expect("revision");
+        let ProjectCatalog { connection, .. } = repaired;
+        let mut reopened =
+            ProjectCatalog::initialize(connection, false, None, 2, &[]).expect("reopen");
+        assert_eq!(
+            reopened.revision().expect("revision"),
+            revision,
+            "repair is idempotent"
+        );
+        assert_eq!(directory_snapshot(&reopened), projects_before);
+        let topic_sessions = reopened
+            .snapshot(50)
+            .expect("topics")
+            .topics
+            .into_iter()
+            .flat_map(|topic| topic.sessions)
+            .map(|session| session.stable_key)
+            .collect::<Vec<_>>();
+        assert_eq!(topic_sessions.len(), 2);
+        assert!(topic_sessions.contains(&candidates[2].identity.stable_key));
+        assert!(topic_sessions.contains(&candidates[3].identity.stable_key));
+        reopened
+            .unlock_session(&candidates[3].identity.stable_key, 30)
+            .expect("unlock");
+        assert!(reopened
+            .pending_semantic_sessions(10)
+            .expect("unlocked pending")
+            .iter()
+            .any(
+                |session| session.stable_key == candidates[3].identity.stable_key
+                    && session.inherited_topic.is_none()
+            ));
     }
 
     #[test]
@@ -4574,8 +4937,8 @@ mod tests {
             .expect("seed trash topic");
 
         let ProjectCatalog { connection, .. } = catalog;
-        let repaired =
-            ProjectCatalog::initialize(connection, false, None, 20).expect("purge trash topic");
+        let repaired = ProjectCatalog::initialize(connection, false, None, 20, &[])
+            .expect("purge trash topic");
         let leftover: i64 = repaired
             .connection
             .query_row(
@@ -4669,13 +5032,13 @@ mod tests {
         assert_eq!(snapshot.topics[0].display_name, "old topic");
 
         let mut clean = dirty.clone();
-        clean.title.as_mut().unwrap().value = "修复 ORK3 Projects 自动分类".to_string();
+        clean.title.as_mut().unwrap().value = "修复 HERDUCK Projects 自动分类".to_string();
         catalog.upsert_candidate(&clean).expect("clean reparse");
 
         let snapshot = catalog.snapshot(50).expect("snapshot");
         assert_eq!(
             snapshot.projects[0].sessions[0].title,
-            "修复 ORK3 Projects 自动分类"
+            "修复 HERDUCK Projects 自动分类"
         );
         assert_eq!(snapshot.topics.len(), 1);
         assert_eq!(snapshot.topics[0].display_name, "old topic");

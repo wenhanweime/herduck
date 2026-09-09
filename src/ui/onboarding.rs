@@ -14,6 +14,18 @@ use crate::app::AppState;
 
 const ONBOARDING_PREFIX_LABEL: &str = "ctrl+b";
 
+fn configuration_label(area: Rect) -> &'static str {
+    if area.width < 48 {
+        "config"
+    } else {
+        "view configuration"
+    }
+}
+
+fn configuration_hint(area: Rect) -> Option<&'static str> {
+    (area.width >= 48).then_some("↵")
+}
+
 pub(super) fn render_onboarding_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     super::dim_background(frame, area);
     render_onboarding_welcome(app, frame, area);
@@ -23,7 +35,17 @@ pub(crate) fn onboarding_welcome_continue_rect(area: Rect) -> Rect {
     Rect::new(
         area.x,
         area.y,
-        action_button_width(Some("↵"), "continue"),
+        action_button_width(configuration_hint(area), configuration_label(area)),
+        1,
+    )
+}
+
+pub(crate) fn onboarding_welcome_skip_rect(area: Rect) -> Rect {
+    let next = onboarding_welcome_continue_rect(area);
+    Rect::new(
+        next.right() + 2,
+        area.y,
+        action_button_width((area.width >= 48).then_some("esc"), "skip"),
         1,
     )
 }
@@ -32,7 +54,7 @@ fn render_onboarding_welcome(app: &AppState, frame: &mut Frame, area: Rect) {
     let Some(inner) = render_modal_shell(frame, area, 64, 16, &app.palette) else {
         return;
     };
-    if inner.height < 11 {
+    if inner.height < 4 {
         return;
     }
 
@@ -48,12 +70,23 @@ fn render_onboarding_welcome(app: &AppState, frame: &mut Frame, area: Rect) {
     .areas::<4>(stack.content);
 
     frame.render_widget(
-        Paragraph::new("  herdr").style(
+        Paragraph::new("  herduck · welcome").style(
             Style::default()
                 .fg(app.palette.text)
                 .add_modifier(Modifier::BOLD),
         ),
         header_rows[0],
+    );
+
+    let detected = if app.session_setup.detected_agents.is_empty() {
+        "none; a plain terminal works too".into()
+    } else {
+        app.session_setup.detected_agents.join(", ")
+    };
+    frame.render_widget(
+        Paragraph::new(format!("  Agents found: {detected}"))
+            .style(Style::default().fg(app.palette.overlay1)),
+        content_rows[1],
     );
     frame.render_widget(
         Paragraph::new("  terminal workspace manager for coding agents")
@@ -95,20 +128,31 @@ fn render_onboarding_welcome(app: &AppState, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(key_line), content_rows[2]);
 
     frame.render_widget(
-        Paragraph::new("  next: install optional agent integrations for more reliable state")
-            .style(Style::default().fg(app.palette.overlay1)),
+        Paragraph::new("  Configure Agents and summaries in config.toml.\n  Settings shows the current configuration and priorities.")
+            .style(Style::default().fg(app.palette.overlay1))
+            .wrap(ratatui::widgets::Wrap { trim: false }),
         content_rows[3],
     );
 
-    let continue_rect = onboarding_welcome_continue_rect(stack.actions.unwrap_or_default());
+    let actions = stack.actions.unwrap_or_default();
+    let continue_rect = onboarding_welcome_continue_rect(actions);
     render_action_button(
         frame,
         continue_rect,
-        Some("↵"),
-        "continue",
+        configuration_hint(actions),
+        configuration_label(actions),
         Style::default()
             .fg(panel_contrast_fg(&app.palette))
             .bg(app.palette.accent)
             .add_modifier(Modifier::BOLD),
+    );
+    render_action_button(
+        frame,
+        onboarding_welcome_skip_rect(stack.actions.unwrap_or_default()),
+        (actions.width >= 48).then_some("esc"),
+        "skip",
+        Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.surface0),
     );
 }

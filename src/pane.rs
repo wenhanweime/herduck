@@ -144,7 +144,8 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
-    cmd.env(crate::ORK3_ENV_VAR, crate::ORK3_ENV_VALUE);
+    cmd.env(crate::HERDUCK_ENV_VAR, crate::HERDUCK_ENV_VALUE);
+    cmd.env(crate::ORK3_ENV_VAR, crate::HERDUCK_ENV_VALUE);
     // Keep the upstream marker during the integration compatibility window.
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
@@ -480,22 +481,6 @@ fn agent_hint_for_foreground_job_members(
 ) -> Option<Agent> {
     read_hint(job.process_group_id)
         .or_else(|| agent_hint_for_non_leader_foreground_job_members(job, read_hint))
-}
-
-fn foreground_job_matches_agent_reap_target(
-    job: &crate::platform::ForegroundJob,
-    child_pid: u32,
-    expected_agent: Agent,
-    allow_child_process_group: bool,
-) -> bool {
-    if job.process_group_id <= 1
-        || (job.process_group_id == child_pid && !allow_child_process_group)
-    {
-        return false;
-    }
-    agent_hint_for_foreground_job_members(job, crate::platform::process_agent_hint)
-        .or_else(|| crate::detect::identify_agent_in_job(job).map(|(agent, _)| agent))
-        == Some(expected_agent)
 }
 
 fn agent_hint_for_non_leader_foreground_job_members(
@@ -1259,100 +1244,6 @@ fn shutdown_pane_processes(
         pids = ?pids,
         "pane session still alive after forced shutdown"
     );
-}
-
-pub(crate) struct ForegroundAgentShutdown {
-    pane_id: PaneId,
-    agent: Agent,
-    process_group_id: u32,
-    pids: Vec<u32>,
-    last_signal_index: usize,
-}
-
-const FOREGROUND_AGENT_SHUTDOWN_SIGNALS: [crate::platform::Signal; 3] = [
-    crate::platform::Signal::Hangup,
-    crate::platform::Signal::Terminate,
-    crate::platform::Signal::Kill,
-];
-
-fn wait_for_foreground_agent_shutdown_phase(shutdowns: &[ForegroundAgentShutdown]) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
-    while shutdowns
-        .iter()
-        .any(|shutdown| crate::platform::process_group_exists(shutdown.process_group_id))
-        && std::time::Instant::now() < deadline
-    {
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-}
-
-pub(crate) fn finish_foreground_agent_shutdowns(
-    mut shutdowns: Vec<ForegroundAgentShutdown>,
-) -> Vec<PaneId> {
-    let mut completed = Vec::new();
-    while !shutdowns.is_empty() {
-        wait_for_foreground_agent_shutdown_phase(&shutdowns);
-
-        let mut still_alive = Vec::new();
-        for shutdown in shutdowns {
-            if crate::platform::process_group_exists(shutdown.process_group_id) {
-                still_alive.push(shutdown);
-            } else {
-                completed.push(shutdown.pane_id);
-                info!(
-                    pane = shutdown.pane_id.raw(),
-                    agent = crate::detect::agent_label(shutdown.agent),
-                    signal = ?FOREGROUND_AGENT_SHUTDOWN_SIGNALS[shutdown.last_signal_index],
-                    "idle Agent process group terminated"
-                );
-            }
-        }
-        shutdowns = still_alive;
-        if shutdowns.is_empty() {
-            return completed;
-        }
-
-        let mut escalated = false;
-        for shutdown in &mut shutdowns {
-            let next = FOREGROUND_AGENT_SHUTDOWN_SIGNALS
-                .iter()
-                .copied()
-                .enumerate()
-                .skip(shutdown.last_signal_index + 1)
-                .find(|(_, signal)| {
-                    crate::platform::signal_process_group(shutdown.process_group_id, *signal)
-                });
-            if let Some((signal_index, _)) = next {
-                shutdown.last_signal_index = signal_index;
-                escalated = true;
-            }
-        }
-        if escalated {
-            continue;
-        }
-
-        for shutdown in shutdowns {
-            if crate::platform::process_group_exists(shutdown.process_group_id) {
-                warn!(
-                    pane = shutdown.pane_id.raw(),
-                    agent = crate::detect::agent_label(shutdown.agent),
-                    process_group_id = shutdown.process_group_id,
-                    pids = ?shutdown.pids,
-                    "idle Agent process group still alive after forced shutdown"
-                );
-            } else {
-                completed.push(shutdown.pane_id);
-                info!(
-                    pane = shutdown.pane_id.raw(),
-                    agent = crate::detect::agent_label(shutdown.agent),
-                    signal = ?FOREGROUND_AGENT_SHUTDOWN_SIGNALS[shutdown.last_signal_index],
-                    "idle Agent process group terminated"
-                );
-            }
-        }
-        return completed;
-    }
-    completed
 }
 
 #[cfg(unix)]
@@ -2790,61 +2681,6 @@ impl PaneRuntime {
         mark_runtime_activity(&self.last_activity_at, observed_at);
     }
 
-    pub(crate) fn begin_foreground_agent_shutdown(
-        &self,
-        expected_agent: Agent,
-        allow_child_process_group: bool,
-        inactive_before: std::time::Instant,
-        attempted_at: std::time::Instant,
-    ) -> Option<ForegroundAgentShutdown> {
-        let mut activity = match self.last_activity_at.lock() {
-            Ok(activity) => activity,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        if *activity > inactive_before {
-            return None;
-        }
-
-        let child_pid = self.child_pid()?;
-        let job = crate::detect::foreground_job(child_pid)?;
-        if !foreground_job_matches_agent_reap_target(
-            &job,
-            child_pid,
-            expected_agent,
-            allow_child_process_group,
-        ) {
-            return None;
-        }
-
-        let pids = job
-            .processes
-            .iter()
-            .map(|process| process.pid)
-            .collect::<Vec<_>>();
-        if pids.is_empty() {
-            return None;
-        }
-
-        let (first_signal_index, _) = FOREGROUND_AGENT_SHUTDOWN_SIGNALS
-            .iter()
-            .copied()
-            .enumerate()
-            .find(|(_, signal)| {
-                crate::platform::signal_process_group(job.process_group_id, *signal)
-            })?;
-
-        if attempted_at > *activity {
-            *activity = attempted_at;
-        }
-        Some(ForegroundAgentShutdown {
-            pane_id: self.pane_id,
-            agent: expected_agent,
-            process_group_id: job.process_group_id,
-            pids,
-            last_signal_index: first_signal_index,
-        })
-    }
-
     pub async fn send_paste(&self, text: String) -> Result<(), mpsc::error::SendError<Bytes>> {
         self.send_bytes(self.paste_payload(text)).await
     }
@@ -3423,6 +3259,33 @@ mod tests {
     }
 
     #[test]
+    fn pane_launch_exports_new_and_legacy_runtime_identity() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+        for variable in [
+            crate::HERDUCK_ENV_VAR,
+            crate::ORK3_ENV_VAR,
+            crate::HERDR_ENV_VAR,
+        ] {
+            assert_eq!(
+                cmd.get_env(variable).and_then(std::ffi::OsStr::to_str),
+                Some("1")
+            );
+        }
+        let socket = cmd
+            .get_env(crate::api::SOCKET_PATH_ENV_VAR)
+            .expect("canonical socket");
+        assert_eq!(
+            cmd.get_env(crate::api::ORK3_SOCKET_PATH_ENV_VAR),
+            Some(socket)
+        );
+        assert_eq!(
+            cmd.get_env(crate::api::LEGACY_SOCKET_PATH_ENV_VAR),
+            Some(socket)
+        );
+    }
+
+    #[test]
     fn interactive_agent_launch_env_restores_native_color_output() {
         let mut cmd = CommandBuilder::new("/bin/sh");
         let launch_env = PaneLaunchEnv::default().with_interactive_agent_colors();
@@ -3726,48 +3589,6 @@ mod tests {
             argv: None,
             cmdline: None,
         }
-    }
-
-    #[test]
-    fn idle_reap_rejects_shell_process_group_but_allows_direct_agent_group() {
-        let job = crate::platform::ForegroundJob {
-            process_group_id: 42,
-            processes: vec![foreground_process(42, "codex")],
-        };
-
-        assert!(!foreground_job_matches_agent_reap_target(
-            &job,
-            42,
-            Agent::Codex,
-            false,
-        ));
-        assert!(foreground_job_matches_agent_reap_target(
-            &job,
-            42,
-            Agent::Codex,
-            true,
-        ));
-    }
-
-    #[test]
-    fn idle_reap_requires_the_current_foreground_agent_to_match() {
-        let job = crate::platform::ForegroundJob {
-            process_group_id: 84,
-            processes: vec![foreground_process(84, "claude")],
-        };
-
-        assert!(!foreground_job_matches_agent_reap_target(
-            &job,
-            42,
-            Agent::Codex,
-            false,
-        ));
-        assert!(foreground_job_matches_agent_reap_target(
-            &job,
-            42,
-            Agent::Claude,
-            false,
-        ));
     }
 
     #[test]

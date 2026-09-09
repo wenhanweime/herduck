@@ -2,7 +2,7 @@
 
 > 状态：v0.1 · 待评审
 > 日期：2026-08-24
-> 依据方案：`/Users/pot/Workspace/agent-session-title-generation/PLAN.md`（641 行，2026-08-24）
+> 依据方案：`/Users/example/Workspace/agent-session-title-generation/PLAN.md`（641 行，2026-08-24）
 > 关系：**替换** `src/ui/session_label.rs` 承担的"从原始标题猜主题"职责；
 > 该文件降级为纯展示清洗（截断、宽度、去重），不再负责语义。
 > 全部数字来自 2026-08-24 对真实 Catalog 与本机 transcript 的直接查询。
@@ -29,18 +29,18 @@
 
 Owner 截图中的标题：`claude 推荐顺序： 1. Chrome Can…`
 
-追查原始 JSONL（`~/.claude/projects/-Users-pot-Workspace/770046bc-…jsonl`），该轮次
+追查原始 JSONL（脱敏路径：`~/.claude/projects/-Users-example-Workspace/example-session.jsonl`），该轮次
 **在文件里确实是 `type:"user"`** —— owner 把上一个 agent 的回答粘贴进来作为开场。
 所以这不是解析错误，是**选取策略错误**：
 
 | 轮次 | 长度 | 内容 |
 |---|---|---|
 | 0 | **167** | `推荐顺序：1. Chrome Canary（最合适）…`（粘贴的旧对话） |
-| 1 | 142 | `看下ork3这个项目，他的projects 抓取和cluster聚类…` |
+| 1 | 142 | `看下herduck这个项目，他的projects 抓取和cluster聚类…` |
 | 2 | 61 | `把诊断和计划以及建议写 spec 到项目文件夹…` |
 
 `TitlePicker`（`adapters.rs:1297`）**只比长度**：167 > 142，于是选中粘贴内容。
-真实意图在轮次 1，且含 `ork3` / `projects` / `cluster` 三个专有名词。
+真实意图在轮次 1，且含 `herduck` / `projects` / `cluster` 三个专有名词。
 
 ### 1.2 启发式已连续三轮打补丁失败
 
@@ -128,7 +128,7 @@ title_schema_version INTEGER NOT NULL DEFAULT 1
 {
   "id": 1,
   "provider": "claude",
-  "folder": "ork3",
+  "folder": "herduck",
   "intents": ["高信息用户意图 1", "…最多 5 条"],
   "outcome": "最近一条 agent 结论，限长"
 }
@@ -155,7 +155,7 @@ title_schema_version INTEGER NOT NULL DEFAULT 1
 格式必须是【具体对象】具体任务，对象 2-24 字，任务 6-42 字。
 对象用产品名/仓库名/模块名/文件名，禁止用 Workspace/任务/会话/项目/Agent。
 没有明确证据不要写"已完成""已修复"。
-只输出 JSON：{"items":[{"id":1,"title":"【ork3】修复侧栏高亮"}]}，不要解释。
+只输出 JSON：{"items":[{"id":1,"title":"【herduck】修复侧栏高亮"}]}，不要解释。
 ```
 
 ### 3.4 服务端校验（PLAN §D6，全部必须）
@@ -190,7 +190,7 @@ title_schema_version INTEGER NOT NULL DEFAULT 1
 
 ## 4. Boundaries
 
-- **Always**：只读 provider 历史目录；标题只写 ork3 Catalog。
+- **Always**：只读 provider 历史目录；标题只写 herduck Catalog。
 - **Always**：prompt 中不含 transcript 全文、代码 diff、工具输出、凭证。
 - **Always**：opencode 后端调用必须走 `XDG_DATA_HOME` 沙箱，否则自污染复发。
 - **Never**：不改 provider 原始会话文件。
@@ -215,7 +215,7 @@ title_schema_version INTEGER NOT NULL DEFAULT 1
 | `opencode_title_backend_uses_a_disposable_data_root` | 调用不在真实 `opencode.db` 落会话 |
 | `migration_v5_to_v6_adds_title_columns` | 迁移幂等，旧数据不丢 |
 
-真实文件验收：对 owner 截图那条会话跑一次，标题应形如 `【ork3】Projects 抓取与聚类问题排查`，
+真实文件验收：对 owner 截图那条会话跑一次，标题应形如 `【herduck】Projects 抓取与聚类问题排查`，
 而非 `推荐顺序…`。
 
 ---

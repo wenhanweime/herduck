@@ -51,10 +51,17 @@ impl ProjectServiceError {
             message: "Project Catalog is unavailable".to_string(),
         }
     }
+
+    fn summary_cancelled() -> Self {
+        Self {
+            code: "summary_cancelled",
+            message: "Summary settings changed; discarded previous work".to_string(),
+        }
+    }
 }
 
 pub(crate) enum ProjectCommand {
-    SetTitleLanguage {
+    ConfigureSummaries {
         language: crate::config::TitleLanguage,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
     },
@@ -117,16 +124,19 @@ pub(crate) enum ProjectCommand {
         reply: mpsc::Sender<Result<Vec<String>, ProjectServiceError>>,
     },
     BeginTopicMerge {
+        cancelled: Arc<AtomicBool>,
         now: i64,
         reply: mpsc::Sender<Result<Vec<String>, ProjectServiceError>>,
     },
     ApplyTopicMerges {
+        cancelled: Arc<AtomicBool>,
         merges: Vec<SemanticTopicMerge>,
         observed_at: i64,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
     },
     /// One classified batch, applied through the same serialized writer as every other mutation.
     ApplySemantic {
+        cancelled: Arc<AtomicBool>,
         batch: Vec<SemanticAssignment>,
         observed_at: i64,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
@@ -136,10 +146,12 @@ pub(crate) enum ProjectCommand {
         reply: mpsc::Sender<Result<Vec<PendingTitleSession>, ProjectServiceError>>,
     },
     ClaimTitles {
+        cancelled: Arc<AtomicBool>,
         keys: Vec<String>,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
     },
     ApplyTitles {
+        cancelled: Arc<AtomicBool>,
         updates: Vec<SessionTitleUpdate>,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
     },
@@ -151,6 +163,8 @@ pub(crate) struct ProjectService {
     snapshot: Arc<RwLock<ProjectsSnapshot>>,
     worker: Option<std::thread::JoinHandle<()>>,
     scan_workers: Vec<std::thread::JoinHandle<()>>,
+    summary_workers: Vec<std::thread::JoinHandle<()>>,
+    summary_cancelled: Arc<AtomicBool>,
     scanner: Option<Arc<Mutex<super::adapters::AdapterScanner>>>,
     scans_in_progress: Arc<AtomicUsize>,
     shutdown: Arc<AtomicBool>,
@@ -159,15 +173,15 @@ pub(crate) struct ProjectService {
 impl ProjectService {
     #[cfg(test)]
     pub(crate) fn open(path: &Path, event_hub: crate::api::EventHub) -> Self {
-        Self::open_with_threshold(path, event_hub, 20)
+        Self::open_with_config(path, event_hub, &crate::config::ProjectsConfig::default())
     }
 
-    pub(crate) fn open_with_threshold(
+    pub(crate) fn open_with_config(
         path: &Path,
         event_hub: crate::api::EventHub,
-        automation_title_threshold: usize,
+        config: &crate::config::ProjectsConfig,
     ) -> Self {
-        match ProjectCatalog::open_with_threshold(path, automation_title_threshold) {
+        match ProjectCatalog::open_with_config(path, config) {
             Ok(catalog) => Self::from_catalog(catalog, event_hub),
             Err(error) => {
                 tracing::warn!(
@@ -185,6 +199,8 @@ impl ProjectService {
             snapshot: Arc::new(RwLock::new(ProjectsSnapshot::empty())),
             worker: None,
             scan_workers: Vec::new(),
+            summary_workers: Vec::new(),
+            summary_cancelled: Arc::new(AtomicBool::new(false)),
             scanner: None,
             scans_in_progress: Arc::new(AtomicUsize::new(0)),
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -205,6 +221,8 @@ impl ProjectService {
             snapshot: Arc::new(RwLock::new(ProjectsSnapshot::degraded(category))),
             worker: None,
             scan_workers: Vec::new(),
+            summary_workers: Vec::new(),
+            summary_cancelled: Arc::new(AtomicBool::new(false)),
             scanner: None,
             scans_in_progress: Arc::new(AtomicUsize::new(0)),
             shutdown: Arc::new(AtomicBool::new(false)),
@@ -234,7 +252,7 @@ impl ProjectService {
         let worker_shutdown = Arc::clone(&shutdown);
         let (sender, receiver) = mpsc::channel();
         let worker = std::thread::Builder::new()
-            .name("ork3-project-catalog".to_string())
+            .name("herduck-project-catalog".to_string())
             .spawn(move || {
                 while let Ok(command) = receiver.recv() {
                     if worker_shutdown.load(Ordering::Acquire) {
@@ -255,6 +273,8 @@ impl ProjectService {
             snapshot,
             worker,
             scan_workers: Vec::new(),
+            summary_workers: Vec::new(),
+            summary_cancelled: Arc::new(AtomicBool::new(false)),
             scanner: Some(Arc::new(Mutex::new(
                 super::adapters::AdapterScanner::default(),
             ))),
@@ -275,7 +295,7 @@ impl ProjectService {
         let scans_in_progress = Arc::clone(&self.scans_in_progress);
         let shutdown = Arc::clone(&self.shutdown);
         match std::thread::Builder::new()
-            .name("ork3-project-scan".to_string())
+            .name("herduck-project-scan".to_string())
             .spawn(move || {
                 loop {
                     if shutdown.load(Ordering::Acquire) {
@@ -346,13 +366,6 @@ impl ProjectService {
         })
     }
 
-    pub(crate) fn set_title_language(
-        &self,
-        language: crate::config::TitleLanguage,
-    ) -> Result<u64, ProjectServiceError> {
-        self.request(|reply| ProjectCommand::SetTitleLanguage { language, reply })
-    }
-
     pub(crate) fn rename_session(
         &self,
         session_key: String,
@@ -384,58 +397,96 @@ impl ProjectService {
         })
     }
 
+    /// Reconfigure only summary work, preserving discovery, the Catalog and live session mappings.
+    pub(crate) fn summaries_need_retry(&self) -> bool {
+        self.summary_cancelled.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn configure_summaries(
+        &mut self,
+        summary: &crate::config::SummaryConfig,
+    ) -> Result<(), ProjectServiceError> {
+        self.summary_cancelled.store(true, Ordering::Release);
+        self.summary_workers.clear();
+        // This serialized barrier follows any already accepted result. Later old-generation
+        // claims/results carry the cancelled token and cannot undo the user's new preference.
+        self.request(|reply| ProjectCommand::ConfigureSummaries {
+            language: summary.title_language,
+            reply,
+        })?;
+        self.summary_cancelled = Arc::new(AtomicBool::new(false));
+        let config = super::semantic::SemanticConfig::from_summary(summary);
+        let result = self.start_semantic_classification(config).and_then(|()| {
+            self.start_title_generation(super::semantic::SemanticConfig::for_titles(summary))
+        });
+        if result.is_err() {
+            self.summary_cancelled.store(true, Ordering::Release);
+            self.summary_workers.clear();
+        }
+        result
+    }
+
     /// Starts the topic classification worker.
     ///
     /// Runs off the input and render path, exactly like the file scan: classification calls out
     /// to another process and can take minutes, so it must never block a keystroke.
-    pub(crate) fn start_semantic_classification(
+    fn start_semantic_classification(
         &mut self,
         config: super::semantic::SemanticConfig,
-    ) {
-        if !config.enabled {
-            return;
+    ) -> Result<(), ProjectServiceError> {
+        if !config.enabled
+            || matches!(
+                config.mode,
+                crate::config::SummaryModeConfig::Local | crate::config::SummaryModeConfig::Pending
+            )
+            || config.backends.is_empty()
+        {
+            return Ok(());
         }
         let Some(sender) = self.sender.clone() else {
-            return;
+            return Err(ProjectServiceError::unavailable());
         };
-        let shutdown = Arc::clone(&self.shutdown);
-        match std::thread::Builder::new()
-            .name("ork3-project-semantic".to_string())
+        let shutdown = Arc::clone(&self.summary_cancelled);
+        let worker = std::thread::Builder::new()
+            .name("herduck-project-semantic".to_string())
             .spawn(move || {
                 if !shutdown.load(Ordering::Acquire) {
                     super::semantic::run_classification_worker(&sender, &config, &shutdown);
                 }
-            }) {
-            Ok(worker) => self.scan_workers.push(worker),
-            Err(error) => tracing::warn!(
-                category = "semantic_worker_start",
-                "Project semantic worker failed to start: {error}"
-            ),
-        }
+            })
+            .map_err(|error| ProjectServiceError {
+                code: "semantic_worker_start",
+                message: format!("Could not start topic summaries: {error}"),
+            })?;
+        self.summary_workers.push(worker);
+        Ok(())
     }
 
     /// Starts the asynchronous title generator after the adapter scan has populated the Catalog.
-    pub(crate) fn start_title_generation(&mut self, config: super::semantic::SemanticConfig) {
-        if !config.enabled {
-            return;
+    fn start_title_generation(
+        &mut self,
+        config: super::semantic::SemanticConfig,
+    ) -> Result<(), ProjectServiceError> {
+        if !config.enabled || config.mode == crate::config::SummaryModeConfig::Pending {
+            return Ok(());
         }
         let Some(sender) = self.sender.clone() else {
-            return;
+            return Err(ProjectServiceError::unavailable());
         };
-        let shutdown = Arc::clone(&self.shutdown);
-        match std::thread::Builder::new()
-            .name("ork3-session-titles".to_string())
+        let shutdown = Arc::clone(&self.summary_cancelled);
+        let worker = std::thread::Builder::new()
+            .name("herduck-session-titles".to_string())
             .spawn(move || {
                 if !shutdown.load(Ordering::Acquire) {
                     super::title::run_title_generation_worker(&sender, &config, &shutdown);
                 }
-            }) {
-            Ok(worker) => self.scan_workers.push(worker),
-            Err(error) => tracing::warn!(
-                category = "title_worker_start",
-                "Session title worker failed to start: {error}"
-            ),
-        }
+            })
+            .map_err(|error| ProjectServiceError {
+                code: "title_worker_start",
+                message: format!("Could not start title summaries: {error}"),
+            })?;
+        self.summary_workers.push(worker);
+        Ok(())
     }
 
     pub(crate) fn sessions_page(
@@ -494,6 +545,8 @@ impl ProjectService {
 
 impl Drop for ProjectService {
     fn drop(&mut self) {
+        self.summary_cancelled.store(true, Ordering::Release);
+        self.summary_workers.clear();
         self.shutdown.store(true, Ordering::Release);
         if let Some(sender) = self.sender.take() {
             let _ = sender.send(ProjectCommand::Shutdown);
@@ -638,10 +691,12 @@ pub(crate) fn request_known_topics(
 /// Applies a classified batch from the classifier worker thread.
 pub(crate) fn request_apply_semantic(
     sender: &mpsc::Sender<ProjectCommand>,
+    cancelled: &Arc<AtomicBool>,
     batch: Vec<SemanticAssignment>,
     observed_at: i64,
 ) -> Result<u64, ProjectServiceError> {
     request_on_sender(sender, |reply| ProjectCommand::ApplySemantic {
+        cancelled: Arc::clone(cancelled),
         batch,
         observed_at,
         reply,
@@ -678,9 +733,11 @@ pub(crate) fn request_pending_titles(
 
 pub(crate) fn request_apply_titles(
     sender: &mpsc::Sender<ProjectCommand>,
+    cancelled: &Arc<AtomicBool>,
     updates: Vec<SessionTitleUpdate>,
 ) -> Result<u64, ProjectServiceError> {
     request_on_sender(sender, |reply| ProjectCommand::ApplyTitles {
+        cancelled: Arc::clone(cancelled),
         updates,
         reply,
     })
@@ -688,18 +745,25 @@ pub(crate) fn request_apply_titles(
 
 pub(crate) fn request_claim_titles(
     sender: &mpsc::Sender<ProjectCommand>,
+    cancelled: &Arc<AtomicBool>,
     keys: Vec<String>,
 ) -> Result<u64, ProjectServiceError> {
-    request_on_sender(sender, |reply| ProjectCommand::ClaimTitles { keys, reply })
+    request_on_sender(sender, |reply| ProjectCommand::ClaimTitles {
+        cancelled: Arc::clone(cancelled),
+        keys,
+        reply,
+    })
 }
 
 pub(crate) fn request_begin_topic_merge(
     sender: &mpsc::Sender<ProjectCommand>,
+    cancelled: &Arc<AtomicBool>,
     now: i64,
 ) -> Result<Vec<String>, ProjectServiceError> {
     let (reply_tx, reply_rx) = mpsc::channel();
     sender
         .send(ProjectCommand::BeginTopicMerge {
+            cancelled: Arc::clone(cancelled),
             now,
             reply: reply_tx,
         })
@@ -711,10 +775,12 @@ pub(crate) fn request_begin_topic_merge(
 
 pub(crate) fn request_apply_topic_merges(
     sender: &mpsc::Sender<ProjectCommand>,
+    cancelled: &Arc<AtomicBool>,
     merges: Vec<SemanticTopicMerge>,
     observed_at: i64,
 ) -> Result<u64, ProjectServiceError> {
     request_on_sender(sender, |reply| ProjectCommand::ApplyTopicMerges {
+        cancelled: Arc::clone(cancelled),
         merges,
         observed_at,
         reply,
@@ -727,7 +793,38 @@ fn process_command(
     event_hub: &crate::api::EventHub,
     command: ProjectCommand,
 ) -> bool {
+    match &command {
+        ProjectCommand::ClaimTitles {
+            cancelled, reply, ..
+        }
+        | ProjectCommand::ApplyTitles {
+            cancelled, reply, ..
+        }
+        | ProjectCommand::ApplySemantic {
+            cancelled, reply, ..
+        }
+        | ProjectCommand::ApplyTopicMerges {
+            cancelled, reply, ..
+        } if cancelled.load(Ordering::Acquire) => {
+            let _ = reply.send(Err(ProjectServiceError::summary_cancelled()));
+            return true;
+        }
+        ProjectCommand::BeginTopicMerge {
+            cancelled, reply, ..
+        } if cancelled.load(Ordering::Acquire) => {
+            let _ = reply.send(Err(ProjectServiceError::summary_cancelled()));
+            return true;
+        }
+        _ => {}
+    }
     match command {
+        ProjectCommand::ConfigureSummaries { language, reply } => {
+            finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
+                catalog.reset_running_titles()?;
+                // Also advances the revision so clients see running titles requeued.
+                catalog.set_title_language(language)
+            });
+        }
         ProjectCommand::Upsert { candidate, reply } => {
             finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
                 catalog.upsert_candidate(&candidate)
@@ -748,11 +845,6 @@ fn process_command(
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.assign_session(&session_key, &project_key, locked, observed_at)
         }),
-        ProjectCommand::SetTitleLanguage { language, reply } => {
-            finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
-                catalog.set_title_language(language)
-            })
-        }
         ProjectCommand::TitleLanguage { reply } => {
             let _ = reply.send(
                 catalog
@@ -780,7 +872,7 @@ fn process_command(
                 .map_err(ProjectServiceError::catalog);
             let _ = reply.send(result);
         }
-        ProjectCommand::BeginTopicMerge { now, reply } => {
+        ProjectCommand::BeginTopicMerge { now, reply, .. } => {
             let result = catalog
                 .begin_topic_merge(now)
                 .map_err(ProjectServiceError::catalog);
@@ -790,6 +882,7 @@ fn process_command(
             merges,
             observed_at,
             reply,
+            ..
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.apply_topic_merges(&merges, observed_at)
         }),
@@ -803,6 +896,7 @@ fn process_command(
             batch,
             observed_at,
             reply,
+            ..
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.apply_semantic_batch(&batch, observed_at)
         }),
@@ -812,12 +906,12 @@ fn process_command(
                 .map_err(ProjectServiceError::catalog);
             let _ = reply.send(result);
         }
-        ProjectCommand::ClaimTitles { keys, reply } => {
+        ProjectCommand::ClaimTitles { keys, reply, .. } => {
             finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
                 catalog.claim_title_batch(&keys)
             });
         }
-        ProjectCommand::ApplyTitles { updates, reply } => {
+        ProjectCommand::ApplyTitles { updates, reply, .. } => {
             finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
                 catalog.apply_title_batch(&updates)
             });
@@ -937,6 +1031,163 @@ mod tests {
             weight: Default::default(),
             session_class: Some(crate::projects::SessionClass::Interactive),
         }
+    }
+
+    #[test]
+    fn local_summary_mode_does_not_start_a_topic_classifier() {
+        let mut service = ProjectService::in_memory(crate::api::EventHub::default());
+        service
+            .start_semantic_classification(super::super::semantic::SemanticConfig {
+                enabled: true,
+                mode: crate::config::SummaryModeConfig::Local,
+                ..super::super::semantic::SemanticConfig::default()
+            })
+            .unwrap();
+        assert!(service.summary_workers.is_empty());
+    }
+
+    #[test]
+    fn pending_starts_no_summary_workers_and_local_only_starts_titles() {
+        let mut service = ProjectService::in_memory(crate::api::EventHub::default());
+        let mut summary = crate::config::SummaryConfig::default();
+        service.configure_summaries(&summary).unwrap();
+        assert!(service.summary_workers.is_empty());
+        summary.mode = crate::config::SummaryModeConfig::Local;
+        service.configure_summaries(&summary).unwrap();
+        assert_eq!(service.summary_workers.len(), 1);
+        let old = Arc::clone(&service.summary_cancelled);
+        summary.mode = crate::config::SummaryModeConfig::Pending;
+        service.configure_summaries(&summary).unwrap();
+        assert!(old.load(Ordering::Acquire));
+        assert!(service.summary_workers.is_empty());
+        assert!(!service.shutdown.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn empty_naming_override_finishes_local_titles_without_failed_retries() {
+        use crate::projects::{CandidateField, SourcePriority};
+        let root = temp_dir("empty-naming-chain");
+        let path = root.join("catalog.sqlite3");
+        let mut service = ProjectService::open(&path, crate::api::EventHub::default());
+        let mut session = candidate("offline-name");
+        session.title = Some(CandidateField {
+            value: "Improve terminal session search and keyboard navigation".into(),
+            observed_at: 2,
+            priority: SourcePriority::PrimaryIndex,
+            source_key: "fixture".into(),
+        });
+        service.upsert_candidate(session).unwrap();
+        let summary = crate::config::SummaryConfig {
+            mode: crate::config::SummaryModeConfig::Auto,
+            providers: vec![],
+            title_providers: Some(vec![]),
+            ..crate::config::SummaryConfig::default()
+        };
+        service.configure_summaries(&summary).unwrap();
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let (source, status, error): (String, String, Option<String>) = connection
+                .query_row(
+                    "SELECT title_source,title_status,title_error FROM sessions",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_ne!(
+                status, "failed",
+                "an explicit empty list is not a backend failure"
+            );
+            if status == "done" {
+                assert_eq!(source, "local");
+                assert_eq!(error, None);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "local title did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(request_pending_titles(service.sender.as_ref().unwrap(), 10)
+            .unwrap()
+            .is_empty());
+        drop(connection);
+        drop(service);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_summary_configuration_can_retry_unchanged_settings() {
+        let mut service = ProjectService::in_memory(crate::api::EventHub::default());
+        let sender = service.sender.take();
+        let summary = crate::config::SummaryConfig::default();
+        assert!(service.configure_summaries(&summary).is_err());
+        assert!(service.summaries_need_retry());
+        service.sender = sender;
+        service.configure_summaries(&summary).unwrap();
+        assert!(!service.summaries_need_retry());
+        assert!(service.is_available());
+    }
+
+    #[test]
+    fn summary_reconfigure_requeues_claims_and_rejects_all_late_writes() {
+        let mut service = ProjectService::in_memory(crate::api::EventHub::default());
+        service
+            .configure_summaries(&crate::config::SummaryConfig::default())
+            .unwrap();
+        let mut value = candidate("preserved");
+        value.runtime = Some(RuntimeMapping {
+            workspace_id: "w1".into(),
+            pane_id: "p1".into(),
+            generation: 7,
+        });
+        let key = value.identity.stable_key.clone();
+        service.upsert_candidate(value).unwrap();
+        let sender = service.sender.as_ref().unwrap().clone();
+        let old = Arc::clone(&service.summary_cancelled);
+        request_claim_titles(&sender, &old, vec![key.clone()]).unwrap();
+        let before = service.snapshot();
+        service
+            .configure_summaries(&crate::config::SummaryConfig::default())
+            .unwrap();
+        let after = service.snapshot();
+        assert!(after.revision > before.revision);
+        assert_eq!(after.projects, before.projects);
+        assert_eq!(after.topics, before.topics);
+        assert!(request_pending_titles(&sender, 10)
+            .unwrap()
+            .iter()
+            .any(|row| row.stable_key == key && row.status == "pending"));
+        let update = SessionTitleUpdate {
+            stable_key: key.clone(),
+            title: "must not apply".into(),
+            source: "model".into(),
+            status: "done".into(),
+            error: None,
+            backend: Some("test".into()),
+            model: None,
+            fingerprint: "old-settings".into(),
+            generated_at: 10,
+        };
+        let results = [
+            request_claim_titles(&sender, &old, vec![key.clone()]),
+            request_apply_titles(&sender, &old, vec![update]),
+            request_apply_semantic(&sender, &old, vec![], 10),
+            request_apply_topic_merges(&sender, &old, vec![], 10),
+        ];
+        for result in results {
+            assert_eq!(result.unwrap_err().code, "summary_cancelled");
+        }
+        assert_eq!(
+            request_begin_topic_merge(&sender, &old, 10)
+                .unwrap_err()
+                .code,
+            "summary_cancelled"
+        );
+        assert_eq!(service.snapshot(), after);
+        request_claim_titles(&sender, &service.summary_cancelled, vec![key]).unwrap();
+        assert!(service.snapshot().revision > after.revision);
     }
 
     #[test]

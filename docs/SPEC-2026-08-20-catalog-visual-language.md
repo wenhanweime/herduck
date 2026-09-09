@@ -4,7 +4,7 @@
 > 日期：2026-08-20
 > 关系：修订 `SPEC-2026-08-19-sidebar-interaction.md` 的 F2，并为
 > `SPEC-catalog-hygiene-and-cluster-quality.md` 的命名层补一层展示契约。
-> 依据：全部结论来自本轮直接读码与真实 Catalog（`~/.config/ork3-dev/projects/catalog.sqlite3`，
+> 依据：全部结论来自本轮直接读码与真实 Catalog（`~/.config/herduck-dev/projects/catalog.sqlite3`，
 > 28 MB）查询，未使用框架惯例推断。
 
 ---
@@ -62,7 +62,7 @@ runtime_generation`（`src/app/state.rs:851`），`AppState::is_active_pane`
 
 ### 1.2 会话命名（P0）
 
-ork3 的标题就是**首条足够长的用户消息的前 96 个字符**：
+herduck 的标题就是**首条足够长的用户消息的前 96 个字符**：
 
 - `src/projects/adapters.rs:1348` `safe_title`：剥离注入前言 → 折叠空白 → `take(TITLE_MAX_CHARS)`，
   `TITLE_MAX_CHARS = 96`（`adapters.rs:1245`）。
@@ -73,7 +73,7 @@ ork3 的标题就是**首条足够长的用户消息的前 96 个字符**：
 
 ```
 看下这个看下这个 grok项目 分析目前项目的割裂的问题，然后制定下一阶段的研发规划和spec grok --resume 01a01579-2b40-7e01-86b0-730297b95b
-你是本轮审阅席（Claude）。仓库 `/Users/pot/Workspace/ork3`。 任务：把 Grok 计划改成正式三轮审阅。证据已由上一轮 Claude 实测确认，**不要再大范
+你是本轮审阅席（Claude）。仓库 `/Users/example/Workspace/herduck`。 任务：把 Grok 计划改成正式三轮审阅。证据已由上一轮 Claude 实测确认，**不要再大范
 推荐顺序： 1. Chrome Canary（最合适） bundle ID 是 com.google.Chrome.canary，图标是黄色，Dock / Cmd+Tab 会变成两个 App。
 New session - 2026-08-14T12:33:40.778Z
 在吗
@@ -88,7 +88,7 @@ New session - 2026-08-14T12:33:40.778Z
 - **F-D 硬截断**：96 字符在中文下约等于 96 字，侧栏宽度通常 26–40 列，实际只看得到开头的
   寒暄，看不到任务本身。
 
-对照 `paseo-multica`（`src/semantic/envelopes.mjs`）已解决同一问题，其可移植的四条规则：
+对照 `sample-project`（`src/semantic/envelopes.mjs`）已解决同一问题，其可移植的四条规则：
 
 1. `cleanIntent`（`envelopes.mjs:27`）：剥离 `Last login:`、shell 提示行、XML 块、
    `claude --resume <uuid>`、UUID、"继续/接着完成"前缀。
@@ -96,13 +96,13 @@ New session - 2026-08-14T12:33:40.778Z
    去标点后有效字符 < 3 的，一律不作为标题候选。
 3. `selectIntentCandidates`（`:80`）：**全会话**用户轮次去重后按 `informationScore` 排序取前 N，
    再按原始顺序还原——所以标题来自"最有信息量的那一轮"，不是"第一轮"。
-   ork3 当前只扫前 4 轮（`TITLE_SCAN_TURNS = 4`），最多 40 轮（`MAX_TITLE_SCAN_TURNS`），
+   herduck 当前只扫前 4 轮（`TITLE_SCAN_TURNS = 4`），最多 40 轮（`MAX_TITLE_SCAN_TURNS`），
    且只要前 4 轮里出现 ≥12 字符的就停止（`adapters.rs:1336`）——"看下这个"这类正好卡在阈值上。
 4. `fallbackTitle`（`:120`）：输出 `【{inferSubject}】{task}`，主题从 `【】`、
    产品名 token、`X项目/系统/模块` 模式、目录名依次推断；task 取首句并截到 58 字符。
 
-ork3 已经有 LLM 语义层（`src/projects/semantic.rs`），且 `semantic_assignments` 里已有
-可用的主题（实测 top-3：`agent 会话管理` 54、`paseo-multica 聚类与开发` 51、
+herduck 已经有 LLM 语义层（`src/projects/semantic.rs`），且 `semantic_assignments` 里已有
+可用的主题（实测 top-3：`agent 会话管理` 54、`sample-project 聚类与开发` 51、
 `staro 项目迁移开发` 35），**但这些主题只用于 Clusters 分组，没有回流到 Session 行的标题**。
 这是本 SPEC 最大的一次性收益：主题已经算出来了，只是没显示。
 
@@ -192,7 +192,7 @@ Session 显示名按以下优先级取第一个可用值：
 2. **清洗标题** —— 无语义分配时，用清洗后的最佳用户轮次，不带 `【】`。
 3. **后端占位** —— `fallback_title` 现状保留（`Codex session · a1b2c3d4`）。
 
-清洗规则（移植 `paseo-multica`，在 `src/projects/` 内以 Rust 重新实现，不引入 JS 依赖）：
+清洗规则（移植 `sample-project`，在 `src/projects/` 内以 Rust 重新实现，不引入 JS 依赖）：
 
 - 剥离：`<tag>...</tag>` 注入块（现有 `strip_injected_preamble` 已做）、
   `(claude|grok|codex) --resume <uuid>`、裸 UUID、shell 提示行、`Last login:`、
@@ -276,7 +276,7 @@ Session 显示名按以下优先级取第一个可用值：
 ## 5. 验收
 
 ```bash
-cd /Users/pot/Workspace/ork3
+cd /Users/example/Workspace/herduck
 just check
 ```
 

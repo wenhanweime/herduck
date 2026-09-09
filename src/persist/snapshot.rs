@@ -621,7 +621,7 @@ mod tests {
         panes.insert(
             0,
             PaneSnapshot {
-                cwd: PathBuf::from("/home/can/Projects/herdr"),
+                cwd: PathBuf::from("/home/example/Projects/herdr"),
                 label: None,
                 agent_name: None,
                 agent_session: None,
@@ -631,7 +631,7 @@ mod tests {
         panes.insert(
             1,
             PaneSnapshot {
-                cwd: PathBuf::from("/home/can/Projects/website"),
+                cwd: PathBuf::from("/home/example/Projects/website"),
                 label: Some("website".into()),
                 agent_name: None,
                 agent_session: None,
@@ -643,7 +643,7 @@ mod tests {
             workspaces: vec![WorkspaceSnapshot {
                 id: Some("wproj".to_string()),
                 custom_name: Some("pi-mono".to_string()),
-                identity_cwd: PathBuf::from("/home/can/Projects/herdr"),
+                identity_cwd: PathBuf::from("/home/example/Projects/herdr"),
                 worktree_space: None,
                 public_pane_numbers: HashMap::from([(0, 1), (1, 2)]),
                 next_public_pane_number: 3,
@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(restored.workspaces[0].tabs[0].panes.len(), 2);
         assert_eq!(
             restored.workspaces[0].tabs[0].panes[&0].cwd,
-            PathBuf::from("/home/can/Projects/herdr")
+            PathBuf::from("/home/example/Projects/herdr")
         );
         assert_eq!(
             restored.workspaces[0].tabs[0].panes[&1].label.as_deref(),

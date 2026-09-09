@@ -1,13 +1,20 @@
 # PRD：公开版会话摘要与主题 Provider
 
-> 状态：执行版 v0.1  
+> 状态：早期设计记录 v0.1，部分默认值与交互已被后续实现替代
+>
 > 日期：2026-09-01  
 > 读者：维护者 + coding agent  
 > 关联：`docs/SPEC-semantic-project-clustering.md`
 
+2026-09-08 实现更新：当前安装默认 `pending`，不会自动发送摘要请求。来源和模型通过 `config.toml` 配置；
+Settings 只展示当前优先级和详情，用 Open config file 打开文件修改，保存后重新进入设置加载。
+会话命名默认继承摘要列表，也可在文件中设置独立顺序。
+模型按配置顺序尝试；离线回退生成基础名称并保留现有主题。下文保留当时的目标、缺口与
+任务状态，当前使用方法和配置以 [Configuration](configuration.md) 为准。
+
 ## 0. One-liner
 
-ork3 在不依赖任何云端账号时仍能生成可读的会话标题和主题；用户也可以通过配置切换到本机 Agent、OpenCode Zen 免费模型或任意 OpenAI-compatible API，并在服务不可用时自动降级而不阻塞 TUI。
+herduck 在不依赖任何云端账号时仍能生成可读的会话标题和主题；用户也可以通过配置切换到本机 Agent、OpenCode Zen 免费模型或任意 OpenAI-compatible API，并在服务不可用时自动降级而不阻塞 TUI。
 
 **Done when：** 默认安装即可使用本地摘要；配置 `mode = "llm"` 或 `"auto"` 时能按 provider 顺序生成标题/主题；网络、密钥、配额或 Agent CLI 失败时，UI 仍显示会话且结果回退到确定性算法。
 
@@ -16,7 +23,7 @@ ork3 在不依赖任何云端账号时仍能生成可读的会话标题和主题
 | | |
 |---|---|
 | **问题** | 当前语义聚类和标题只会调用固定的本机 CLI，公开用户没有统一配置入口，也无法使用 OpenAI-compatible 网关或本地 LLM。 |
-| **用户** | 使用 ork3 管理 Codex、Claude、OpenCode、Pi、Hermes 等历史会话的开发者。 |
+| **用户** | 使用 herduck 管理 Codex、Claude、OpenCode、Pi、Hermes 等历史会话的开发者。 |
 | **为何现在** | 需要把本机工作流整理成可上传 GitHub、开箱可用且不强制云端账号的公开版本。 |
 
 ## 2. Scope
@@ -130,10 +137,10 @@ SummaryProviderConfig:
 
 1. Given未设置任何 key，When OpenCode Free 返回 200 且 choices[0].message.content 为合法 JSON，Then结果被接受且请求不含 Authorization header。
 2. Given OpenCode Free 返回 429/`FreeUsageLimitError`，When处理批次，Then记录 quota 诊断并立即尝试下一个模型/provider，不对同一模型重试。
-3. Given OpenCode Free 不可达，When启动 ork3，Then TUI 首帧和目录/会话树仍可用，且降级到本地算法或后续 provider。
+3. Given OpenCode Free 不可达，When启动 herduck，Then TUI 首帧和目录/会话树仍可用，且降级到本地算法或后续 provider。
 
 付费 OpenCode Zen 是可选 provider，不在默认链中。用户必须配置
-`api_key_env = "OPENCODE_ZEN_API_KEY"`；ORK3 只从该环境变量读取密钥。
+`api_key_env = "OPENCODE_ZEN_API_KEY"`；HERDUCK 只从该环境变量读取密钥。
 
 ### F4. OpenAI-compatible HTTP · P0
 
@@ -151,7 +158,7 @@ SummaryProviderConfig:
 
 **Acceptance criteria：**
 
-1. Given Pi provider，When构造命令，Then包含显式 `--model`、`-nt -ns -np -nc --no-session --offline`。
+1. Given Pi provider，When构造命令，Then包含 `-nt -ns -np -nc --no-session --offline`；只有配置了模型时才传 `--model`，否则使用 Pi 自己的配置。
 2. Given OpenCode provider，When构造命令，Then包含 `run --pure`，并使用隔离的 `XDG_DATA_HOME`。
 3. Given CLI 不存在或退出超时，When处理，Then继续 provider 链且不产生 orphan process。
 

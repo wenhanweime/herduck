@@ -598,6 +598,11 @@ impl AppState {
             .actions
             .unwrap_or_default();
         let button = crate::ui::onboarding_welcome_continue_rect(actions);
+        let skip = crate::ui::onboarding_welcome_skip_rect(actions);
+        if skip.contains((mouse.column, mouse.row).into()) {
+            self.request_skip_onboarding = true;
+            return;
+        }
         if modal_action_from_buttons(mouse.column, mouse.row, &[(button, ModalAction::Continue)])
             == Some(ModalAction::Continue)
         {

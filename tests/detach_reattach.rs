@@ -75,11 +75,11 @@ fn spawn_server(
     api_socket_path: &PathBuf,
     _client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("ork3-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herduck-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("ork3-dev/config.toml"),
+        config_home.join("herduck-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -93,15 +93,15 @@ fn spawn_server(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -267,8 +267,8 @@ fn navigate_q_detaches_client_and_server_persists() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -329,8 +329,8 @@ fn explicit_detach_message_causes_clean_disconnect() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -388,8 +388,8 @@ fn reattach_after_detach_shows_current_state() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -500,8 +500,8 @@ fn processes_survive_during_and_after_detach() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -595,8 +595,8 @@ fn server_persists_after_client_connection_drop() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -645,8 +645,8 @@ fn detached_output_preserves_last_attached_pty_size() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -713,8 +713,8 @@ fn output_accumulated_while_detached_visible_on_reattach() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));

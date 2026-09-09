@@ -125,11 +125,11 @@ fn tab_create(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_tab_id) = args.first() else {
-        eprintln!("usage: ork3 tab get <tab_id>");
+        eprintln!("usage: herduck tab get <tab_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 tab get <tab_id>");
+        eprintln!("usage: herduck tab get <tab_id>");
         return Ok(2);
     }
 
@@ -138,11 +138,11 @@ fn tab_get(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_tab_id) = args.first() else {
-        eprintln!("usage: ork3 tab focus <tab_id>");
+        eprintln!("usage: herduck tab focus <tab_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 tab focus <tab_id>");
+        eprintln!("usage: herduck tab focus <tab_id>");
         return Ok(2);
     }
 
@@ -151,7 +151,7 @@ fn tab_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_rename(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: ork3 tab rename <tab_id> <label>");
+        eprintln!("usage: herduck tab rename <tab_id> <label>");
         return Ok(2);
     }
 
@@ -163,11 +163,11 @@ fn tab_rename(args: &[String]) -> std::io::Result<i32> {
 
 fn tab_close(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_tab_id) = args.first() else {
-        eprintln!("usage: ork3 tab close <tab_id>");
+        eprintln!("usage: herduck tab close <tab_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 tab close <tab_id>");
+        eprintln!("usage: herduck tab close <tab_id>");
         return Ok(2);
     }
 
@@ -175,13 +175,13 @@ fn tab_close(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_tab_help() {
-    eprintln!("ork3 tab commands:");
-    eprintln!("  ork3 tab list [--workspace <workspace_id>]");
+    eprintln!("herduck tab commands:");
+    eprintln!("  herduck tab list [--workspace <workspace_id>]");
     eprintln!(
-        "  ork3 tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]"
+        "  herduck tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]"
     );
-    eprintln!("  ork3 tab get <tab_id>");
-    eprintln!("  ork3 tab focus <tab_id>");
-    eprintln!("  ork3 tab rename <tab_id> <label>");
-    eprintln!("  ork3 tab close <tab_id>");
+    eprintln!("  herduck tab get <tab_id>");
+    eprintln!("  herduck tab focus <tab_id>");
+    eprintln!("  herduck tab rename <tab_id> <label>");
+    eprintln!("  herduck tab close <tab_id>");
 }

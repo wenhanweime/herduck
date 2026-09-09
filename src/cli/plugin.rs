@@ -47,7 +47,7 @@ pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_link(args: &[String]) -> std::io::Result<i32> {
     let Some(path) = args.first() else {
-        eprintln!("usage: ork3 plugin link <path> [--disabled]");
+        eprintln!("usage: herduck plugin link <path> [--disabled]");
         return Ok(2);
     };
     let path = normalize_plugin_path_arg(path)?;
@@ -78,11 +78,11 @@ fn plugin_link(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: ork3 plugin config-dir <plugin_id>");
+        eprintln!("usage: herduck plugin config-dir <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 plugin config-dir <plugin_id>");
+        eprintln!("usage: herduck plugin config-dir <plugin_id>");
         return Ok(2);
     }
     let path = crate::plugin_paths::plugin_config_dir(plugin_id);
@@ -130,11 +130,11 @@ fn plugin_list(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: ork3 plugin unlink <plugin_id>");
+        eprintln!("usage: herduck plugin unlink <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 plugin unlink <plugin_id>");
+        eprintln!("usage: herduck plugin unlink <plugin_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginUnlink(PluginUnlinkParams {
@@ -144,7 +144,7 @@ fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_install(args: &[String]) -> std::io::Result<i32> {
     let Some(source_arg) = args.first() else {
-        eprintln!("usage: ork3 plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
+        eprintln!("usage: herduck plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
         return Ok(2);
     };
     let source = match GithubPluginSource::parse(source_arg) {
@@ -253,11 +253,11 @@ fn plugin_install(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: ork3 plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("usage: herduck plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("usage: herduck plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     }
 
@@ -318,14 +318,14 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
 fn plugin_set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
         eprintln!(
-            "usage: ork3 plugin {} <plugin_id>",
+            "usage: herduck plugin {} <plugin_id>",
             if enabled { "enable" } else { "disable" }
         );
         return Ok(2);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: ork3 plugin {} <plugin_id>",
+            "usage: herduck plugin {} <plugin_id>",
             if enabled { "enable" } else { "disable" }
         );
         return Ok(2);
@@ -420,7 +420,7 @@ fn plugin_action_list(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_action_invoke(args: &[String]) -> std::io::Result<i32> {
     let Some(action_id) = args.first() else {
-        eprintln!("usage: ork3 plugin action invoke <action_id> [--plugin ID]");
+        eprintln!("usage: herduck plugin action invoke <action_id> [--plugin ID]");
         return Ok(2);
     };
     let mut plugin_id = None;
@@ -630,11 +630,11 @@ fn parse_popup_dimension(value: &str, flag: &str) -> Option<PopupSize> {
 
 fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(pane_id) = args.first() else {
-        eprintln!("usage: ork3 plugin pane focus <pane_id>");
+        eprintln!("usage: herduck plugin pane focus <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 plugin pane focus <pane_id>");
+        eprintln!("usage: herduck plugin pane focus <pane_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginPaneFocus(PluginPaneFocusParams {
@@ -644,11 +644,11 @@ fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn plugin_pane_close(args: &[String]) -> std::io::Result<i32> {
     let Some(pane_id) = args.first() else {
-        eprintln!("usage: ork3 plugin pane close <pane_id>");
+        eprintln!("usage: herduck plugin pane close <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 plugin pane close <pane_id>");
+        eprintln!("usage: herduck plugin pane close <pane_id>");
         return Ok(2);
     }
     print_plugin_response(Method::PluginPaneClose(PluginPaneCloseParams {
@@ -718,7 +718,7 @@ impl GithubPluginSource {
         }
         let parts = value.split('/').collect::<Vec<_>>();
         if parts.len() < 2 {
-            return Err("usage: ork3 plugin install <owner>/<repo>[/subdir...]".into());
+            return Err("usage: herduck plugin install <owner>/<repo>[/subdir...]".into());
         }
         let owner = parts[0];
         let repo = parts[1];
@@ -981,7 +981,7 @@ fn verify_plugin_link_source_response(
         || plugin.source.managed_path != expected.managed_path
     {
         return Err(std::io::Error::other(
-            "running ORK3 server did not persist GitHub plugin source metadata",
+            "running HERDUCK server did not persist GitHub plugin source metadata",
         ));
     }
     Ok(())
@@ -1571,7 +1571,7 @@ fn plugin_checkout_lifecycle_error(operation: &str, path: &Path, err: io::Error)
         return io::Error::new(
             err.kind(),
             format!(
-                "failed to {operation} managed plugin checkout at {}; close any ORK3 plugin panes or plugin commands using that checkout, then retry: {err}",
+                "failed to {operation} managed plugin checkout at {}; close any HERDUCK plugin panes or plugin commands using that checkout, then retry: {err}",
                 path.display()
             ),
         );
@@ -1616,31 +1616,31 @@ fn print_plugin_response(method: Method) -> std::io::Result<i32> {
 }
 
 fn print_plugin_help() {
-    eprintln!("ork3 plugin commands:");
-    eprintln!("  ork3 plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
-    eprintln!("  ork3 plugin uninstall <plugin_id|owner/repo[/subdir...]>");
-    eprintln!("  ork3 plugin link <path> [--disabled]");
-    eprintln!("  ork3 plugin list [--plugin ID] [--json]");
-    eprintln!("  ork3 plugin config-dir <plugin_id>");
-    eprintln!("  ork3 plugin unlink <plugin_id>");
-    eprintln!("  ork3 plugin enable <plugin_id>");
-    eprintln!("  ork3 plugin disable <plugin_id>");
-    eprintln!("  ork3 plugin action <list|invoke>");
-    eprintln!("  ork3 plugin log list [--plugin ID] [--limit N]");
-    eprintln!("  ork3 plugin pane <open|focus|close>");
+    eprintln!("herduck plugin commands:");
+    eprintln!("  herduck plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
+    eprintln!("  herduck plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+    eprintln!("  herduck plugin link <path> [--disabled]");
+    eprintln!("  herduck plugin list [--plugin ID] [--json]");
+    eprintln!("  herduck plugin config-dir <plugin_id>");
+    eprintln!("  herduck plugin unlink <plugin_id>");
+    eprintln!("  herduck plugin enable <plugin_id>");
+    eprintln!("  herduck plugin disable <plugin_id>");
+    eprintln!("  herduck plugin action <list|invoke>");
+    eprintln!("  herduck plugin log list [--plugin ID] [--limit N]");
+    eprintln!("  herduck plugin pane <open|focus|close>");
 }
 
 fn print_plugin_action_help() {
-    eprintln!("ork3 plugin action commands:");
-    eprintln!("  ork3 plugin action list [--plugin ID]");
-    eprintln!("  ork3 plugin action invoke <action_id> [--plugin ID]");
+    eprintln!("herduck plugin action commands:");
+    eprintln!("  herduck plugin action list [--plugin ID]");
+    eprintln!("  herduck plugin action invoke <action_id> [--plugin ID]");
 }
 
 fn print_plugin_pane_help() {
-    eprintln!("ork3 plugin pane commands:");
-    eprintln!("  ork3 plugin pane open --plugin ID --entrypoint ID [--placement overlay|popup|split|tab|zoomed] [--width SIZE] [--height SIZE] [--workspace ID] [--target-pane PANE] [--direction right|down] [--cwd PATH] [--env KEY=VALUE] [--focus|--no-focus]");
-    eprintln!("  ork3 plugin pane focus <pane_id>");
-    eprintln!("  ork3 plugin pane close <pane_id>");
+    eprintln!("herduck plugin pane commands:");
+    eprintln!("  herduck plugin pane open --plugin ID --entrypoint ID [--placement overlay|popup|split|tab|zoomed] [--width SIZE] [--height SIZE] [--workspace ID] [--target-pane PANE] [--direction right|down] [--cwd PATH] [--env KEY=VALUE] [--focus|--no-focus]");
+    eprintln!("  herduck plugin pane focus <pane_id>");
+    eprintln!("  herduck plugin pane close <pane_id>");
 }
 
 #[cfg(test)]

@@ -55,7 +55,7 @@ fn worktree_list(args: &[String]) -> std::io::Result<i32> {
         }
     }
     if workspace_id.is_some() && cwd.is_some() {
-        eprintln!("usage: ork3 worktree list [--workspace ID | --cwd PATH] [--json]");
+        eprintln!("usage: herduck worktree list [--workspace ID | --cwd PATH] [--json]");
         return Ok(2);
     }
 
@@ -139,7 +139,7 @@ fn worktree_create(args: &[String]) -> std::io::Result<i32> {
     }
     if workspace_id.is_some() && cwd.is_some() {
         eprintln!(
-            "usage: ork3 worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--json]"
+            "usage: herduck worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--json]"
         );
         return Ok(2);
     }
@@ -223,13 +223,13 @@ fn worktree_open(args: &[String]) -> std::io::Result<i32> {
     }
     if workspace_id.is_some() && cwd.is_some() {
         eprintln!(
-            "usage: ork3 worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]"
+            "usage: herduck worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]"
         );
         return Ok(2);
     }
     if path.is_some() == branch.is_some() {
         eprintln!(
-            "usage: ork3 worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]"
+            "usage: herduck worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]"
         );
         return Ok(2);
     }
@@ -272,7 +272,7 @@ fn worktree_remove(args: &[String]) -> std::io::Result<i32> {
     }
 
     let Some(workspace_id) = workspace_id else {
-        eprintln!("usage: ork3 worktree remove --workspace ID [--force] [--json]");
+        eprintln!("usage: herduck worktree remove --workspace ID [--force] [--json]");
         return Ok(2);
     };
 
@@ -283,15 +283,15 @@ fn worktree_remove(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_worktree_help() {
-    eprintln!("ork3 worktree commands:");
-    eprintln!("  ork3 worktree list [--workspace ID | --cwd PATH] [--json]");
+    eprintln!("herduck worktree commands:");
+    eprintln!("  herduck worktree list [--workspace ID | --cwd PATH] [--json]");
     eprintln!(
-        "  ork3 worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--json]"
+        "  herduck worktree create [--workspace ID | --cwd PATH] [--branch NAME] [--base REF] [--path PATH] [--label TEXT] [--focus] [--no-focus] [--json]"
     );
     eprintln!(
-        "  ork3 worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]"
+        "  herduck worktree open [--workspace ID | --cwd PATH] (--path PATH | --branch NAME) [--label TEXT] [--focus] [--no-focus] [--json]"
     );
-    eprintln!("  ork3 worktree remove --workspace ID [--force] [--json]");
+    eprintln!("  herduck worktree remove --workspace ID [--force] [--json]");
 }
 
 fn normalize_path_arg(value: &str) -> std::io::Result<String> {

@@ -431,7 +431,7 @@ mod tests {
                 "herdr:grok",
                 "grok",
                 &AgentSessionRef::path(
-                    "/Users/pot/.grok/sessions/%2FUsers%2Fpot%2FWorkspace/01a01578-b311-7013-93bb-5cf870ffea47"
+                    "/Users/example/.grok/sessions/%2FUsers%2Fexample%2FWorkspace/01a01578-b311-7013-93bb-5cf870ffea47"
                 )
                 .unwrap()
             )

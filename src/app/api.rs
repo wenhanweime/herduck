@@ -306,10 +306,11 @@ impl App {
                     runtime.mark_activity_at(Instant::now());
                 }
             }
-            self.flush_pending_catalog_submission(update);
+            self.flush_pending_catalog_submission(update.pane_id, update.state);
             self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
         }
+        self.refresh_agent_inactivity(Instant::now());
         self.sync_agent_metadata_deadline();
         if let Some((
             overlay,
@@ -356,26 +357,25 @@ impl App {
     /// Delivers the first user message only after the resumed agent has rendered an idle prompt.
     /// The paste payload and Enter key are queued as one write, so a full channel cannot leave a
     /// half-delivered submission that would be duplicated on retry.
-    fn flush_pending_catalog_submission(&mut self, update: &crate::app::actions::PaneStateUpdate) {
-        if update.state != crate::detect::AgentState::Idle {
+    pub(super) fn flush_pending_catalog_submission(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        state: crate::detect::AgentState,
+    ) {
+        if state != crate::detect::AgentState::Idle {
             return;
         }
-        let Some(draft) = self
-            .pending_catalog_submissions
-            .get(&update.pane_id)
-            .cloned()
-        else {
+        let Some(draft) = self.pending_catalog_submissions.get(&pane_id).cloned() else {
             return;
         };
-        let Some((ws_idx, _)) = self.find_pane(update.pane_id) else {
+        let Some((ws_idx, _)) = self.find_pane(pane_id) else {
             return;
         };
         let send_result = {
-            let Some(runtime) = self.state.runtime_for_pane_in_workspace(
-                &self.terminal_runtimes,
-                ws_idx,
-                update.pane_id,
-            ) else {
+            let Some(runtime) =
+                self.state
+                    .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+            else {
                 return;
             };
             let bracketed = runtime
@@ -394,11 +394,11 @@ impl App {
         };
         match send_result {
             Ok(()) => {
-                self.pending_catalog_submissions.remove(&update.pane_id);
+                self.pending_catalog_submissions.remove(&pane_id);
             }
             Err(err) => {
                 tracing::warn!(
-                    pane = update.pane_id.raw(),
+                    pane = pane_id.raw(),
                     err = %err,
                     "failed to deliver pending catalog submission"
                 );
@@ -436,7 +436,7 @@ impl App {
     ) {
         if !matches!(
             self.state.toast_config.delivery,
-            crate::config::ToastDelivery::Ork3
+            crate::config::ToastDelivery::Herduck
         ) || self.state.toast == *previous_toast
         {
             return;
@@ -556,20 +556,6 @@ impl App {
         } else {
             RuntimeExitAction::ClosePane
         }
-    }
-
-    pub(crate) fn publish_reaped_agent_process_exit(&mut self, pane_id: crate::layout::PaneId) {
-        let previous_toast = self.state.toast.clone();
-        if let Some(update) = self.state.publish_pane_process_exit_if_agent(pane_id) {
-            self.sync_full_lifecycle_authority_detection_pauses();
-            self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
-            self.emit_pane_state_update(&update);
-            self.emit_terminal_or_system_agent_notifications(std::slice::from_ref(&update));
-        }
-        self.sync_project_runtime_for_pane(pane_id, false);
-        self.pending_catalog_submissions.remove(&pane_id);
-        self.sync_agent_metadata_deadline();
-        self.sync_toast_deadline(previous_toast);
     }
 
     fn should_respawn_shell_after_agent_exit(
@@ -1340,7 +1326,7 @@ impl App {
 
         let reason = match self.state.toast_config.delivery {
             crate::config::ToastDelivery::Off => NotificationShowReason::Disabled,
-            crate::config::ToastDelivery::Ork3 => {
+            crate::config::ToastDelivery::Herduck => {
                 if self.state.toast.is_some() {
                     NotificationShowReason::Busy
                 } else if self.api_notification_rate_limited(Instant::now()) {
@@ -1911,7 +1897,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         app.state.toast_config.delay_seconds = 0;
 
         let (events, _) = tokio::sync::mpsc::channel(4);
@@ -2003,7 +1989,7 @@ mod tests {
         app.state.active = None;
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         app.state.toast_config.delay_seconds = 1;
 
         let (events, _) = tokio::sync::mpsc::channel(4);

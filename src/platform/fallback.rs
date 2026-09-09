@@ -87,16 +87,6 @@ pub fn session_processes(_child_pid: u32) -> Vec<u32> {
 pub fn signal_processes(_pids: &[u32], _signal: Signal) {}
 
 /// Unsupported platform stub.
-pub fn signal_process_group(_process_group_id: u32, _signal: Signal) -> bool {
-    false
-}
-
-/// Unsupported platform stub.
-pub fn process_group_exists(_process_group_id: u32) -> bool {
-    false
-}
-
-/// Unsupported platform stub.
 pub fn process_exists(_pid: u32) -> bool {
     false
 }
@@ -116,6 +106,13 @@ pub fn open_url(_url: &str) -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "opening URLs is not supported on this platform",
+    ))
+}
+
+pub(crate) fn text_file_editor_command(_path: &std::path::Path) -> std::io::Result<Command> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "opening a text editor is not supported on this platform",
     ))
 }
 

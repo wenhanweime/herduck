@@ -2,18 +2,16 @@ use std::path::Path;
 
 use super::{ProjectClassification, ProjectKind};
 
-const TEMP_RUNNER_PREFIXES: [&str; 3] = [
-    "paseo-multica-agent-",
-    "paseo-topics-agent-",
-    "ork-direct-accept.",
-];
 const RUNTIME_STATE_DIR: &str = "general";
 
-pub(crate) fn classify(cwd: Option<&Path>) -> ProjectClassification {
+pub(crate) fn classify(
+    cwd: Option<&Path>,
+    ephemeral_cwd_prefixes: &[String],
+) -> ProjectClassification {
     let Some(cwd) = cwd else {
         return ProjectClassification::unclassified();
     };
-    if is_ephemeral_agent_cwd(cwd) {
+    if is_ephemeral_agent_cwd(cwd, ephemeral_cwd_prefixes) {
         return ProjectClassification::ephemeral_agent();
     }
     if !cwd.is_dir() {
@@ -44,18 +42,25 @@ pub(crate) fn classify(cwd: Option<&Path>) -> ProjectClassification {
 ///
 /// Existing user projects win unless their location and name both identify an application-owned
 /// scratch area. Missing paths can still be recognized by their generated epoch/UUID leaf.
-pub(crate) fn is_ephemeral_agent_cwd(cwd: &Path) -> bool {
-    if is_temp_runner_path(cwd) || is_application_support_scratch(cwd) || is_aionui_scratch(cwd) {
+pub(crate) fn is_ephemeral_agent_cwd(cwd: &Path, ephemeral_cwd_prefixes: &[String]) -> bool {
+    if is_temp_runner_path(cwd, ephemeral_cwd_prefixes)
+        || is_application_support_scratch(cwd)
+        || is_aionui_scratch(cwd)
+    {
         return true;
     }
-    !cwd.is_dir()
-        && cwd
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| is_generated_temp_leaf(name) || is_uuid(name))
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| is_generated_temp_leaf(name) || is_uuid(name))
+        && !cwd.is_dir()
 }
 
-fn is_temp_runner_path(cwd: &Path) -> bool {
+fn is_temp_runner_path(cwd: &Path, prefixes: &[String]) -> bool {
+    let matches_prefix = |name: &str| {
+        prefixes
+            .iter()
+            .any(|prefix| !prefix.is_empty() && name.starts_with(prefix))
+    };
     let direct_temp_roots = [
         std::env::temp_dir(),
         Path::new("/tmp").to_path_buf(),
@@ -67,11 +72,7 @@ fn is_temp_runner_path(cwd: &Path) -> bool {
                 .components()
                 .next()
                 .and_then(|component| component.as_os_str().to_str())
-                .is_some_and(|name| {
-                    TEMP_RUNNER_PREFIXES
-                        .iter()
-                        .any(|prefix| name.starts_with(prefix))
-                })
+                .is_some_and(matches_prefix)
         })
     }) {
         return true;
@@ -90,11 +91,7 @@ fn is_temp_runner_path(cwd: &Path) -> bool {
             let components = relative.components().collect::<Vec<_>>();
             components.windows(2).any(|window| {
                 window[0].as_os_str() == "T"
-                    && window[1].as_os_str().to_str().is_some_and(|name| {
-                        TEMP_RUNNER_PREFIXES
-                            .iter()
-                            .any(|prefix| name.starts_with(prefix))
-                    })
+                    && window[1].as_os_str().to_str().is_some_and(matches_prefix)
             })
         })
 }
@@ -215,8 +212,8 @@ mod tests {
     #[test]
     fn equal_non_git_cwd_has_equal_project_identity() {
         let cwd = temp_dir("cwd");
-        let first = classify(Some(&cwd));
-        let second = classify(Some(&cwd));
+        let first = classify(Some(&cwd), &[]);
+        let second = classify(Some(&cwd), &[]);
         assert_eq!(first.kind, ProjectKind::Cwd);
         assert_eq!(first.canonical_key, second.canonical_key);
         let _ = std::fs::remove_dir_all(cwd);
@@ -225,17 +222,17 @@ mod tests {
     #[test]
     fn missing_or_unreadable_cwd_is_unclassified() {
         let missing = temp_dir("missing").join("gone");
-        let project = classify(Some(&missing));
+        let project = classify(Some(&missing), &[]);
         assert_eq!(project.kind, ProjectKind::Unclassified);
-        assert_eq!(classify(None).kind, ProjectKind::Unclassified);
+        assert_eq!(classify(None, &[]).kind, ProjectKind::Unclassified);
     }
 
     #[test]
-    fn paseo_agent_temp_cwd_is_ephemeral_even_after_child_directory_disappears() {
-        let cwd = std::env::temp_dir().join("paseo-multica-agent-test-session");
+    fn configured_runner_cwd_is_ephemeral_even_after_child_directory_disappears() {
+        let cwd = std::env::temp_dir().join("ci-worker-test-session");
         let _ = std::fs::remove_dir_all(&cwd);
 
-        let project = classify(Some(&cwd));
+        let project = classify(Some(&cwd), &["ci-worker-".into()]);
 
         assert_eq!(project.kind, ProjectKind::Unclassified);
         assert_eq!(project.evidence, "ephemeral-agent-cwd");
@@ -243,11 +240,11 @@ mod tests {
     }
 
     #[test]
-    fn paseo_topics_agent_temp_cwd_is_ephemeral() {
-        let cwd = std::env::temp_dir().join("paseo-topics-agent-test-session");
+    fn configured_batch_runner_cwd_is_ephemeral() {
+        let cwd = std::env::temp_dir().join("batch-worker-test-session");
         let _ = std::fs::remove_dir_all(&cwd);
 
-        let project = classify(Some(&cwd));
+        let project = classify(Some(&cwd), &["batch-worker-".into()]);
 
         assert_eq!(project.kind, ProjectKind::Unclassified);
         assert_eq!(project.evidence, "ephemeral-agent-cwd");
@@ -256,20 +253,20 @@ mod tests {
 
     #[test]
     fn macos_private_var_topics_agent_path_is_ephemeral() {
-        let cwd = Path::new("/private/var/folders/xx/test/T/paseo-topics-agent-macos-fixture");
-        assert!(is_ephemeral_agent_cwd(cwd));
+        let cwd = Path::new("/private/var/folders/xx/test/T/batch-worker-macos-fixture");
+        assert!(is_ephemeral_agent_cwd(cwd, &["batch-worker-".into()]));
     }
 
     #[test]
     fn similarly_named_persistent_directory_is_not_ephemeral() {
         let root = temp_dir("persistent-parent");
-        let cwd = root.join("paseo-multica-agent-real-project");
+        let cwd = root.join("ci-worker-real-project");
         std::fs::create_dir_all(&cwd).expect("persistent cwd");
 
-        let project = classify(Some(&cwd));
+        let project = classify(Some(&cwd), &["ci-worker-".into()]);
 
         assert_eq!(project.kind, ProjectKind::Cwd);
-        assert_eq!(project.display_name, "paseo-multica-agent-real-project");
+        assert_eq!(project.display_name, "ci-worker-real-project");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -280,22 +277,22 @@ mod tests {
         );
         let state =
             Path::new("/Users/example/Library/Application Support/dev.runboard.runboard/general");
-        assert!(is_ephemeral_agent_cwd(epoch));
-        assert!(is_ephemeral_agent_cwd(state));
+        assert!(is_ephemeral_agent_cwd(epoch, &[]));
+        assert!(is_ephemeral_agent_cwd(state, &[]));
     }
 
     #[test]
     fn home_aionui_temp_dirs_are_ephemeral_even_when_they_still_exist() {
         let epoch = Path::new("/Users/example/.aionui/codex-temp-1774794513560");
         let hex = Path::new("/Users/example/.aionui/conversations/2026/07/17/codex-temp-cc413191");
-        assert!(is_ephemeral_agent_cwd(epoch));
-        assert!(is_ephemeral_agent_cwd(hex));
+        assert!(is_ephemeral_agent_cwd(epoch, &[]));
+        assert!(is_ephemeral_agent_cwd(hex, &[]));
     }
 
     #[test]
     fn nested_ork_runner_state_is_ephemeral() {
-        let cwd = Path::new("/private/tmp/ork-direct-accept.E1hQlA/state/general");
-        assert!(is_ephemeral_agent_cwd(cwd));
+        let cwd = Path::new("/private/tmp/ci-accept.E1hQlA/state/general");
+        assert!(is_ephemeral_agent_cwd(cwd, &["ci-accept.".into()]));
     }
 
     #[test]
@@ -304,8 +301,8 @@ mod tests {
         let cwd = root.join("my-temp-1234567890");
         std::fs::create_dir_all(&cwd).expect("project");
         init_git_repo(&cwd);
-        assert!(!is_ephemeral_agent_cwd(&cwd));
-        assert_eq!(classify(Some(&cwd)).kind, ProjectKind::GitCommonDir);
+        assert!(!is_ephemeral_agent_cwd(&cwd, &[]));
+        assert_eq!(classify(Some(&cwd), &[]).kind, ProjectKind::GitCommonDir);
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -313,7 +310,7 @@ mod tests {
     fn git_checkout_uses_common_dir_and_stable_display_name() {
         let repo = temp_dir("repo");
         init_git_repo(&repo);
-        let project = classify(Some(&repo));
+        let project = classify(Some(&repo), &[]);
         assert_eq!(project.kind, ProjectKind::GitCommonDir);
         assert_eq!(
             project.display_name,
@@ -321,5 +318,33 @@ mod tests {
         );
         assert!(project.canonical_path.ends_with(".git"));
         let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn configured_prefixes_are_opt_in_and_match_literals() {
+        let cwd = temp_dir("runner%_");
+        let prefix = cwd.file_name().unwrap().to_str().unwrap().to_string();
+        assert_eq!(classify(Some(&cwd), &[]).kind, ProjectKind::Cwd);
+        assert_eq!(
+            classify(Some(&cwd), std::slice::from_ref(&prefix)).evidence,
+            "ephemeral-agent-cwd"
+        );
+        assert!(is_ephemeral_agent_cwd(
+            &cwd.join("missing/state"),
+            std::slice::from_ref(&prefix),
+        ));
+        let lookalike = cwd.with_file_name(prefix.replace("%_", "ab"));
+        assert!(!is_ephemeral_agent_cwd(&lookalike, &[prefix]));
+        let _ = std::fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    fn empty_prefix_does_not_hide_existing_temp_projects() {
+        let cwd = temp_dir("empty-prefix");
+        assert_eq!(
+            classify(Some(&cwd), &[String::new()]).kind,
+            ProjectKind::Cwd
+        );
+        let _ = std::fs::remove_dir_all(cwd);
     }
 }

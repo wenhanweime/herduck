@@ -1606,10 +1606,10 @@ mod tests {
                 argv0: Some("bun".to_string()),
                 argv: Some(vec![
                     "bun".to_string(),
-                    "/home/can/.local/bin/droid".to_string(),
+                    "/home/example/.local/bin/droid".to_string(),
                     "--resume".to_string(),
                 ]),
-                cmdline: Some("/home/can/.local/bin/droid --resume".to_string()),
+                cmdline: Some("/home/example/.local/bin/droid --resume".to_string()),
             }],
         };
         assert!(foreground_job_uses_droid_scrollback_compat(&cmdline_only));

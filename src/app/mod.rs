@@ -18,6 +18,7 @@ mod project_runtime;
 mod runtime;
 mod runtime_mutations;
 mod session;
+pub(crate) mod session_setup;
 pub mod state;
 mod terminal_targets;
 mod terminal_titles;
@@ -144,6 +145,7 @@ pub struct App {
     pub(crate) session_save_deadline: Option<Instant>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<()>>,
     pub(crate) detached_custom_command_children: Vec<std::process::Child>,
+    pub(crate) config_editor_child: Option<std::process::Child>,
     pub(crate) persist_pane_history: bool,
     pub(crate) last_render_at: Option<Instant>,
     pub(crate) suppressed_repeat_keys:
@@ -573,6 +575,7 @@ impl App {
             sidebar_view: state::SidebarView::SpacesAgents,
             projects: state::ProjectsViewState::default(),
             request_complete_onboarding: false,
+            request_skip_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
             release_notes: None,
@@ -680,6 +683,8 @@ impl App {
             palette: theme_palette,
             theme_name,
             title_language: config.projects.summary.title_language,
+            summary_config: config.projects.summary.clone(),
+            session_setup: session_setup::SessionSetupState::new(&config.session.default_agent),
             theme_runtime,
             host_terminal_appearance: None,
             host_terminal_appearance_explicit: false,
@@ -688,6 +693,9 @@ impl App {
                 list: state::SelectionListState::new(0),
                 original_palette: None,
                 original_theme: None,
+                config_path: crate::config::config_path(),
+                scroll: 0,
+                status: String::new(),
             },
             integration_recommendations: crate::integration::integration_recommendations(),
             agent_manifest_summaries,
@@ -746,25 +754,19 @@ impl App {
         let mut project_service = if no_session {
             crate::projects::ProjectService::disabled()
         } else {
-            crate::projects::ProjectService::open_with_threshold(
+            crate::projects::ProjectService::open_with_config(
                 &crate::session::data_dir().join("projects/catalog.sqlite3"),
                 event_hub.clone(),
-                config.projects.automation_title_threshold,
+                &config.projects,
             )
         };
         if !no_session {
-            if let Err(error) =
-                project_service.set_title_language(config.projects.summary.title_language)
-            {
-                tracing::warn!("Could not configure title language: {}", error.message);
-            }
             project_service.start_background_scan(project_roots.roots());
             // Topic clustering runs after the scan is queued so the tree is usable from
             // path-based grouping immediately, then regroups as classification lands.
-            let summary_config =
-                crate::projects::semantic::SemanticConfig::from_projects(&config.projects);
-            project_service.start_semantic_classification(summary_config.clone());
-            project_service.start_title_generation(summary_config);
+            if let Err(error) = project_service.configure_summaries(&config.projects.summary) {
+                tracing::warn!("Could not configure summaries: {}", error.message);
+            }
         }
         state.projects.snapshot = project_service.snapshot();
 
@@ -802,6 +804,7 @@ impl App {
             session_save_deadline: None,
             session_save_thread: None,
             detached_custom_command_children: Vec::new(),
+            config_editor_child: None,
             selection_autoscroll_deadline: None,
             selection_highlight_clear_deadline: None,
             persist_pane_history: config.experimental.pane_history,
@@ -829,6 +832,10 @@ impl App {
             config_reloaded_from_disk: false,
             prefix_input_source: Box::new(crate::platform::RealPrefixInputSource::default()),
         };
+        app.refresh_session_setup();
+        app.state
+            .session_setup
+            .set_history_locations(&config.projects, &config.projects);
         if !no_session {
             app.sync_all_project_runtime_mappings();
         }
@@ -1005,6 +1012,11 @@ impl App {
             if self.state.request_complete_onboarding {
                 self.state.request_complete_onboarding = false;
                 self.open_settings_from_onboarding();
+                needs_render = true;
+            }
+            if self.state.request_skip_onboarding {
+                self.state.request_skip_onboarding = false;
+                self.finish_onboarding();
                 needs_render = true;
             }
 
@@ -1329,9 +1341,10 @@ impl App {
     }
 
     pub(crate) fn open_settings_from_onboarding(&mut self) {
-        self.mark_onboarding_complete();
+        self.finish_onboarding();
+        self.refresh_session_setup();
         self.refresh_integration_recommendations();
-        crate::app::input::open_settings_at(&mut self.state, state::SettingsSection::Integrations);
+        crate::app::input::open_settings_at(&mut self.state, state::SettingsSection::Sessions);
     }
 
     pub(crate) fn refresh_integration_recommendations(&mut self) {
@@ -1394,6 +1407,7 @@ impl App {
         notify_success: bool,
     ) -> crate::config::ConfigReloadReport {
         self.config_reloaded_from_disk = true;
+        self.state.settings.config_path = crate::config::config_path();
         let previous_toast = self.state.toast.clone();
         let report = match crate::config::load_live_config() {
             Ok(loaded) => self.apply_live_config(
@@ -1582,7 +1596,11 @@ impl App {
         }
 
         if !invalid_section("session") {
+            self.state
+                .session_setup
+                .set_saved_agent(&config.session.default_agent);
             self.agent_idle_timeout = agent_idle_timeout(config.session.agent_idle_timeout_secs);
+            self.refresh_agent_inactivity(Instant::now());
         }
 
         if !invalid_section("worktrees") {
@@ -1591,31 +1609,68 @@ impl App {
         }
 
         if !invalid_section("projects")
-            && config.projects.summary.title_language
-                != self.loaded_projects_config.summary.title_language
+            && (config.projects.summary != self.loaded_projects_config.summary
+                || self.project_service.summaries_need_retry())
         {
-            match self
-                .project_service
-                .set_title_language(config.projects.summary.title_language)
-            {
+            let applied = if self.no_session && !self.project_service.is_available() {
+                Ok(())
+            } else {
+                self.project_service
+                    .configure_summaries(&config.projects.summary)
+            };
+            match applied {
                 Ok(_) => {
-                    self.loaded_projects_config.summary.title_language =
-                        config.projects.summary.title_language;
+                    self.loaded_projects_config.summary = config.projects.summary.clone();
                     self.state.title_language = config.projects.summary.title_language;
+                    self.state.summary_config = config.projects.summary.clone();
                 }
-                Err(error) => diagnostics.push(error.message),
+                Err(error) => diagnostics.push(format!(
+                    "Could not apply summary settings: {}",
+                    error.message
+                )),
             }
         }
-        if !invalid_section("projects") && config.projects != self.loaded_projects_config {
-            diagnostics.push(
-                "projects catalog settings require an ORK3 restart; keeping current settings"
-                    .to_string(),
-            );
+        if !invalid_section("projects") {
+            self.state
+                .session_setup
+                .set_history_locations(&config.projects, &self.loaded_projects_config);
+            if config.projects != self.loaded_projects_config {
+                diagnostics.push(
+                    "projects catalog settings require an HERDUCK restart; keeping current settings"
+                        .to_string(),
+                );
+            }
         }
 
         if !invalid_section("theme") {
+            let preview = (self.state.mode == Mode::Settings
+                && self
+                    .state
+                    .settings
+                    .original_theme
+                    .as_ref()
+                    .is_some_and(|saved| *saved != self.state.theme_name))
+            .then(|| (self.state.theme_name.clone(), self.state.palette.clone()));
             self.state.theme_runtime = theme_runtime_config(config, !invalid_section("ui"));
             self.refresh_effective_app_theme();
+            if self.state.mode == Mode::Settings {
+                // An external edit becomes the new cancel baseline after reloading.
+                self.state.settings.original_theme = Some(self.state.theme_name.clone());
+                self.state.settings.original_palette = Some(self.state.palette.clone());
+                if preview.is_none() && self.state.settings.section == state::SettingsSection::Theme
+                {
+                    self.state.settings.list.select(
+                        state::THEME_NAMES
+                            .iter()
+                            .position(|name| *name == self.state.theme_name)
+                            .unwrap_or(0),
+                    );
+                }
+            }
+            if let Some((name, palette)) = preview {
+                self.state.theme_name = name;
+                self.state.palette = palette;
+            }
         }
 
         let status = if diagnostics.is_empty() {
@@ -1680,6 +1735,51 @@ impl App {
         self.normalize_project_selection();
     }
 
+    fn apply_project_sessions_page(
+        &mut self,
+        grouping: state::ProjectGrouping,
+        page: crate::projects::ProjectSessionsPage,
+        latest: crate::projects::ProjectsSnapshot,
+    ) {
+        // A cursor belongs to the snapshot from which it was taken. A scan or reclassification
+        // can move sessions while the page request is in flight, so replace the whole snapshot
+        // instead of merging a page across revisions or marking it as a complete new snapshot.
+        if page.revision != self.state.projects.snapshot.revision
+            || latest.revision != page.revision
+        {
+            self.replace_projects_snapshot(latest);
+            return;
+        }
+        let groups = match grouping {
+            state::ProjectGrouping::Directories => &mut self.state.projects.snapshot.projects,
+            state::ProjectGrouping::Topics => &mut self.state.projects.snapshot.topics,
+        };
+        let Some(project) = groups
+            .iter_mut()
+            .find(|project| project.canonical_key == page.project_key)
+        else {
+            return;
+        };
+        let mut seen = project
+            .sessions
+            .iter()
+            .map(|session| session.stable_key.clone())
+            .collect::<HashSet<_>>();
+        project.sessions.extend(
+            page.sessions
+                .into_iter()
+                .filter(|session| seen.insert(session.stable_key.clone())),
+        );
+        project.sessions.sort_by(|left, right| {
+            right
+                .last_activity_at
+                .cmp(&left.last_activity_at)
+                .then_with(|| left.stable_key.cmp(&right.stable_key))
+        });
+        project.next_cursor = page.next_cursor;
+        self.normalize_project_selection();
+    }
+
     pub(crate) fn sync_projects_snapshot(&mut self) -> bool {
         let now = Instant::now();
         let mut mappings_changed = false;
@@ -1693,7 +1793,14 @@ impl App {
             mappings_changed = revision != self.project_service.snapshot().revision;
         }
         let latest = self.project_service.snapshot();
-        if latest == self.state.projects.snapshot {
+        let current = &self.state.projects.snapshot;
+        // Loaded older pages belong to the client. The service keeps only its first page, so
+        // comparing whole snapshots would discard those pages on the next scheduler tick.
+        if latest.revision == current.revision
+            && latest.projects_schema_version == current.projects_schema_version
+            && latest.diagnostic_category == current.diagnostic_category
+            && latest.scan_status == current.scan_status
+        {
             return mappings_changed;
         }
         if latest.revision < self.state.projects.snapshot.revision
@@ -1983,6 +2090,176 @@ mod tests {
             topics,
             scan_status: Vec::new(),
             diagnostic_category: None,
+        }
+    }
+
+    #[test]
+    fn catalog_sync_preserves_loaded_sessions_at_the_same_revision() {
+        let mut app = test_app();
+        app.project_service =
+            crate::projects::ProjectService::in_memory(crate::api::EventHub::default());
+        app.state.sidebar_view = state::SidebarView::Projects;
+        for index in 0..51 {
+            let identity = crate::projects::SessionIdentity::id("codex", &format!("page-{index}"))
+                .expect("session identity");
+            app.project_service
+                .upsert_candidate(crate::projects::SessionCandidate {
+                    identity,
+                    title: None,
+                    cwd: None,
+                    transcript_ref: None,
+                    first_activity_at: index + 1,
+                    last_activity_at: index + 1,
+                    adapter: "codex".into(),
+                    root_key: "paging-fixture".into(),
+                    source_key: format!("paging-source-{index}"),
+                    observed_at: index + 1,
+                    aliases: Vec::new(),
+                    runtime: None,
+                    weight: Default::default(),
+                    session_class: Some(crate::projects::SessionClass::Interactive),
+                })
+                .expect("seed session");
+        }
+        let first_page = app.project_service.snapshot();
+        assert_eq!(first_page.projects[0].sessions.len(), 50);
+        let project_key = first_page.projects[0].canonical_key.clone();
+        app.replace_projects_snapshot(first_page);
+
+        app.execute_project_tree_action(state::ProjectTreeAction::LoadOlder { project_key });
+        let loaded = app.state.projects.snapshot.clone();
+        assert_eq!(loaded.projects[0].sessions.len(), 51);
+        assert!(loaded.projects[0].next_cursor.is_none());
+        assert_eq!(
+            app.project_service.snapshot().projects[0].sessions.len(),
+            50
+        );
+
+        assert!(!app.sync_projects_snapshot());
+        assert_eq!(app.state.projects.snapshot, loaded);
+    }
+
+    #[test]
+    fn catalog_sync_applies_status_changes_without_a_new_revision() {
+        let mut app = test_app();
+        let latest = app.project_service.snapshot();
+        app.state.projects.snapshot = latest.clone();
+        app.state.projects.snapshot.diagnostic_category = Some("previous-error".into());
+        assert!(app.sync_projects_snapshot());
+        assert_eq!(app.state.projects.snapshot, latest);
+
+        app.state
+            .projects
+            .snapshot
+            .scan_status
+            .push(crate::projects::AdapterScanStatus {
+                adapter: "codex".into(),
+                state: "scanning".into(),
+                diagnostic_category: None,
+            });
+        assert!(app.sync_projects_snapshot());
+        assert_eq!(app.state.projects.snapshot, latest);
+    }
+
+    #[test]
+    fn catalog_page_merge_keeps_topic_sessions_in_recency_order() {
+        let mut app = test_app();
+        app.state.sidebar_view = state::SidebarView::Clusters;
+        let latest = catalog_test_snapshot(
+            3,
+            Vec::new(),
+            vec![catalog_test_group(
+                "topic",
+                crate::projects::ProjectKind::Semantic,
+                "newest",
+                30,
+            )],
+        );
+        app.state.projects.snapshot = latest.clone();
+        app.apply_project_sessions_page(
+            state::ProjectGrouping::Topics,
+            crate::projects::ProjectSessionsPage {
+                projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
+                revision: 3,
+                project_key: "topic".into(),
+                sessions: vec![
+                    catalog_test_session("tie-z", 20),
+                    catalog_test_session("oldest", 10),
+                    catalog_test_session("newest", 30),
+                    catalog_test_session("tie-a", 20),
+                ],
+                next_cursor: None,
+            },
+            latest,
+        );
+
+        assert_eq!(app.state.projects.snapshot.revision, 3);
+        assert_eq!(
+            app.state.projects.snapshot.topics[0]
+                .sessions
+                .iter()
+                .map(|session| session.stable_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["newest", "tie-a", "tie-z", "oldest"]
+        );
+    }
+
+    #[test]
+    fn catalog_page_revision_change_replaces_stale_topic_membership() {
+        let mut old_topic = catalog_test_group(
+            "topic-a",
+            crate::projects::ProjectKind::Semantic,
+            "newest",
+            40,
+        );
+        old_topic.sessions.push(catalog_test_session("moved", 30));
+        let old = catalog_test_snapshot(1, Vec::new(), vec![old_topic]);
+        let latest = catalog_test_snapshot(
+            2,
+            Vec::new(),
+            vec![
+                catalog_test_group(
+                    "topic-a",
+                    crate::projects::ProjectKind::Semantic,
+                    "newest",
+                    40,
+                ),
+                catalog_test_group(
+                    "topic-b",
+                    crate::projects::ProjectKind::Semantic,
+                    "moved",
+                    30,
+                ),
+            ],
+        );
+
+        // Reclassification can happen before the page query or between its reply and the
+        // authoritative snapshot read. Neither timing may preserve the old membership.
+        for page_revision in [1, 2] {
+            let mut app = test_app();
+            app.state.sidebar_view = state::SidebarView::Clusters;
+            app.state.projects.snapshot = old.clone();
+            let mut sessions = vec![catalog_test_session("older", 20)];
+            if page_revision == 1 {
+                sessions.insert(0, catalog_test_session("moved", 30));
+            }
+            app.apply_project_sessions_page(
+                state::ProjectGrouping::Topics,
+                crate::projects::ProjectSessionsPage {
+                    projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
+                    revision: page_revision,
+                    project_key: "topic-a".into(),
+                    sessions,
+                    next_cursor: None,
+                },
+                latest.clone(),
+            );
+
+            assert_eq!(app.state.projects.snapshot, latest);
+            assert!(!app.state.projects.snapshot.topics[0]
+                .sessions
+                .iter()
+                .any(|session| session.stable_key == "moved"));
         }
     }
 
@@ -2378,6 +2655,329 @@ mod tests {
         std::env::temp_dir().join(unique).join("config.toml")
     }
 
+    struct SetupConfigFixture {
+        path: std::path::PathBuf,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl SetupConfigFixture {
+        fn new(name: &str) -> Self {
+            let path = temp_config_path(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            let previous = std::env::var_os(crate::config::CONFIG_PATH_ENV_VAR);
+            std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+            Self { path, previous }
+        }
+
+        fn config(&self) -> Config {
+            toml::from_str(&std::fs::read_to_string(&self.path).unwrap()).unwrap()
+        }
+    }
+
+    impl Drop for SetupConfigFixture {
+        fn drop(&mut self) {
+            if let Some(previous) = &self.previous {
+                std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, previous);
+            } else {
+                std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+            }
+            let _ = std::fs::remove_dir_all(self.path.parent().unwrap());
+        }
+    }
+
+    #[test]
+    fn summary_reload_preserves_live_catalog_and_adversarial_runtime_identity() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("summary-live-reload");
+        let mut app = test_app();
+        app.state = AppState::test_with_adversarial_identity_state();
+        app.project_service = crate::projects::ProjectService::in_memory(app.event_hub.clone());
+        let identity = crate::projects::SessionIdentity::id("codex", "live-summary").unwrap();
+        let key = identity.stable_key.clone();
+        app.project_service
+            .upsert_candidate(crate::projects::SessionCandidate {
+                identity,
+                title: None,
+                cwd: None,
+                transcript_ref: None,
+                first_activity_at: 1,
+                last_activity_at: 2,
+                adapter: "codex".into(),
+                root_key: "test-root".into(),
+                source_key: "test-session".into(),
+                observed_at: 2,
+                aliases: vec![],
+                weight: Default::default(),
+                session_class: Some(crate::projects::SessionClass::Interactive),
+                runtime: Some(crate::projects::RuntimeMapping {
+                    workspace_id: "w1".into(),
+                    pane_id: "p1".into(),
+                    generation: 7,
+                }),
+            })
+            .unwrap();
+        app.project_service
+            .rename_session(key, "Manual title".into())
+            .unwrap();
+        let before = app.project_service.snapshot();
+        for (mode, expected) in [
+            ("local", crate::config::SummaryModeConfig::Local),
+            ("pending", crate::config::SummaryModeConfig::Pending),
+        ] {
+            std::fs::write(
+                &fixture.path,
+                format!("[projects.summary]\nmode = '{mode}'\n"),
+            )
+            .unwrap();
+            assert_eq!(
+                app.reload_config().status,
+                crate::config::ConfigReloadStatus::Applied
+            );
+            assert_eq!(app.state.summary_config.mode, expected);
+            assert!(!app.project_service.summaries_need_retry());
+            let after = app.project_service.snapshot();
+            assert!(after.revision > before.revision);
+            assert_eq!(after.projects, before.projects);
+            assert_eq!(after.topics, before.topics);
+            app.state.assert_invariants_for_test();
+        }
+    }
+
+    #[test]
+    fn summary_reload_reports_failure_when_unchanged_configuration_cannot_restart() {
+        let _guard = config_env_lock().lock().unwrap();
+        let _fixture = SetupConfigFixture::new("summary-failed-retry");
+        let mut app = test_app();
+        app.no_session = false;
+        assert!(app
+            .project_service
+            .configure_summaries(&app.loaded_projects_config.summary)
+            .is_err());
+        let before = app.state.summary_config.clone();
+        let report = app.reload_config();
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("Could not apply summary settings")));
+        assert_eq!(app.state.summary_config, before);
+        assert!(app.project_service.summaries_need_retry());
+    }
+
+    #[test]
+    fn reopening_settings_loads_config_details_and_preserves_the_history_restart_boundary() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("file-settings-roots");
+        let root = fixture.path.parent().unwrap().join("history");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = test_app();
+        input::open_settings_at(&mut app.state, state::SettingsSection::Sessions);
+        app.state.request_reload_config = false;
+        app.handle_settings_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let contents = format!("[session]\ndefault_agent='codex'\n[projects.summary]\nmode='local'\ntitle_language='zh'\ntitle_providers=[]\n[projects.adapters.codex]\nroots=[{}]\n", toml::Value::String(root.to_string_lossy().into_owned()));
+        std::fs::write(&fixture.path, &contents).unwrap();
+        input::open_settings_at(&mut app.state, state::SettingsSection::Sessions);
+        assert!(app.state.request_reload_config);
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(app.state.session_setup.agent, "codex");
+        assert_eq!(
+            app.state.summary_config.mode,
+            crate::config::SummaryModeConfig::Local
+        );
+        assert_eq!(
+            app.state.summary_config.title_language,
+            crate::config::TitleLanguage::Chinese
+        );
+        assert_eq!(app.state.summary_config.title_providers, Some(vec![]));
+        assert!(app.loaded_projects_config.adapters.codex.roots.is_empty());
+        assert!(app.state.session_setup.history_restart_required);
+        let locations = &app.state.session_setup.history_locations;
+        assert!(locations.iter().any(|location| location.adapter == "codex"
+            && location.restart_required
+            && location.paths.iter().any(|path| path.contains("history"))));
+        assert_eq!(std::fs::read_to_string(&fixture.path).unwrap(), contents);
+
+        // A broken edit leaves both the applied summary details and Agent unchanged.
+        let applied = app.state.summary_config.clone();
+        std::fs::write(&fixture.path, "[projects.summary\n").unwrap();
+        assert_eq!(
+            app.reload_config().status,
+            crate::config::ConfigReloadStatus::Failed
+        );
+        assert_eq!(app.state.summary_config, applied);
+        assert_eq!(app.state.session_setup.agent, "codex");
+        assert!(app
+            .state
+            .config_diagnostic
+            .as_ref()
+            .unwrap()
+            .contains("keeping current config"));
+    }
+
+    #[test]
+    fn config_editor_preserves_existing_invalid_files_and_reports_launch_failure() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("config-editor-invalid");
+        let invalid = "# keep my comments\n[unfinished\n";
+        std::fs::write(&fixture.path, invalid).unwrap();
+        let mut app = test_app();
+        input::open_settings_at(&mut app.state, state::SettingsSection::Summaries);
+        app.open_settings_config_file_with(|path| {
+            assert_eq!(path, std::path::absolute(&fixture.path).unwrap());
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "test editor unavailable",
+            ))
+        });
+        assert_eq!(std::fs::read_to_string(&fixture.path).unwrap(), invalid);
+        assert!(app
+            .state
+            .settings
+            .status
+            .contains("test editor unavailable"));
+        assert_eq!(app.state.mode, Mode::Settings);
+        assert!(app.config_editor_child.is_none());
+        assert!(app.state.workspaces.is_empty());
+    }
+
+    #[test]
+    fn config_editor_creates_a_starter_without_enabling_models_or_creating_a_pane() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("config-editor-first-run");
+        std::fs::remove_file(&fixture.path).unwrap();
+        let mut app = test_app();
+        input::open_settings_at(&mut app.state, state::SettingsSection::Sessions);
+        app.open_settings_config_file_with(|path| {
+            let config: Config = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            assert_eq!(config.session.default_agent, "shell");
+            assert_eq!(
+                config.projects.summary.mode,
+                crate::config::SummaryModeConfig::Pending
+            );
+            assert!(config.projects.summary.providers.is_empty());
+            // The current test executable rejects this unknown option and exits nonzero.
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--invalid-config-editor-test-option")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        });
+        app.config_editor_child.as_mut().unwrap().wait().unwrap();
+        app.poll_config_editor();
+        assert!(app.config_editor_child.is_none());
+        assert!(app.state.settings.status.contains("editor exited"));
+        assert_eq!(app.state.mode, Mode::Settings);
+        assert!(app.state.workspaces.is_empty());
+        assert!(fixture.path.is_file());
+    }
+
+    #[test]
+    fn saving_sound_keeps_theme_preview_and_close_restores_the_saved_theme() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("sound-theme-preview");
+        let mut app = test_app();
+        let original = app.state.theme_name.clone();
+        let saved = fixture.config().theme.name;
+        input::open_settings_at(&mut app.state, state::SettingsSection::Theme);
+        app.handle_settings_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let preview = app.state.theme_name.clone();
+        let palette = app.state.palette.clone();
+        assert_ne!(preview, original);
+        input::select_settings_section(&mut app.state, state::SettingsSection::Sound);
+        app.save_sound(true);
+        assert_eq!(app.state.theme_name, preview);
+        assert_eq!(app.state.palette.panel_bg, palette.panel_bg);
+        assert_eq!(app.state.palette.accent, palette.accent);
+        assert_eq!(fixture.config().theme.name, saved);
+        app.handle_settings_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.state.theme_name, original);
+        assert!(app.state.sound_enabled());
+    }
+
+    #[test]
+    fn reopened_settings_keep_an_external_theme_edit_after_close() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("file-settings-theme");
+        let mut app = test_app();
+        std::fs::write(&fixture.path, "[theme]\nname='dracula'\n").unwrap();
+        input::open_settings_at(&mut app.state, state::SettingsSection::Theme);
+        app.reload_config();
+        assert_eq!(app.state.theme_name, "dracula");
+        assert_eq!(
+            app.state.settings.original_theme.as_deref(),
+            Some("dracula")
+        );
+        app.handle_settings_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.state.theme_name, "dracula");
+    }
+
+    #[test]
+    fn welcome_view_configuration_finishes_onboarding_without_launching_or_enabling_models() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("onboarding-file-settings");
+        let mut app = test_app();
+        app.state.mode = Mode::Onboarding;
+        let before = app.state.workspaces.len();
+        app.route_client_input(b"\r".to_vec());
+        assert_eq!(fixture.config().onboarding, Some(false));
+        assert_eq!(
+            fixture.config().projects.summary.mode,
+            crate::config::SummaryModeConfig::Pending
+        );
+        assert_eq!(app.state.mode, Mode::Settings);
+        assert_eq!(app.state.settings.section, state::SettingsSection::Sessions);
+        assert!(crate::ui::settings_can_start_session(&app.state));
+        assert_eq!(app.state.session_setup.agent, "shell");
+        assert_eq!(app.state.workspaces.len(), before);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[test]
+    fn welcome_skip_does_not_enable_summaries() {
+        let _guard = config_env_lock().lock().unwrap();
+        let fixture = SetupConfigFixture::new("onboarding-skip");
+        let mut app = test_app();
+        app.state.mode = Mode::Onboarding;
+        app.handle_onboarding_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_ne!(app.state.mode, Mode::Onboarding);
+        assert_eq!(fixture.config().onboarding, Some(false));
+        assert_eq!(
+            fixture.config().projects.summary.mode,
+            crate::config::SummaryModeConfig::Pending
+        );
+        assert_eq!(
+            app.state.summary_config.mode,
+            crate::config::SummaryModeConfig::Pending
+        );
+    }
+
+    #[tokio::test]
+    async fn read_only_settings_absorb_paste_and_typing_without_writing_to_a_pane() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().unwrap();
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel_capacity(80, 24, 8);
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        let before = app.state.summary_config.clone();
+        let agent = app.state.session_setup.agent.clone();
+        for section in [
+            state::SettingsSection::Sessions,
+            state::SettingsSection::Summaries,
+            state::SettingsSection::Titles,
+        ] {
+            input::open_settings_at(&mut app.state, section);
+            app.route_client_input(b"\x1b[200~http://localhost:8000/\r\nv1\x1b[201~".to_vec());
+            app.route_client_input(b"abc+\x13\x7f".to_vec());
+            assert_eq!(app.state.mode, Mode::Settings);
+            assert_eq!(app.state.summary_config, before);
+            assert_eq!(app.state.session_setup.agent, agent);
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
     fn restore_xdg_state_home(original: Option<std::ffi::OsString>) {
         if let Some(value) = original {
             std::env::set_var("XDG_STATE_HOME", value);
@@ -2489,7 +3089,7 @@ mod tests {
     #[test]
     fn notification_show_api_creates_herdr_toast_with_position() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         let response =
             app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
@@ -2498,7 +3098,7 @@ mod tests {
                     crate::api::schema::NotificationShowParams {
                         title: "build failed".into(),
                         body: Some("api workspace".into()),
-                        position: Some(crate::config::ToastOrk3Position::TopLeft),
+                        position: Some(crate::config::ToastHerduckPosition::TopLeft),
                         sound: crate::api::schema::NotificationShowSound::None,
                     },
                 ),
@@ -2517,7 +3117,7 @@ mod tests {
         assert_eq!(toast.context, "api workspace");
         assert_eq!(
             toast.position,
-            Some(crate::config::ToastOrk3Position::TopLeft)
+            Some(crate::config::ToastHerduckPosition::TopLeft)
         );
         assert!(app.toast_deadline.is_some());
     }
@@ -2525,7 +3125,7 @@ mod tests {
     #[test]
     fn notification_show_api_herdr_toast_expires() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         let response =
             app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
@@ -2586,7 +3186,7 @@ mod tests {
     #[test]
     fn notification_show_api_does_not_replace_existing_toast() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::NeedsAttention,
             title: "pi needs attention".to_string(),
@@ -2625,7 +3225,7 @@ mod tests {
     #[test]
     fn notification_show_api_is_rate_limited() {
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         app.mark_api_notification_shown(Instant::now());
 
         let response =
@@ -2825,7 +3425,8 @@ mod tests {
         let path = temp_config_path("startup-stale-update-notes");
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
-        crate::release_notes::save_pending("0.4.9", "### Changed\n- One").unwrap();
+        // This must predate Herduck's own version sequence, which starts at 0.1.0.
+        crate::release_notes::save_pending("0.0.0", "### Changed\n- One").unwrap();
 
         let app = test_app();
 
@@ -2954,7 +3555,7 @@ mod tests {
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Ork3
+            crate::config::ToastDelivery::Herduck
         );
         assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
         assert!(!app.state.redraw_on_focus_gained);
@@ -3003,6 +3604,40 @@ mod tests {
         assert_eq!(toast.context, "using config.toml");
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_keeps_active_runner_prefixes_until_restart() {
+        let _guard = config_env_lock().lock().unwrap();
+        let path = temp_config_path("reload-project-prefixes");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "[projects]\nephemeral_cwd_prefixes = ['new-worker-']\n",
+        )
+        .unwrap();
+        let previous = std::env::var_os(crate::config::CONFIG_PATH_ENV_VAR);
+        std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let mut app = test_app();
+        app.loaded_projects_config.ephemeral_cwd_prefixes = vec!["current-worker-".into()];
+
+        let report = app.reload_config();
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(
+            app.loaded_projects_config.ephemeral_cwd_prefixes,
+            ["current-worker-"]
+        );
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("require an HERDUCK restart")));
+        if let Some(previous) = previous {
+            std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, previous);
+        } else {
+            std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+        }
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -3275,7 +3910,7 @@ mod tests {
         );
         assert_eq!(
             app.state.config_diagnostic.as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; herduck config check")
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -3358,7 +3993,7 @@ mod tests {
         std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &path);
 
         let mut app = test_app();
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let report = app.reload_config();
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
@@ -3373,7 +4008,7 @@ mod tests {
             .matches_prefix(&KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
         assert_eq!(
             app.state.toast_config.delivery,
-            crate::config::ToastDelivery::Ork3
+            crate::config::ToastDelivery::Herduck
         );
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -3514,7 +4149,7 @@ mod tests {
             .config_diagnostic
             .as_deref()
             .is_some_and(|message| {
-                message == "config.toml invalid; keeping current config; herdr config check"
+                message == "config.toml invalid; keeping current config; herduck config check"
             }));
         assert!(app.state.toast.is_none());
 
@@ -5147,10 +5782,7 @@ last_pane = "prefix+tab"
         app.route_client_input(b"\r".to_vec());
 
         assert_eq!(app.state.mode, Mode::Settings);
-        assert_eq!(
-            app.state.settings.section,
-            state::SettingsSection::Integrations
-        );
+        assert_eq!(app.state.settings.section, state::SettingsSection::Sessions);
     }
 
     #[test]

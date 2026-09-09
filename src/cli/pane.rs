@@ -78,11 +78,11 @@ fn pane_list(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_get(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane get <pane_id>");
+        eprintln!("usage: herduck pane get <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 pane get <pane_id>");
+        eprintln!("usage: herduck pane get <pane_id>");
         return Ok(2);
     }
 
@@ -274,7 +274,8 @@ fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, Strin
 
     let Some(direction) = direction else {
         return Err(
-            "usage: ork3 pane neighbor --direction left|right|up|down [--pane ID|--current]".into(),
+            "usage: herduck pane neighbor --direction left|right|up|down [--pane ID|--current]"
+                .into(),
         );
     };
 
@@ -283,7 +284,7 @@ fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, Strin
 
 fn parse_pane_focus_args(args: &[String]) -> Result<PaneFocusDirectionParams, String> {
     let params = parse_pane_neighbor_args(args).map_err(|_| {
-        "usage: ork3 pane focus --direction left|right|up|down [--pane ID|--current]".to_string()
+        "usage: herduck pane focus --direction left|right|up|down [--pane ID|--current]".to_string()
     })?;
     Ok(PaneFocusDirectionParams {
         pane_id: params.pane_id,
@@ -336,7 +337,7 @@ fn parse_pane_resize_args(args: &[String]) -> Result<PaneResizeParams, String> {
 
     let Some(direction) = direction else {
         return Err(
-            "usage: ork3 pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
+            "usage: herduck pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
                 .into(),
         );
     };
@@ -419,11 +420,11 @@ fn parse_pane_zoom_args(args: &[String]) -> Result<PaneZoomParams, String> {
 
 fn pane_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane rename <pane_id> <label>|--clear");
+        eprintln!("usage: herduck pane rename <pane_id> <label>|--clear");
         return Ok(2);
     };
     if args.len() < 2 {
-        eprintln!("usage: ork3 pane rename <pane_id> <label>|--clear");
+        eprintln!("usage: herduck pane rename <pane_id> <label>|--clear");
         return Ok(2);
     }
     let label = if args.len() == 2 && args[1] == "--clear" {
@@ -440,7 +441,7 @@ fn pane_rename(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_read(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+        eprintln!("usage: herduck pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
         return Ok(2);
     };
 
@@ -612,7 +613,7 @@ fn parse_pane_split_args(
 
     let Some(direction) = direction else {
         return Err(
-            "usage: ork3 pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
+            "usage: herduck pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
                 .into(),
         );
     };
@@ -797,7 +798,7 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
 }
 
 fn pane_move_usage() -> String {
-    "usage: ork3 pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       ork3 pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       ork3 pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
+    "usage: herduck pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       herduck pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       herduck pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
         .into()
 }
 
@@ -862,7 +863,7 @@ fn parse_pane_swap_args(args: &[String]) -> Result<PaneSwapParams, String> {
             })
         }
         _ => Err(
-            "usage: ork3 pane swap --direction left|right|up|down [--pane ID|--current]\n       ork3 pane swap --source-pane ID --target-pane ID"
+            "usage: herduck pane swap --direction left|right|up|down [--pane ID|--current]\n       herduck pane swap --source-pane ID --target-pane ID"
                 .into(),
         ),
     }
@@ -892,11 +893,11 @@ fn parse_pane_direction(value: &str) -> Result<PaneDirection, String> {
 
 fn pane_close(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane close <pane_id>");
+        eprintln!("usage: herduck pane close <pane_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 pane close <pane_id>");
+        eprintln!("usage: herduck pane close <pane_id>");
         return Ok(2);
     }
 
@@ -905,7 +906,7 @@ fn pane_close(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: ork3 pane send-text <pane_id> <text>");
+        eprintln!("usage: herduck pane send-text <pane_id> <text>");
         return Ok(2);
     }
 
@@ -916,7 +917,7 @@ fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: ork3 pane send-keys <pane_id> <key> [key ...]");
+        eprintln!("usage: herduck pane send-keys <pane_id> <key> [key ...]");
         return Ok(2);
     }
 
@@ -927,7 +928,7 @@ fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_run(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: ork3 pane run <pane_id> <command>");
+        eprintln!("usage: herduck pane run <pane_id> <command>");
         return Ok(2);
     }
 
@@ -942,7 +943,7 @@ fn pane_run(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
+        eprintln!("usage: herduck pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
         return Ok(2);
     };
 
@@ -1051,7 +1052,7 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]");
+        eprintln!("usage: herduck pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--session-start-source SOURCE]");
         return Ok(2);
     };
 
@@ -1148,7 +1149,9 @@ fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
+        eprintln!(
+            "usage: herduck pane release-agent <pane_id> --source ID --agent LABEL [--seq N]"
+        );
         return Ok(2);
     };
 
@@ -1213,7 +1216,7 @@ fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
 
 fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+        eprintln!("usage: herduck pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
         return Ok(2);
     };
 
@@ -1403,39 +1406,39 @@ fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn print_pane_help() {
-    eprintln!("ork3 pane commands:");
-    eprintln!("  ork3 pane list [--workspace <workspace_id>]");
-    eprintln!("  ork3 pane current [--pane ID|--current]");
-    eprintln!("  ork3 pane get <pane_id>");
-    eprintln!("  ork3 pane layout [--pane ID|--current]");
-    eprintln!("  ork3 pane process-info [--pane ID|--current]");
-    eprintln!("  ork3 pane neighbor --direction left|right|up|down [--pane ID|--current]");
-    eprintln!("  ork3 pane edges [--pane ID|--current]");
-    eprintln!("  ork3 pane focus --direction left|right|up|down [--pane ID|--current]");
+    eprintln!("herduck pane commands:");
+    eprintln!("  herduck pane list [--workspace <workspace_id>]");
+    eprintln!("  herduck pane current [--pane ID|--current]");
+    eprintln!("  herduck pane get <pane_id>");
+    eprintln!("  herduck pane layout [--pane ID|--current]");
+    eprintln!("  herduck pane process-info [--pane ID|--current]");
+    eprintln!("  herduck pane neighbor --direction left|right|up|down [--pane ID|--current]");
+    eprintln!("  herduck pane edges [--pane ID|--current]");
+    eprintln!("  herduck pane focus --direction left|right|up|down [--pane ID|--current]");
     eprintln!(
-        "  ork3 pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
+        "  herduck pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
     );
-    eprintln!("  ork3 pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
-    eprintln!("  ork3 pane rename <pane_id> <label>|--clear");
-    eprintln!("  ork3 pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+    eprintln!("  herduck pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
+    eprintln!("  herduck pane rename <pane_id> <label>|--clear");
+    eprintln!("  herduck pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
     eprintln!(
-        "  ork3 pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
+        "  herduck pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
     );
-    eprintln!("  ork3 pane swap --direction left|right|up|down [--pane ID|--current]");
-    eprintln!("  ork3 pane swap --source-pane ID --target-pane ID");
-    eprintln!("  ork3 pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
+    eprintln!("  herduck pane swap --direction left|right|up|down [--pane ID|--current]");
+    eprintln!("  herduck pane swap --source-pane ID --target-pane ID");
+    eprintln!("  herduck pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
     eprintln!(
-        "  ork3 pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]"
+        "  herduck pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]"
     );
-    eprintln!("  ork3 pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
-    eprintln!("  ork3 pane close <pane_id>");
-    eprintln!("  ork3 pane send-text <pane_id> <text>");
-    eprintln!("  ork3 pane send-keys <pane_id> <key> [key ...]");
-    eprintln!("  ork3 pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
-    eprintln!("  ork3 pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
-    eprintln!("  ork3 pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
-    eprintln!("  ork3 pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-    eprintln!("  ork3 pane run <pane_id> <command>");
+    eprintln!("  herduck pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
+    eprintln!("  herduck pane close <pane_id>");
+    eprintln!("  herduck pane send-text <pane_id> <text>");
+    eprintln!("  herduck pane send-keys <pane_id> <key> [key ...]");
+    eprintln!("  herduck pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
+    eprintln!("  herduck pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
+    eprintln!("  herduck pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
+    eprintln!("  herduck pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
+    eprintln!("  herduck pane run <pane_id> <command>");
 }
 
 #[cfg(test)]
@@ -1565,7 +1568,7 @@ mod tests {
         ]))
         .unwrap_err();
 
-        assert!(err.contains("usage: ork3 pane swap"));
+        assert!(err.contains("usage: herduck pane swap"));
     }
 
     #[test]
@@ -1602,7 +1605,7 @@ mod tests {
         let err =
             parse_pane_move_args(&args(&["issue-1", "--target-pane", "issue-2"])).unwrap_err();
 
-        assert!(err.contains("usage: ork3 pane move"));
+        assert!(err.contains("usage: herduck pane move"));
     }
 
     #[test]

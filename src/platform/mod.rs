@@ -33,6 +33,29 @@ pub(crate) fn pane_custom_command_pty_builder(command: &str) -> portable_pty::Co
     pane_custom_command_pty_builder_platform(command)
 }
 
+/// Open a persistent text file without shell interpolation or scrollback cleanup.
+pub(crate) fn open_text_file(path: &std::path::Path) -> std::io::Result<std::process::Child> {
+    use std::process::Stdio;
+    text_file_editor_command(path)?
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
+#[cfg(all(
+    test,
+    any(target_os = "linux", target_os = "macos", target_os = "windows")
+))]
+#[test]
+fn text_editor_receives_one_literal_path_argument_and_no_cleanup_command() {
+    let path = std::path::Path::new("/tmp/config folder's $(literal) name.toml");
+    let command = text_file_editor_command(path).unwrap();
+    let arguments = command.get_args().collect::<Vec<_>>();
+    assert_eq!(arguments.last().copied(), Some(path.as_os_str()));
+    assert!(!arguments.iter().any(|arg| *arg == "-c" || *arg == "/c"));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlatformCapabilities {
     pub(crate) live_handoff: bool,

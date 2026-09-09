@@ -90,7 +90,10 @@ fn release_notes_from_stored(
 
     let preview = match (
         crate::update::Version::parse(&stored.version),
-        crate::update::Version::parse(current_version),
+        current_version
+            .split(['-', '+'])
+            .next()
+            .and_then(crate::update::Version::parse),
     ) {
         (Some(stored_version), Some(current_version)) => stored_version > current_version,
         _ => false,
@@ -201,10 +204,12 @@ mod tests {
         let _ = clear_pending_at(&path);
         save_pending_to_path(&path, "0.3.2", "### Changed\n- One").unwrap();
 
-        let notes = load_latest_from_path(&path, "0.3.1").expect("latest notes");
-        assert_eq!(notes.version, "0.3.2");
-        assert_eq!(notes.body, "### Changed\n- One");
-        assert!(notes.preview);
+        for current in ["0.3.1", "0.3.1-alpha.1", "0.3.1+source"] {
+            let notes = load_latest_from_path(&path, current).expect("latest notes");
+            assert_eq!(notes.version, "0.3.2");
+            assert_eq!(notes.body, "### Changed\n- One");
+            assert!(notes.preview);
+        }
 
         clear_pending_at(&path).unwrap();
     }

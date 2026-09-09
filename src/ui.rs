@@ -39,13 +39,16 @@ use self::mobile::{
     render_mobile_toast_banner,
 };
 use self::navigator::render_navigator_overlay;
-pub(crate) use self::onboarding::onboarding_welcome_continue_rect;
 use self::onboarding::render_onboarding_overlay;
+pub(crate) use self::onboarding::{onboarding_welcome_continue_rect, onboarding_welcome_skip_rect};
 pub(crate) use self::panes::popup_pane_rects;
 use self::panes::{
     compute_pane_infos, render_panes, render_popup_pane, resize_popup_pane, resize_tab_panes,
 };
-pub(crate) use self::projects::{project_sidebar_geometry, project_tree_rows, ProjectTreeRow};
+pub(crate) use self::projects::{
+    project_sidebar_geometry, project_tree_max_scroll, project_tree_rows,
+    project_tree_scroll_for_selection, ProjectTreeRow,
+};
 use self::projects::{render_project_history, render_projects_sidebar, render_sidebar_tabs};
 pub(crate) use self::release_notes::{
     product_announcement_display_lines, release_notes_close_button_rect,
@@ -73,8 +76,8 @@ pub(crate) use self::{
         remove_worktree_popup_rect, rename_button_rects,
     },
     settings::{
-        settings_button_rects, settings_popup_height, settings_show_primary_action,
-        SETTINGS_POPUP_WIDTH,
+        settings_button_rects, settings_can_start_session, settings_form, settings_layout,
+        settings_new_session_rect, settings_popup_height, settings_tab_rects, SETTINGS_POPUP_WIDTH,
     },
     sidebar::{
         agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
@@ -306,7 +309,7 @@ fn compute_view_internal(
                 area,
                 toast,
                 app.config_diagnostic.is_some(),
-                toast.position.unwrap_or(app.toast_config.ork3.position),
+                toast.position.unwrap_or(app.toast_config.herduck.position),
             )
         })
         .unwrap_or_default();
@@ -450,6 +453,9 @@ pub fn render_with_runtime_registry(
             render_sidebar_tabs(app, frame, app.view.project_sidebar_tabs);
         }
     }
+    if app.view.layout != ViewLayout::Mobile && sidebar_area.width > 0 && !app.sidebar_collapsed {
+        sidebar::render_sidebar_menu(app, frame);
+    }
     if app.view.layout != ViewLayout::Mobile {
         render_tab_bar(app, frame, tab_bar_area);
     }
@@ -518,14 +524,14 @@ fn render_notifications(app: &AppState, frame: &mut Frame, terminal_area: Rect) 
                 frame.area(),
                 toast,
                 has_config_diagnostic,
-                toast.position.unwrap_or(app.toast_config.ork3.position),
+                toast.position.unwrap_or(app.toast_config.herduck.position),
                 &app.palette,
             );
             toast_rect = Some(toast_notification_rect(
                 frame.area(),
                 toast,
                 has_config_diagnostic,
-                toast.position.unwrap_or(app.toast_config.ork3.position),
+                toast.position.unwrap_or(app.toast_config.herduck.position),
             ));
         }
         if app.view.layout == ViewLayout::Mobile {
@@ -634,7 +640,7 @@ mod tests {
             area,
             &toast,
             false,
-            crate::config::ToastOrk3Position::BottomRight,
+            crate::config::ToastHerduckPosition::BottomRight,
         );
         assert_eq!(
             copy_feedback_offset_for_toast(
@@ -728,7 +734,7 @@ mod tests {
         app.active = Some(0);
         app.selected = 0;
         app.mode = Mode::Terminal;
-        app.config_diagnostic = Some("config.toml:100:10; herdr config check".into());
+        app.config_diagnostic = Some("config.toml:100:10; herduck config check".into());
 
         let area = Rect::new(0, 0, 44, 20);
         compute_view(&mut app, area);
@@ -737,7 +743,7 @@ mod tests {
         let row = buffer_row_text(terminal.backend().buffer(), area, app.view.terminal_area.y);
 
         assert!(row.contains("config.toml:100:10"), "{row}");
-        assert!(row.contains("herdr config check"), "{row}");
+        assert!(row.contains("herduck config check"), "{row}");
     }
 
     #[test]
@@ -747,7 +753,7 @@ mod tests {
         app.active = Some(0);
         app.selected = 0;
         app.mode = Mode::Terminal;
-        app.toast_config.ork3.position = crate::config::ToastOrk3Position::TopLeft;
+        app.toast_config.herduck.position = crate::config::ToastHerduckPosition::TopLeft;
         app.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::Finished,
             title: "pi finished".into(),
@@ -772,7 +778,7 @@ mod tests {
         app.selected = 0;
         app.mode = Mode::Terminal;
         app.config_diagnostic = Some("config warning".into());
-        app.toast_config.ork3.position = crate::config::ToastOrk3Position::TopLeft;
+        app.toast_config.herduck.position = crate::config::ToastHerduckPosition::TopLeft;
         app.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::Finished,
             title: "pi finished".into(),

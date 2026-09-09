@@ -32,7 +32,7 @@ fn rewrite_schema_refs(value: &mut serde_json::Value, schema_name: &str) {
 fn protocol_schema_document() -> serde_json::Value {
     serde_json::json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ORK3 API",
+        "title": "HERDUCK API",
         "schema_version": 1,
         "protocol": crate::protocol::PROTOCOL_VERSION,
         "schemas": {
@@ -95,7 +95,7 @@ fn generated_protocol_schema_artifact_is_current() {
         serde_json::to_string_pretty(&protocol_schema_document()).unwrap()
     );
     let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/api/ork3-api.schema.json");
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/api/herduck-api.schema.json");
 
     if std::env::var_os("HERDR_UPDATE_API_SCHEMA").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -292,7 +292,7 @@ fn notification_show_request_parses() {
     assert_eq!(params.body.as_deref(), Some("api workspace"));
     assert_eq!(
         params.position,
-        Some(crate::config::ToastOrk3Position::TopLeft)
+        Some(crate::config::ToastHerduckPosition::TopLeft)
     );
     assert_eq!(params.sound, NotificationShowSound::Request);
 }
@@ -727,6 +727,7 @@ fn worktree_request_and_response_round_trip() {
                 terminal_title_stripped: None,
                 display_agent: None,
                 agent_status: AgentStatus::Unknown,
+                agent_inactive: false,
                 state_labels: HashMap::new(),
                 tokens: HashMap::new(),
                 agent_session: None,
@@ -1112,6 +1113,35 @@ fn authority_mutation_requests_round_trip() {
 }
 
 #[test]
+fn agent_inactivity_is_an_optional_additive_json_field() {
+    let legacy = serde_json::json!({
+        "pane_id": "w_1-1", "terminal_id": "term_1", "workspace_id": "w_1",
+        "tab_id": "w_1:1", "focused": true, "agent_status": "idle", "revision": 0
+    });
+    let mut pane: PaneInfo = serde_json::from_value(legacy.clone()).unwrap();
+    let mut agent: AgentInfo = serde_json::from_value(legacy).unwrap();
+    assert!(!pane.agent_inactive);
+    assert!(!agent.agent_inactive);
+    assert!(serde_json::to_value(&pane)
+        .unwrap()
+        .get("agent_inactive")
+        .is_none());
+    assert!(serde_json::to_value(&agent)
+        .unwrap()
+        .get("agent_inactive")
+        .is_none());
+    pane.agent_inactive = true;
+    agent.agent_inactive = true;
+    let restored_pane: PaneInfo =
+        serde_json::from_value(serde_json::to_value(&pane).unwrap()).unwrap();
+    let restored_agent: AgentInfo =
+        serde_json::from_value(serde_json::to_value(&agent).unwrap()).unwrap();
+    assert_eq!(restored_pane, pane);
+    assert_eq!(restored_agent, agent);
+    assert_eq!(restored_pane.agent_status, AgentStatus::Idle);
+}
+
+#[test]
 fn create_response_round_trips_with_root_pane() {
     let response = SuccessResponse {
         id: "req_2".into(),
@@ -1140,6 +1170,7 @@ fn create_response_round_trips_with_root_pane() {
                 terminal_title_stripped: None,
                 display_agent: None,
                 agent_status: AgentStatus::Unknown,
+                agent_inactive: false,
                 state_labels: HashMap::new(),
                 tokens: HashMap::new(),
                 agent_session: None,

@@ -165,7 +165,8 @@ mod tests {
 
     #[test]
     fn grok_requires_process_owned_files_and_disambiguates_retained_sessions() {
-        let root = std::env::temp_dir().join(format!("ork3-grok-identity-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("herduck-grok-identity-{}", std::process::id()));
         let mut config = crate::config::ProjectsConfig::default();
         config.adapters.grok.roots = vec![root.clone()];
         let mut files = Vec::new();

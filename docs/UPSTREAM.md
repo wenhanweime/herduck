@@ -1,8 +1,10 @@
 # Upstream provenance
 
-ORK3 is an independent product and repository. Its terminal runtime was originally derived from
-Herdr v0.7.4 and has since been modified to provide ORK3-specific project and semantic-cluster
-navigation, isolated configuration, sockets, commands, and product identity.
+Herduck is an independent product and repository. Its terminal runtime was originally derived from
+Herdr v0.7.4 and has since been modified to provide project and semantic-cluster navigation,
+configuration, sockets, commands, and product identity. The project was previously named ORK3
+and was renamed Herduck in September 2026. It is independently maintained and is not an official
+Herdr release.
 
 | Field | Value |
 |---|---|
@@ -18,4 +20,13 @@ navigation, isolated configuration, sockets, commands, and product identity.
 The archive checksum is the SHA-256 of `git archive --format=tar` for the release commit. The
 original copyright notices are preserved in source files and [LICENSE](../LICENSE). References to
 Herdr elsewhere in implementation internals indicate protocol or compatibility ancestry; they do
-not mean that ORK3 depends on a separately installed Herdr executable.
+not mean that Herduck depends on a separately installed Herdr executable.
+
+Herduck is distributed under AGPL-3.0-or-later. The commercial-license offer in the preserved
+upstream `LICENSE` refers to Herdr and its original rights holder; it is not a separate commercial
+license for Herduck's modifications.
+
+Vendored dependencies retain their own notices, including [Ghostty](../vendor/libghostty-vt/LICENSE)
+and [portable-pty](../vendor/portable-pty/LICENSE.md). Their source is included in the Git checkout
+used for installation. Herduck keeps some historical integration names and serialized values for
+compatibility with existing sessions and hooks; those identifiers are not product branding.

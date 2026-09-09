@@ -437,7 +437,7 @@ mod tests {
     use std::io::Write;
 
     fn write_jsonl(name: &str, lines: &[&str]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("ork3-transcript-{name}"));
+        let dir = std::env::temp_dir().join(format!("herduck-transcript-{name}"));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("transcript.jsonl");
         let mut file = std::fs::File::create(&path).expect("create");
@@ -706,7 +706,7 @@ mod tests {
     /// are the only part worth showing.
     #[test]
     fn grok_user_query_is_unwrapped_not_discarded() {
-        let dir = std::env::temp_dir().join("ork3-transcript-grok-query");
+        let dir = std::env::temp_dir().join("herduck-transcript-grok-query");
         std::fs::create_dir_all(&dir).expect("dir");
         let summary = dir.join("summary.json");
         std::fs::write(&summary, "{}").expect("summary");
@@ -751,19 +751,19 @@ mod tests {
             "pi",
             &[
                 r#"{"type":"session","id":"x","cwd":"/tmp"}"#,
-                r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"看下 ork3"}]}}"#,
+                r#"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"看下 herduck"}]}}"#,
                 r#"{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"在看了"}]}}"#,
             ],
         );
         let transcript = read_transcript("pi", path.to_str()).expect("transcript");
         assert_eq!(transcript.messages.len(), 2);
-        assert_eq!(transcript.messages[0].text, "看下 ork3");
+        assert_eq!(transcript.messages[0].text, "看下 herduck");
     }
 
     /// Grok indexes `summary.json` but stores turns in a sibling file.
     #[test]
     fn grok_reads_chat_history_beside_the_indexed_summary() {
-        let dir = std::env::temp_dir().join("ork3-transcript-grok");
+        let dir = std::env::temp_dir().join("herduck-transcript-grok");
         std::fs::create_dir_all(&dir).expect("dir");
         let summary = dir.join("summary.json");
         std::fs::write(&summary, "{}").expect("summary");

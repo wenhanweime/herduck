@@ -26,7 +26,7 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--outdated-only" => true,
         _ => {
-            eprintln!("usage: ork3 integration status [--outdated-only]");
+            eprintln!("usage: herduck integration status [--outdated-only]");
             return Ok(2);
         }
     };
@@ -103,13 +103,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: ork3 integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|cursor|mastracode>"
+            "usage: herduck integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|cursor|mastracode>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: ork3 integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|cursor|mastracode>"
+            "usage: herduck integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|cursor|mastracode>"
         );
         return Ok(None);
     }
@@ -142,34 +142,34 @@ fn parse_integration_target(
 }
 
 fn print_integration_help() {
-    eprintln!("ork3 integration commands:");
-    eprintln!("  ork3 integration install pi");
-    eprintln!("  ork3 integration install omp");
-    eprintln!("  ork3 integration install claude");
-    eprintln!("  ork3 integration install codex");
-    eprintln!("  ork3 integration install copilot");
-    eprintln!("  ork3 integration install devin");
-    eprintln!("  ork3 integration install droid");
-    eprintln!("  ork3 integration install kimi");
-    eprintln!("  ork3 integration install opencode");
-    eprintln!("  ork3 integration install kilo");
-    eprintln!("  ork3 integration install hermes");
-    eprintln!("  ork3 integration install qodercli");
-    eprintln!("  ork3 integration install cursor");
-    eprintln!("  ork3 integration install mastracode");
-    eprintln!("  ork3 integration uninstall pi");
-    eprintln!("  ork3 integration uninstall omp");
-    eprintln!("  ork3 integration uninstall claude");
-    eprintln!("  ork3 integration uninstall codex");
-    eprintln!("  ork3 integration uninstall copilot");
-    eprintln!("  ork3 integration uninstall devin");
-    eprintln!("  ork3 integration uninstall droid");
-    eprintln!("  ork3 integration uninstall kimi");
-    eprintln!("  ork3 integration uninstall opencode");
-    eprintln!("  ork3 integration uninstall kilo");
-    eprintln!("  ork3 integration uninstall hermes");
-    eprintln!("  ork3 integration uninstall qodercli");
-    eprintln!("  ork3 integration uninstall cursor");
-    eprintln!("  ork3 integration uninstall mastracode");
-    eprintln!("  ork3 integration status [--outdated-only]");
+    eprintln!("herduck integration commands:");
+    eprintln!("  herduck integration install pi");
+    eprintln!("  herduck integration install omp");
+    eprintln!("  herduck integration install claude");
+    eprintln!("  herduck integration install codex");
+    eprintln!("  herduck integration install copilot");
+    eprintln!("  herduck integration install devin");
+    eprintln!("  herduck integration install droid");
+    eprintln!("  herduck integration install kimi");
+    eprintln!("  herduck integration install opencode");
+    eprintln!("  herduck integration install kilo");
+    eprintln!("  herduck integration install hermes");
+    eprintln!("  herduck integration install qodercli");
+    eprintln!("  herduck integration install cursor");
+    eprintln!("  herduck integration install mastracode");
+    eprintln!("  herduck integration uninstall pi");
+    eprintln!("  herduck integration uninstall omp");
+    eprintln!("  herduck integration uninstall claude");
+    eprintln!("  herduck integration uninstall codex");
+    eprintln!("  herduck integration uninstall copilot");
+    eprintln!("  herduck integration uninstall devin");
+    eprintln!("  herduck integration uninstall droid");
+    eprintln!("  herduck integration uninstall kimi");
+    eprintln!("  herduck integration uninstall opencode");
+    eprintln!("  herduck integration uninstall kilo");
+    eprintln!("  herduck integration uninstall hermes");
+    eprintln!("  herduck integration uninstall qodercli");
+    eprintln!("  herduck integration uninstall cursor");
+    eprintln!("  herduck integration uninstall mastracode");
+    eprintln!("  herduck integration status [--outdated-only]");
 }

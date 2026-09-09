@@ -185,11 +185,21 @@ impl AppState {
             return self.view.mobile_menu_hit_area;
         }
 
-        let footer = self.sidebar_footer_rect();
-        let width = if self.global_menu_attention_badge_visible() {
-            8
+        let footer = if self.sidebar_view.is_project_browser() {
+            let area = self.view.sidebar_rect;
+            Rect::new(
+                area.x,
+                area.bottom().saturating_sub(1),
+                area.width.saturating_sub(1),
+                area.height.min(1),
+            )
         } else {
-            6
+            self.sidebar_footer_rect()
+        };
+        let width = if self.global_menu_attention_badge_visible() {
+            17
+        } else {
+            15
         }
         .min(footer.width.max(1));
         let x = footer.x + footer.width.saturating_sub(width);
@@ -1474,10 +1484,19 @@ mod tests {
         app.state.sidebar_spaces.row_gap = 1;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
 
-        assert_eq!(app.state.workspace_drop_index_at_row(0), Some(0));
-        assert_eq!(app.state.workspace_drop_index_at_row(1), Some(0));
-        assert_eq!(app.state.workspace_drop_index_at_row(2), Some(0));
-        assert_eq!(app.state.workspace_drop_index_at_row(3), Some(1));
+        let cards = &app.state.view.workspace_card_areas;
+        let list = app.state.workspace_list_rect();
+        let top_slot = crate::ui::workspace_drop_indicator_row(cards, list, 0).unwrap();
+        let next_slot = crate::ui::workspace_drop_indicator_row(cards, list, 1).unwrap();
+        assert!(top_slot < cards[0].rect.y);
+        assert!(next_slot >= cards[0].rect.bottom());
+        assert_eq!(app.state.workspace_drop_index_at_row(list.y), Some(0));
+        assert_eq!(app.state.workspace_drop_index_at_row(top_slot), Some(0));
+        assert_eq!(
+            app.state.workspace_drop_index_at_row(cards[0].rect.y),
+            Some(0)
+        );
+        assert_eq!(app.state.workspace_drop_index_at_row(next_slot), Some(1));
 
         let _ = fs::remove_dir_all(first_repo);
         let _ = fs::remove_dir_all(second_repo);
@@ -1491,7 +1510,8 @@ mod tests {
             Workspace::test_new("b"),
             Workspace::test_new("c"),
         ];
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
+        // Leave spare space below the cards even with the taller navigation header.
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 32));
 
         let cards = &app.state.view.workspace_card_areas;
         let bottom_slot = crate::ui::workspace_drop_indicator_row(

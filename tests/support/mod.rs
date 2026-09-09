@@ -17,8 +17,8 @@ const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
 pub const CURRENT_PROTOCOL: u32 = 16;
 
-/// Marks a process as running inside an ORK3-managed pane.
-const ORK3_ENV_VAR: &str = "ORK3_ENV";
+/// Marks a process as running inside an HERDUCK-managed pane.
+const HERDUCK_ENV_VAR: &str = "HERDUCK_ENV";
 
 pub fn isolate_project_history_for_pty(
     command: &mut portable_pty::CommandBuilder,
@@ -32,9 +32,14 @@ pub fn isolate_project_history_for_pty(
     command.env("USERPROFILE", &home);
     command.env("XDG_DATA_HOME", &data);
     command.env("LOCALAPPDATA", &data);
-    // The suite may run inside an ORK3 pane, which exports ORK3_ENV=1. A child that inherits it
+    // The suite may run inside an HERDUCK pane, which exports HERDUCK_ENV=1. A child that inherits it
     // treats the socket override these tests set as foreign and ignores it.
-    command.env_remove(ORK3_ENV_VAR);
+    command.env_remove(HERDUCK_ENV_VAR);
+    command.env_remove("ORK3_ENV");
+    command.env_remove("ORK3_CONFIG_PATH");
+    command.env_remove("ORK3_SOCKET_PATH");
+    command.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    command.env_remove("HERDUCK_RUNTIME_NAMESPACE");
 }
 
 pub fn isolate_project_history_for_process(
@@ -49,7 +54,12 @@ pub fn isolate_project_history_for_process(
     command.env("USERPROFILE", &home);
     command.env("XDG_DATA_HOME", &data);
     command.env("LOCALAPPDATA", &data);
-    command.env_remove(ORK3_ENV_VAR);
+    command.env_remove(HERDUCK_ENV_VAR);
+    command.env_remove("ORK3_ENV");
+    command.env_remove("ORK3_CONFIG_PATH");
+    command.env_remove("ORK3_SOCKET_PATH");
+    command.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    command.env_remove("HERDUCK_RUNTIME_NAMESPACE");
 }
 
 pub fn register_spawned_herdr_pid(pid: Option<u32>) {
@@ -615,7 +625,7 @@ fn process_runtime_dir(pid: u32) -> std::io::Result<Option<PathBuf>> {
             return Ok(Some(PathBuf::from(value)));
         }
 
-        if let Some(value) = kv.strip_prefix("ORK3_SOCKET_PATH=") {
+        if let Some(value) = kv.strip_prefix("HERDUCK_SOCKET_PATH=") {
             socket_path = Some(PathBuf::from(value));
         }
     }
@@ -641,7 +651,7 @@ fn current_checkout_root() -> &'static Path {
 }
 
 fn is_test_herdr_binary(path: &Path) -> bool {
-    path.ends_with("target/debug/ork3") && path.starts_with(current_checkout_root())
+    path.ends_with("target/debug/herduck") && path.starts_with(current_checkout_root())
 }
 
 extern "C" fn run_atexit_cleanup() {
@@ -765,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_binary_matcher_accepts_current_checkout_debug_binary() {
-        let binary = current_checkout_root().join("target/debug/ork3");
+        let binary = current_checkout_root().join("target/debug/herduck");
         assert!(
             is_test_herdr_binary(&binary),
             "current checkout debug binary should be considered test-owned"
@@ -775,7 +785,7 @@ mod tests {
     #[test]
     fn test_binary_matcher_rejects_installed_binary() {
         assert!(
-            !is_test_herdr_binary(Path::new("/home/can/.local/bin/herdr")),
+            !is_test_herdr_binary(Path::new("/home/example/.local/bin/herdr")),
             "installed binaries must not be considered test-owned"
         );
     }

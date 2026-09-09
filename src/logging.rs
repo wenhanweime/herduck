@@ -20,8 +20,9 @@ pub(crate) fn init_file_logging(file_name: &str) {
     };
 
     // The default filter must name the running binary's crate target. Renaming the binary to
-    // ork3 changed that target, and a stale `herdr=info` default silently dropped every log line.
-    let filter = std::env::var("ORK3_LOG")
+    // herduck changed that target, and a stale `herdr=info` default silently dropped every log line.
+    let filter = std::env::var("HERDUCK_LOG")
+        .or_else(|_| std::env::var("ORK3_LOG"))
         .or_else(|_| std::env::var("HERDR_LOG"))
         .ok()
         .and_then(|value| EnvFilter::try_new(value).ok())
@@ -38,8 +39,8 @@ pub(crate) fn init_file_logging(file_name: &str) {
 pub(crate) fn help_log_paths_summary() -> String {
     let dir = crate::session::data_dir();
     format!(
-        "{} (plus ork3-client.log, ork3-server.log)",
-        dir.join("ork3.log").display()
+        "{} (plus herduck-client.log, herduck-server.log)",
+        dir.join("herduck.log").display()
     )
 }
 
@@ -49,7 +50,7 @@ pub(crate) fn startup(role: &'static str) {
         subsystem = role,
         outcome = "started",
         pid = std::process::id(),
-        "ork3 starting"
+        "herduck starting"
     );
 }
 
@@ -59,7 +60,7 @@ pub(crate) fn shutdown(role: &'static str) {
         subsystem = role,
         outcome = "completed",
         pid = std::process::id(),
-        "ork3 exiting"
+        "herduck exiting"
     );
 }
 

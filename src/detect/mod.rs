@@ -832,7 +832,7 @@ mod tests {
             processes: vec![foreground_process(
                 123,
                 "bun",
-                &["bun", "/home/can/.bun/bin/omp"],
+                &["bun", "/home/example/.bun/bin/omp"],
             )],
         };
 

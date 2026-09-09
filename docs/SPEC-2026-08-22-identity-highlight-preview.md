@@ -26,20 +26,20 @@
 
 ### 1.1 问题一：前标不区分会话（P0）
 
-**现象**（`ork3` 项目下按时间倒序的真实数据）：
+**现象**（`herduck` 项目下按时间倒序的真实数据）：
 
 ```
-ork3 | ork3 catalog hygiene | 你是本轮审阅席（Claude）。仓库 `/Users/pot/Workspace…
-ork3 | ork3 catalog hygiene | 你是本轮 **审阅席**（Claude）。仓库 `/Users/pot/Work…
-ork3 | ork3 catalog hygiene | 规划席。仓库 /Users/pot/Workspace/ork3。 用户：Pro…
-ork3 | ork3 catalog hygiene | 你是规划/审阅席。仓库 /Users/pot/Workspace/ork3。 阅…
+herduck | herduck catalog hygiene | 你是本轮审阅席（Claude）。仓库 `/Users/example/Workspace…
+herduck | herduck catalog hygiene | 你是本轮 **审阅席**（Claude）。仓库 `/Users/example/Work…
+herduck | herduck catalog hygiene | 规划席。仓库 /Users/example/Workspace/herduck。 用户：Pro…
+herduck | herduck catalog hygiene | 你是规划/审阅席。仓库 /Users/example/Workspace/herduck。 阅…
 ```
 
 **双重重复**，两个原因叠加：
 
 **R1 · topic 的粒度等于 Project，不等于 Session。**
 `semantic_assignments` 的设计目的是**分组**（Clusters 视图），一个 topic 天然覆盖几十条会话：
-实测 `闲聊问候与回复测试` 63 条、`agent 会话管理` 54 条、`paseo-multica 聚类与开发` 51 条。
+实测 `闲聊问候与回复测试` 63 条、`agent 会话管理` 54 条、`sample-project 聚类与开发` 51 条。
 把分组标签当成每行前标，等于在同一组内重复打印组名 N 次——**信息量为零**，还挤占了本就
 稀缺的侧栏宽度。这是我上一轮的设计错误：我把"已经算好的 topic"当成收益，却没检查它的基数。
 

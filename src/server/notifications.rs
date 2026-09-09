@@ -14,7 +14,7 @@ pub(crate) fn toast_notify_kind(delivery: config::ToastDelivery) -> Option<proto
     match delivery {
         config::ToastDelivery::Terminal => Some(protocol::NotifyKind::Toast),
         config::ToastDelivery::System => Some(protocol::NotifyKind::SystemToast),
-        config::ToastDelivery::Off | config::ToastDelivery::Ork3 => None,
+        config::ToastDelivery::Off | config::ToastDelivery::Herduck => None,
     }
 }
 

@@ -48,6 +48,6 @@ Title Case：`Sessions` / `Projects` / `Clusters`。三个 hit rect 之间留 1 
 ## 4. 验收
 
 ```bash
-cd /Users/pot/Workspace/ork3
-cargo test --locked --bin ork3 -- dragging_sidebar_divider clicking_project sidebar_tabs
+cd /Users/example/Workspace/herduck
+cargo test --locked --bin herduck -- dragging_sidebar_divider clicking_project sidebar_tabs
 ```

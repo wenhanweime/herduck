@@ -352,26 +352,6 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 }
 
-pub fn signal_process_group(process_group_id: u32, signal: Signal) -> bool {
-    if process_group_id <= 1 || process_group_id == unsafe { libc::getpgrp() } as u32 {
-        return false;
-    }
-    unsafe {
-        libc::kill(
-            -(process_group_id as libc::pid_t),
-            process_signal_number(signal),
-        ) == 0
-    }
-}
-
-pub fn process_group_exists(process_group_id: u32) -> bool {
-    if process_group_id <= 1 {
-        return false;
-    }
-    let result = unsafe { libc::kill(-(process_group_id as libc::pid_t), 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
 fn process_signal_number(signal: Signal) -> libc::c_int {
     match signal {
         Signal::Hangup => libc::SIGHUP,
@@ -418,6 +398,12 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
         .stderr(Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+pub(crate) fn text_file_editor_command(path: &std::path::Path) -> std::io::Result<Command> {
+    let mut command = Command::new("xdg-open");
+    command.arg(path);
+    Ok(command)
 }
 
 pub fn read_clipboard_image() -> Option<ClipboardImage> {

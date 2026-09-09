@@ -2532,7 +2532,7 @@ impl AppState {
                 self.update_dismissed = true;
                 if matches!(
                     self.toast_config.delivery,
-                    crate::config::ToastDelivery::Ork3
+                    crate::config::ToastDelivery::Herduck
                 ) {
                     self.toast = Some(ToastNotification {
                         kind: ToastKind::UpdateInstalled,
@@ -2550,7 +2550,7 @@ impl AppState {
                 if !updated.is_empty()
                     && matches!(
                         self.toast_config.delivery,
-                        crate::config::ToastDelivery::Ork3
+                        crate::config::ToastDelivery::Herduck
                     )
                 {
                     let agent_list = updated
@@ -2976,7 +2976,7 @@ impl AppState {
 
         if matches!(
             self.toast_config.delivery,
-            crate::config::ToastDelivery::Ork3
+            crate::config::ToastDelivery::Herduck
         ) {
             if let Some(toast) = delivery.toast.clone() {
                 self.toast = Some(toast);
@@ -4317,7 +4317,7 @@ mod tests {
     #[test]
     fn state_changed_idle_in_background_marks_unseen() {
         let mut state = app_with_workspaces(&["active", "background"]);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.active = Some(0);
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -4403,7 +4403,7 @@ mod tests {
     #[test]
     fn idle_after_known_unknown_agent_in_background_marks_done() {
         let mut state = app_with_workspaces(&["active", "background"]);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.active = Some(0);
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -4458,7 +4458,7 @@ mod tests {
     fn background_waiting_sets_attention_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -4481,7 +4481,7 @@ mod tests {
     fn delayed_background_waiting_schedules_before_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -4513,7 +4513,7 @@ mod tests {
     fn delayed_background_waiting_cancels_when_agent_resumes_working() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -4547,7 +4547,7 @@ mod tests {
     fn delayed_background_waiting_is_suppressed_if_pane_becomes_active() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -4599,7 +4599,7 @@ mod tests {
     fn delayed_background_waiting_is_cleared_when_pane_dies() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.toast_config.delay_seconds = 1;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
@@ -4626,7 +4626,7 @@ mod tests {
     fn hook_reported_unknown_agent_sets_toast_title_from_label() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::HookStateReported {
@@ -4649,7 +4649,7 @@ mod tests {
     fn visible_blocker_overrides_hook_working_and_notifies() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
         let bg_terminal_id = state.workspaces[1]
             .panes
@@ -4697,7 +4697,7 @@ mod tests {
     fn reserved_native_state_report_does_not_override_screen_state() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
         let terminal_id = state.workspaces[0]
             .panes
@@ -4876,7 +4876,7 @@ mod tests {
     fn background_idle_sets_finished_toast() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let bg_pane_id = *state.workspaces[1].panes.keys().next().unwrap();
         let bg_terminal_id = state.workspaces[1]
             .panes
@@ -4909,7 +4909,7 @@ mod tests {
     fn background_toast_includes_tab_name_when_workspace_has_multiple_tabs() {
         let mut state = app_with_workspaces(&["active", "background"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.workspaces[1].tabs[0].set_custom_name("main".into());
         let second_tab = state.workspaces[1].test_add_tab(Some("logs"));
         state.ensure_test_terminals();
@@ -4935,7 +4935,7 @@ mod tests {
     fn background_tab_in_active_workspace_still_sets_toast() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.workspaces[0].tabs[0].set_custom_name("main".into());
         let second_tab = state.workspaces[0].test_add_tab(Some("logs"));
         state.ensure_test_terminals();
@@ -4961,7 +4961,7 @@ mod tests {
     fn active_workspace_active_tab_does_not_set_toast() {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -4982,7 +4982,7 @@ mod tests {
         let mut state = app_with_workspaces(&["active"]);
         state.active = Some(0);
         state.outer_terminal_focus = Some(false);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
 
         state.handle_app_event(AppEvent::StateChanged {
@@ -5009,7 +5009,7 @@ mod tests {
     #[test]
     fn update_ready_sets_manual_update_toast() {
         let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         let updates = state.handle_app_event(AppEvent::UpdateReady {
             version: "0.5.0".into(),
@@ -5032,7 +5032,7 @@ mod tests {
     #[test]
     fn update_ready_uses_event_install_command_in_toast() {
         let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
 
         state.handle_app_event(AppEvent::UpdateReady {
             version: "0.5.0".into(),
@@ -5053,7 +5053,7 @@ mod tests {
     #[test]
     fn agent_detection_manifest_update_event_updates_status_and_toast() {
         let mut state = AppState::test_new();
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         let status = crate::detect::manifest_update::ManifestUpdateStatus {
             last_result: Some("checked".to_string()),
             ..Default::default()
@@ -5231,7 +5231,7 @@ mod tests {
     #[test]
     fn pane_process_exit_publish_marks_agent_idle_before_pane_removal() {
         let mut state = app_with_workspaces(&["active", "background"]);
-        state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         state.active = Some(1);
         state.ensure_test_terminals();
         let pane_id = state.workspaces[0].tabs[0].root_pane;

@@ -27,7 +27,10 @@ fn unique_test_dir() -> PathBuf {
 }
 
 fn managed_github_plugin_dir(config_home: &Path) -> PathBuf {
-    config_home.join("ork3-dev").join("plugins").join("github")
+    config_home
+        .join("herduck-dev")
+        .join("plugins")
+        .join("github")
 }
 
 fn path_missing_or_empty(path: &Path) -> bool {
@@ -145,7 +148,7 @@ fn spawn_herdr_with_pane_history(
 
 fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "ork3-dev"
+        "herduck-dev"
     } else {
         "herdr"
     }
@@ -156,7 +159,7 @@ fn named_session_socket(config_home: &Path, session: &str) -> PathBuf {
         .join(app_dir_name())
         .join("sessions")
         .join(session)
-        .join("ork3.sock")
+        .join("herduck.sock")
 }
 
 fn spawn_named_server(
@@ -173,15 +176,15 @@ fn spawn_named_server(
     )
     .unwrap();
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_process(&mut command, runtime_dir);
     command
         .args(["--session", session, "server"])
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_RUNTIME_DIR", runtime_dir)
-        .env_remove("ORK3_SOCKET_PATH")
-        .env_remove("ORK3_CLIENT_SOCKET_PATH")
-        .env_remove("ORK3_ENV")
+        .env_remove("HERDUCK_SOCKET_PATH")
+        .env_remove("HERDUCK_CLIENT_SOCKET_PATH")
+        .env_remove("HERDUCK_ENV")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -220,20 +223,20 @@ fn run_named_cli_with_env_and_socket_override(
     envs: &[(&str, &Path)],
     socket_override: Option<&Path>,
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herduck"));
     command
         .args(args)
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_RUNTIME_DIR", runtime_dir)
-        .env_remove("ORK3_CLIENT_SOCKET_PATH")
-        .env_remove("ORK3_ENV");
+        .env_remove("HERDUCK_CLIENT_SOCKET_PATH")
+        .env_remove("HERDUCK_ENV");
     for (key, value) in envs {
         command.env(key, value);
     }
     if let Some(socket_override) = socket_override {
-        command.env("ORK3_SOCKET_PATH", socket_override);
+        command.env("HERDUCK_SOCKET_PATH", socket_override);
     } else {
-        command.env_remove("ORK3_SOCKET_PATH");
+        command.env_remove("HERDUCK_SOCKET_PATH");
     }
     command.output().unwrap()
 }
@@ -291,15 +294,15 @@ fn spawn_herdr_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
@@ -313,17 +316,17 @@ fn spawn_herdr_with_config(
 }
 
 fn run_cli(socket_path: &Path, args: &[&str]) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herduck"));
     command.args(args);
-    command.env("ORK3_SOCKET_PATH", socket_path);
+    command.env("HERDUCK_SOCKET_PATH", socket_path);
     command.output().unwrap()
 }
 
 fn run_cli_in_dir(socket_path: &Path, args: &[&str], current_dir: &Path) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_herduck"));
     command.args(args);
     command.current_dir(current_dir);
-    command.env("ORK3_SOCKET_PATH", socket_path);
+    command.env("HERDUCK_SOCKET_PATH", socket_path);
     command.output().unwrap()
 }
 
@@ -571,7 +574,7 @@ fn run_shell_hook_with_env(
 ) -> Option<serde_json::Value> {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("ork3.sock");
+    let socket_path = base.join("herduck.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -602,8 +605,8 @@ fn run_shell_hook_with_env(
     command
         .arg(hook_path)
         .args(args)
-        .env("ORK3_ENV", "1")
-        .env("ORK3_SOCKET_PATH", &socket_path)
+        .env("HERDUCK_ENV", "1")
+        .env("HERDUCK_SOCKET_PATH", &socket_path)
         // Bundled upstream integration assets still consume these protocol aliases.
         .env("HERDR_ENV", "1")
         .env("HERDR_SOCKET_PATH", &socket_path)
@@ -836,7 +839,7 @@ fn devin_hook_ignores_non_matching_session_list_entries() {
 fn pane_run_sends_one_send_input_request_with_enter_key() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("ork3.sock");
+    let socket_path = base.join("herduck.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -906,7 +909,7 @@ fn pane_run_sends_one_send_input_request_with_enter_key() {
 fn workspace_report_metadata_sends_token_patch() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("ork3.sock");
+    let socket_path = base.join("herduck.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -961,7 +964,7 @@ fn workspace_report_metadata_sends_token_patch() {
 fn pane_report_metadata_sends_presentation_request() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("ork3.sock");
+    let socket_path = base.join("herduck.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -1111,7 +1114,7 @@ fn help_commands_exit_successfully() {
     ];
 
     for args in help_cases {
-        let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+        let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
             .args(*args)
             .output()
             .unwrap();
@@ -1128,11 +1131,11 @@ fn help_commands_exit_successfully() {
 
 #[test]
 fn completion_command_prints_zsh_script_without_session_startup() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["completion", "zsh"])
-        .env_remove("ORK3_SOCKET_PATH")
-        .env_remove("ORK3_CLIENT_SOCKET_PATH")
-        .env_remove("ORK3_ENV")
+        .env_remove("HERDUCK_SOCKET_PATH")
+        .env_remove("HERDUCK_CLIENT_SOCKET_PATH")
+        .env_remove("HERDUCK_ENV")
         .output()
         .unwrap();
 
@@ -1143,7 +1146,7 @@ fn completion_command_prints_zsh_script_without_session_startup() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("#compdef ork3"), "stdout: {stdout}");
+    assert!(stdout.contains("#compdef herduck"), "stdout: {stdout}");
     assert!(
         stdout.contains("bash elvish fish powershell zsh"),
         "stdout: {stdout}"
@@ -1168,7 +1171,7 @@ fn completion_command_prints_zsh_script_without_session_startup() {
 
 #[test]
 fn root_help_hides_explicit_client_command() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .arg("--help")
         .output()
         .unwrap();
@@ -1176,14 +1179,14 @@ fn root_help_hides_explicit_client_command() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        !stdout.contains("ork3 client"),
+        !stdout.contains("herduck client"),
         "root help should not advertise the internal client command: {stdout}"
     );
 }
 
 #[test]
 fn root_help_advertises_api_schema_command_group() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .arg("--help")
         .output()
         .unwrap();
@@ -1191,23 +1194,23 @@ fn root_help_advertises_api_schema_command_group() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("ork3 api <subcommand>"),
+        stdout.contains("herduck api <subcommand>"),
         "root help should advertise the api command group: {stdout}"
     );
 }
 
 #[test]
 fn api_schema_default_output_is_a_short_summary() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["api", "schema"])
         .output()
         .unwrap();
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("ORK3 API schema"), "stdout: {stdout}");
+    assert!(stdout.contains("HERDUCK API schema"), "stdout: {stdout}");
     assert!(
-        stdout.contains("Use `ork3 api schema --json`"),
+        stdout.contains("Use `herduck api schema --json`"),
         "stdout: {stdout}"
     );
     assert!(
@@ -1218,7 +1221,7 @@ fn api_schema_default_output_is_a_short_summary() {
 
 #[test]
 fn api_schema_json_prints_bundled_schema() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["api", "schema", "--json"])
         .output()
         .unwrap();
@@ -1242,7 +1245,7 @@ fn api_schema_json_prints_bundled_schema() {
 fn api_snapshot_prints_live_session_snapshot() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("ork3.sock");
+    let socket_path = base.join("herduck.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn({
@@ -1293,9 +1296,9 @@ fn api_snapshot_prints_live_session_snapshot() {
 fn api_schema_output_writes_bundled_schema_to_file() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let schema_path = base.join("ork3-api.schema.json");
+    let schema_path = base.join("herduck-api.schema.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["api", "schema", "--output"])
         .arg(&schema_path)
         .output()
@@ -1322,11 +1325,11 @@ fn explicit_client_command_respects_nested_guard() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .arg("client")
-        .env("ORK3_ENV", "1")
+        .env("HERDUCK_ENV", "1")
         .env("XDG_CONFIG_HOME", &base)
-        .env_remove("ORK3_CONFIG_PATH")
+        .env_remove("HERDUCK_CONFIG_PATH")
         .output()
         .unwrap();
 
@@ -1335,16 +1338,16 @@ fn explicit_client_command_respects_nested_guard() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("nested ork3 is disabled by default"),
+        stderr.contains("nested herduck is disabled by default"),
         "client should fail at the nested guard before connecting: {stderr}"
     );
 }
 
 #[test]
 fn removed_show_changelog_flag_fails_before_nested_guard() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .arg("--show-changelog")
-        .env("ORK3_ENV", "1")
+        .env("HERDUCK_ENV", "1")
         .output()
         .unwrap();
 
@@ -1355,7 +1358,7 @@ fn removed_show_changelog_flag_fails_before_nested_guard() {
         "stderr: {stderr}"
     );
     assert!(
-        !stderr.contains("nested ork3"),
+        !stderr.contains("nested herduck"),
         "unknown flag should be rejected before nested guard: {stderr}"
     );
 }
@@ -1492,7 +1495,7 @@ fn named_sessions_use_separate_servers_and_workspace_state() {
     assert!(alpha_session["socket_path"]
         .as_str()
         .unwrap()
-        .ends_with("/sessions/alpha/ork3.sock"));
+        .ends_with("/sessions/alpha/herduck.sock"));
     assert!(beta_session["session_dir"]
         .as_str()
         .unwrap()
@@ -1562,17 +1565,17 @@ fn integration_commands_run_locally_when_server_is_missing() {
         "test setup should start without extension file"
     );
 
-    let workspace_list = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let workspace_list = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["workspace", "list"])
-        .env("ORK3_SOCKET_PATH", &missing_socket)
+        .env("HERDUCK_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
     assert_eq!(workspace_list.status.code(), Some(1));
 
-    let integration_install = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let integration_install = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["integration", "install", "pi"])
-        .env("ORK3_SOCKET_PATH", &missing_socket)
+        .env("HERDUCK_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -1582,9 +1585,9 @@ fn integration_commands_run_locally_when_server_is_missing() {
         "integration install should write local files without a server"
     );
 
-    let integration_status = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let integration_status = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["integration", "status"])
-        .env("ORK3_SOCKET_PATH", &missing_socket)
+        .env("HERDUCK_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -1593,9 +1596,9 @@ fn integration_commands_run_locally_when_server_is_missing() {
     assert!(status_stdout.contains("pi: current (v5)"));
     assert!(status_stdout.contains("claude: not installed"));
 
-    let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["integration", "uninstall", "pi"])
-        .env("ORK3_SOCKET_PATH", &missing_socket)
+        .env("HERDUCK_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -1625,9 +1628,9 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     register_runtime_dir(&runtime_dir);
     let missing_socket = runtime_dir.join("missing.sock");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["integration", "status", "--outdated-only"])
-        .env("ORK3_SOCKET_PATH", &missing_socket)
+        .env("HERDUCK_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -1635,8 +1638,8 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("installed herdr integrations need updating"));
-    assert!(stderr.contains("herdr integration install pi"));
+    assert!(stderr.contains("installed herduck integrations need updating"));
+    assert!(stderr.contains("herduck integration install pi"));
 
     cleanup_test_base(&base);
 }
@@ -1651,9 +1654,9 @@ fn integration_status_rejects_unknown_flags() {
     register_runtime_dir(&runtime_dir);
     let missing_socket = runtime_dir.join("missing.sock");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = Command::new(env!("CARGO_BIN_EXE_herduck"))
         .args(["integration", "status", "--wat"])
-        .env("ORK3_SOCKET_PATH", &missing_socket)
+        .env("HERDUCK_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -1668,7 +1671,7 @@ fn status_commands_report_client_and_server_versions() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -1804,8 +1807,8 @@ fn server_stop_command_shuts_down_running_server() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let mut herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -1844,8 +1847,8 @@ fn server_stop_then_restart_restores_pane_history() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
     let marker = "PERSISTED_HISTORY_AFTER_STOP";
 
     let mut herdr = spawn_herdr_with_pane_history(&config_home, &runtime_dir, &socket_path);
@@ -1936,8 +1939,8 @@ fn server_start_restores_legacy_session_through_api_identity() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
     let data_dir = config_home.join(app_dir_name());
     let pion_cwd = base.join("legacy-pion");
     let herdr_cwd = base.join("legacy-herdr");
@@ -2035,7 +2038,7 @@ fn workspace_and_pane_management_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2125,7 +2128,7 @@ fn worktree_management_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let repo = base.join("repo");
     let checkout = base.join("checkout");
     create_committed_repo(&repo);
@@ -2251,7 +2254,7 @@ fn forced_worktree_remove_terminates_processes_inside_checkout() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let repo = base.join("repo");
     let checkout = base.join("checkout-with-process");
     create_committed_repo(&repo);
@@ -2321,7 +2324,7 @@ fn worktree_open_existing_checkout_by_path_and_branch() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let repo = base.join("repo");
     let checkout = base.join("external-checkout");
     create_committed_repo(&repo);
@@ -2518,7 +2521,7 @@ fn config_check_rejects_json_output() {
     assert!(checked.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&checked.stderr),
-        "usage: ork3 config check\n"
+        "usage: herduck config check\n"
     );
 
     cleanup_test_base(&base);
@@ -2575,7 +2578,7 @@ fn tab_management_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2643,7 +2646,7 @@ fn agent_start_command_works() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2704,7 +2707,7 @@ fn agent_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2775,7 +2778,7 @@ fn pane_close_only_removes_the_target_tab_when_other_tabs_exist() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2835,7 +2838,7 @@ fn pane_close_removes_the_workspace_when_it_closes_the_last_pane() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2872,7 +2875,7 @@ fn pane_run_read_and_wait_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -2942,7 +2945,7 @@ fn wait_output_matches_recent_unwrapped_text() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -3017,7 +3020,7 @@ fn closing_pane_terminates_processes_inside_it() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -3078,7 +3081,7 @@ fn closing_workspace_terminates_processes_inside_it() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -3131,7 +3134,7 @@ fn workspace_ids_and_public_pane_ids_are_stable() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -3284,7 +3287,7 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -3309,7 +3312,7 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
             "run",
             "1-1",
             &format!(
-                "printf '%s\\n%s\\n' \"$ORK3_SOCKET_PATH\" \"$HERDR_PANE_ID\" > {}",
+                "printf '%s\\n%s\\n' \"$HERDUCK_SOCKET_PATH\" \"$HERDR_PANE_ID\" > {}",
                 env_capture.display()
             ),
         ],
@@ -3342,7 +3345,7 @@ fn wait_agent_status_exits_when_idle_status_matches() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();
@@ -3413,7 +3416,7 @@ fn plugin_link_list_unlink_cli_smoke_test() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let plugin_dir = base.join("plugins").join("layout");
     fs::create_dir_all(&plugin_dir).unwrap();
     fs::write(
@@ -3970,7 +3973,7 @@ fn plugin_install_restores_previous_checkout_when_registration_fails() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3-fake.sock");
+    let socket_path = runtime_dir.join("herduck-fake.sock");
     let source_repo = base.join("source-repo");
     let plugin_dir = source_repo.join("worktree-bootstrap");
     fs::create_dir_all(&plugin_dir).unwrap();
@@ -4000,7 +4003,7 @@ command = ["sh", "-c", "echo new"]
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     let managed_checkout = config_home
-        .join("ork3-dev")
+        .join("herduck-dev")
         .join("plugins")
         .join("github")
         .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
@@ -4102,7 +4105,7 @@ fn plugin_install_rejects_server_that_drops_source_metadata() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3-fake.sock");
+    let socket_path = runtime_dir.join("herduck-fake.sock");
     let source_repo = base.join("source-repo");
     let plugin_dir = source_repo.join("worktree-bootstrap");
     fs::create_dir_all(&plugin_dir).unwrap();
@@ -4132,7 +4135,7 @@ command = ["sh", "-c", "echo install"]
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     let managed_checkout = config_home
-        .join("ork3-dev")
+        .join("herduck-dev")
         .join("plugins")
         .join("github")
         .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
@@ -4239,7 +4242,7 @@ fn plugin_install_keeps_checkout_when_incompatible_server_cleanup_fails() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3-fake.sock");
+    let socket_path = runtime_dir.join("herduck-fake.sock");
     let source_repo = base.join("source-repo");
     let plugin_dir = source_repo.join("worktree-bootstrap");
     fs::create_dir_all(&plugin_dir).unwrap();
@@ -4269,7 +4272,7 @@ command = ["sh", "-c", "echo install"]
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     let managed_checkout = config_home
-        .join("ork3-dev")
+        .join("herduck-dev")
         .join("plugins")
         .join("github")
         .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
@@ -4368,7 +4371,7 @@ fn wait_agent_status_exits_immediately_when_status_already_matches() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -4425,7 +4428,7 @@ fn wait_agent_status_times_out_when_status_does_not_match() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -4467,7 +4470,7 @@ fn wait_agent_status_exits_when_done_status_matches() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();

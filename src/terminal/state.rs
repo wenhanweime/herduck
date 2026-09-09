@@ -95,6 +95,8 @@ pub struct TerminalState {
     metadata_report_sequences: HashMap<String, u64>,
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
+    /// Idle timeout is a runtime status only; the process and conversation stay alive.
+    pub agent_inactive: bool,
     pub last_agent_state_change_seq: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
@@ -125,6 +127,7 @@ impl TerminalState {
             metadata_report_sequences: HashMap::new(),
             metadata_token_sequence_sources: std::collections::HashSet::new(),
             state: AgentState::Unknown,
+            agent_inactive: false,
             last_agent_state_change_seq: None,
             revision: 0,
             launch_argv: None,
@@ -132,6 +135,15 @@ impl TerminalState {
             recent_agent_process_exit_at: None,
             pending_agent_resume_plan: None,
         }
+    }
+
+    pub(crate) fn set_agent_inactive(&mut self, inactive: bool) -> bool {
+        if self.agent_inactive == inactive {
+            return false;
+        }
+        self.agent_inactive = inactive;
+        self.revision = self.revision.wrapping_add(1);
+        true
     }
 
     pub(crate) fn terminal_title_stripped(&self) -> Option<String> {
@@ -1322,6 +1334,7 @@ impl TerminalState {
         self.suppressed_full_lifecycle_hook_reports.clear();
         self.stale_full_lifecycle_hook_sessions.clear();
         self.state = AgentState::Unknown;
+        self.set_agent_inactive(false);
         self.last_agent_state_change_seq = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;

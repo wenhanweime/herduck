@@ -83,8 +83,10 @@ fn agent_explain(args: &[String]) -> std::io::Result<i32> {
                 index += 1;
             }
             "help" | "--help" | "-h" => {
-                eprintln!("usage: ork3 agent explain <target> [--json|--verbose]");
-                eprintln!("usage: ork3 agent explain --file PATH --agent LABEL [--json|--verbose]");
+                eprintln!("usage: herduck agent explain <target> [--json|--verbose]");
+                eprintln!(
+                    "usage: herduck agent explain --file PATH --agent LABEL [--json|--verbose]"
+                );
                 return Ok(0);
             }
             value if value.starts_with('-') => {
@@ -93,7 +95,7 @@ fn agent_explain(args: &[String]) -> std::io::Result<i32> {
             }
             value => {
                 if target.is_some() {
-                    eprintln!("usage: ork3 agent explain <target> [--json]");
+                    eprintln!("usage: herduck agent explain <target> [--json]");
                     return Ok(2);
                 }
                 target = Some(value.to_string());
@@ -104,11 +106,11 @@ fn agent_explain(args: &[String]) -> std::io::Result<i32> {
 
     let explain = if let Some(path) = file {
         if target.is_some() {
-            eprintln!("usage: ork3 agent explain --file PATH --agent LABEL [--json]");
+            eprintln!("usage: herduck agent explain --file PATH --agent LABEL [--json]");
             return Ok(2);
         }
         let Some(agent_label) = agent else {
-            eprintln!("ork3 agent explain --file requires --agent LABEL");
+            eprintln!("herduck agent explain --file requires --agent LABEL");
             return Ok(2);
         };
         let content = std::fs::read_to_string(path)?;
@@ -118,8 +120,8 @@ fn agent_explain(args: &[String]) -> std::io::Result<i32> {
         ))
     } else {
         let Some(target) = target else {
-            eprintln!("usage: ork3 agent explain <target> [--json]");
-            eprintln!("usage: ork3 agent explain --file PATH --agent LABEL [--json]");
+            eprintln!("usage: herduck agent explain <target> [--json]");
+            eprintln!("usage: herduck agent explain --file PATH --agent LABEL [--json]");
             return Ok(2);
         };
         if agent.is_some() {
@@ -267,12 +269,12 @@ fn matched_rule_region_preview<'a>(
 
 fn agent_start(args: &[String]) -> std::io::Result<i32> {
     let Some(name) = args.first() else {
-        eprintln!("usage: ork3 agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
+        eprintln!("usage: herduck agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
         return Ok(2);
     };
 
     let Some(separator) = args.iter().position(|arg| arg == "--") else {
-        eprintln!("usage: ork3 agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
+        eprintln!("usage: herduck agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
         return Ok(2);
     };
     if separator == args.len() - 1 {
@@ -369,7 +371,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_list(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 agent list");
+        eprintln!("usage: herduck agent list");
         return Ok(2);
     }
 
@@ -381,11 +383,11 @@ fn agent_list(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_get(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: ork3 agent get <target>");
+        eprintln!("usage: herduck agent get <target>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 agent get <target>");
+        eprintln!("usage: herduck agent get <target>");
         return Ok(2);
     }
 
@@ -399,11 +401,11 @@ fn agent_get(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_focus(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: ork3 agent focus <target>");
+        eprintln!("usage: herduck agent focus <target>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: ork3 agent focus <target>");
+        eprintln!("usage: herduck agent focus <target>");
         return Ok(2);
     }
 
@@ -417,7 +419,8 @@ fn agent_focus(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_attach(args: &[String]) -> std::io::Result<i32> {
     let (target, takeover) =
-        match super::parse_attach_target(args, "usage: ork3 agent attach <target> [--takeover]") {
+        match super::parse_attach_target(args, "usage: herduck agent attach <target> [--takeover]")
+        {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -437,7 +440,7 @@ fn agent_attach(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_wait(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: ork3 agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
+        eprintln!("usage: herduck agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
         return Ok(2);
     };
 
@@ -464,7 +467,7 @@ fn agent_wait(args: &[String]) -> std::io::Result<i32> {
                 index += 2;
             }
             "help" | "--help" | "-h" => {
-                eprintln!("usage: ork3 agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
+                eprintln!("usage: herduck agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
                 return Ok(0);
             }
             other => {
@@ -538,11 +541,11 @@ fn resolve_agent_target(target: &str, request_id: &str) -> std::io::Result<serde
 
 fn agent_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: ork3 agent rename <target> <name>|--clear");
+        eprintln!("usage: herduck agent rename <target> <name>|--clear");
         return Ok(2);
     };
     if args.len() < 2 {
-        eprintln!("usage: ork3 agent rename <target> <name>|--clear");
+        eprintln!("usage: herduck agent rename <target> <name>|--clear");
         return Ok(2);
     }
     let name = if args.len() == 2 && args[1] == "--clear" {
@@ -562,7 +565,7 @@ fn agent_rename(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_send(args: &[String]) -> std::io::Result<i32> {
     if args.len() < 2 {
-        eprintln!("usage: ork3 agent send <target> <text>");
+        eprintln!("usage: herduck agent send <target> <text>");
         return Ok(2);
     }
 
@@ -577,7 +580,7 @@ fn agent_send(args: &[String]) -> std::io::Result<i32> {
 
 fn agent_read(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: ork3 agent read <target> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+        eprintln!("usage: herduck agent read <target> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
         return Ok(2);
     };
 
@@ -664,18 +667,20 @@ fn parse_agent_wait_status(value: &str) -> std::io::Result<AgentStatus> {
 }
 
 fn print_agent_help() {
-    eprintln!("ork3 agent commands:");
-    eprintln!("  ork3 agent list");
-    eprintln!("  ork3 agent get <target>");
-    eprintln!("  ork3 agent read <target> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-    eprintln!("  ork3 agent send <target> <text>");
-    eprintln!("  ork3 agent rename <target> <name>|--clear");
-    eprintln!("  ork3 agent focus <target>");
-    eprintln!("  ork3 agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]");
-    eprintln!("  ork3 agent attach <target> [--takeover]");
-    eprintln!("  ork3 agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
-    eprintln!("  ork3 agent explain <target> [--json]");
-    eprintln!("  ork3 agent explain --file PATH --agent LABEL [--json]");
+    eprintln!("herduck agent commands:");
+    eprintln!("  herduck agent list");
+    eprintln!("  herduck agent get <target>");
+    eprintln!("  herduck agent read <target> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
+    eprintln!("  herduck agent send <target> <text>");
+    eprintln!("  herduck agent rename <target> <name>|--clear");
+    eprintln!("  herduck agent focus <target>");
+    eprintln!(
+        "  herduck agent wait <target> --status <idle|working|blocked|unknown> [--timeout MS]"
+    );
+    eprintln!("  herduck agent attach <target> [--takeover]");
+    eprintln!("  herduck agent start <name> [--cwd PATH] [--workspace ID] [--tab ID] [--split right|down] [--env KEY=VALUE] [--focus|--no-focus] -- <argv...>");
+    eprintln!("  herduck agent explain <target> [--json]");
+    eprintln!("  herduck agent explain --file PATH --agent LABEL [--json]");
     eprintln!("  targets accept terminal ids, unique agent names, detected/reported agent labels, and legacy pane ids");
     eprintln!(
         "  agent send writes literal text; use pane run when you want command text plus Enter"

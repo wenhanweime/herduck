@@ -91,15 +91,15 @@ fn spawn_client_process(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -117,11 +117,11 @@ fn spawn_server(
     api_socket_path: &PathBuf,
     _client_socket_path: &PathBuf,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("ork3-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herduck-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("ork3-dev/config.toml"),
+        config_home.join("herduck-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -135,15 +135,15 @@ fn spawn_server(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -198,7 +198,7 @@ fn first_pane_id_in_workspace(socket_path: &PathBuf, workspace_id: &str) -> Stri
 
 fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "ork3-dev"
+        "herduck-dev"
     } else {
         "herdr"
     }
@@ -302,8 +302,8 @@ fn client_connects_and_receives_frame() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -335,11 +335,11 @@ fn client_sees_headless_startup_config_diagnostic() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let app_dir = if cfg!(debug_assertions) {
-        "ork3-dev"
+        "herduck-dev"
     } else {
         "herdr"
     };
@@ -361,15 +361,15 @@ fn client_sees_headless_startup_config_diagnostic() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, &runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", &api_socket);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", &api_socket);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -400,7 +400,7 @@ fn client_sees_headless_startup_config_diagnostic() {
                 let frame = decode_frame_payload(&payload).expect("decode frame");
                 last_frame_text = frame_text(&frame);
                 if last_frame_text.contains("config.toml")
-                    && last_frame_text.contains("herdr config check")
+                    && last_frame_text.contains("herduck config check")
                 {
                     found_diagnostic = true;
                     break;
@@ -427,25 +427,25 @@ fn server_unreachable_shows_clear_error() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
 
-    fs::create_dir_all(config_home.join("ork3-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herduck-dev")).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     register_runtime_dir(&runtime_dir);
     fs::write(
-        config_home.join("ork3-dev/config.toml"),
+        config_home.join("herduck-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ork3"))
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_herduck"))
         .arg("client")
         .env("HERDR_DISABLE_SOUND", "1")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .env("ORK3_SOCKET_PATH", &api_socket)
-        .env_remove("ORK3_CLIENT_SOCKET_PATH")
-        .env_remove("ORK3_ENV")
+        .env("HERDUCK_SOCKET_PATH", &api_socket)
+        .env_remove("HERDUCK_CLIENT_SOCKET_PATH")
+        .env_remove("HERDUCK_ENV")
         .output()
         .expect("client command should run");
 
@@ -459,7 +459,7 @@ fn server_unreachable_shows_clear_error() {
         "stderr should mention connection failure: {stderr}"
     );
     assert!(
-        stderr.contains("Is ork3 server running?"),
+        stderr.contains("Is herduck server running?"),
         "stderr should include actionable guidance: {stderr}"
     );
     assert!(
@@ -478,8 +478,8 @@ fn server_crash_after_attach_causes_lost_connection_error() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -496,6 +496,17 @@ fn server_crash_after_attach_causes_lost_connection_error() {
         .expect("thin client master")
         .try_clone_reader()
         .expect("clone client PTY reader");
+    // A quiet frame must not turn the deadline below into an unbounded blocking read.
+    let fd = thin_client
+        ._master
+        .as_ref()
+        .and_then(|master| master.as_raw_fd())
+        .expect("PTY fd");
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        assert!(flags >= 0);
+        assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK), 0);
+    }
     let (attached_before_kill, attach_output) = {
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut buf = [0u8; 4096];
@@ -507,6 +518,9 @@ fn server_crash_after_attach_causes_lost_connection_error() {
                     let out = String::from_utf8_lossy(&buf[..n]);
                     output.push_str(&out);
                     if out.contains("\u{2500}")
+                        // Session browser has a vertical sidebar divider. Renderer cursor/style
+                        // escapes can split every letter, so complete labels are not wire tokens.
+                        || out.contains("\u{2502}")
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")
@@ -603,8 +617,8 @@ fn client_receives_frame_after_pane_output() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -650,8 +664,8 @@ fn pane_spawn_cwd_fallback_in_server() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
     let data_dir = config_home.join(app_dir_name());
     let missing_cwd = base.join("missing-cwd-for-test");
     let missing_cwd = missing_cwd.to_str().expect("test cwd should be UTF-8");
@@ -718,8 +732,8 @@ fn graceful_shutdown_sends_server_shutdown_to_client() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -780,13 +794,13 @@ fn client_receives_notify_on_agent_state_change() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     // Enable toast and sound in config so the server produces notifications.
-    fs::create_dir_all(config_home.join("ork3-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herduck-dev")).unwrap();
     fs::write(
-        config_home.join("ork3-dev/config.toml"),
+        config_home.join("herduck-dev/config.toml"),
         "onboarding = false\n[ui.toast]\nenabled = true\n[ui.sound]\nenabled = true\n",
     )
     .unwrap();
@@ -804,15 +818,15 @@ fn client_receives_notify_on_agent_state_change() {
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, &runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", &config_home);
     cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", &api_socket);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", &api_socket);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());

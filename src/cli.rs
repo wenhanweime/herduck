@@ -26,9 +26,9 @@ mod workspace;
 mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
-    "usage: ork3 terminal session observe <target> [--cols N] [--rows N]";
+    "usage: herduck terminal session observe <target> [--cols N] [--rows N]";
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
-    "usage: ork3 terminal session control <target> [--takeover] [--cols N] [--rows N]";
+    "usage: herduck terminal session control <target> [--takeover] [--cols N] [--rows N]";
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
     let Some((key, value)) = raw.split_once('=') else {
@@ -113,7 +113,7 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
 
 fn channel_set(args: &[String]) -> std::io::Result<i32> {
     let Some(channel) = parse_channel_set_arg(args) else {
-        eprintln!("usage: ork3 channel set <stable|preview>");
+        eprintln!("usage: herduck channel set <stable|preview>");
         return Ok(2);
     };
 
@@ -157,7 +157,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
     }
     std::fs::write(&path, updated)?;
     println!(
-        "ORK3 update channel set to {channel} in {}.",
+        "HERDUCK update channel set to {channel} in {}.",
         path.display()
     );
 
@@ -173,7 +173,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
 
     if let Err(err) = crate::update::self_update(crate::update::SelfUpdateOptions::default()) {
         eprintln!("update failed: {err}");
-        eprintln!("Run `ork3 update` to retry.");
+        eprintln!("Run `herduck update` to retry.");
         return Ok(1);
     }
 
@@ -222,9 +222,9 @@ fn channel_set_install_action(
 }
 
 fn print_channel_help() {
-    eprintln!("ork3 channel commands:");
-    eprintln!("  ork3 channel show                  print the configured update channel");
-    eprintln!("  ork3 channel set <stable|preview>  choose the update channel");
+    eprintln!("herduck channel commands:");
+    eprintln!("  herduck channel show                  print the configured update channel");
+    eprintln!("  herduck channel set <stable|preview>  choose the update channel");
 }
 
 fn run_config_command(args: &[String]) -> std::io::Result<i32> {
@@ -251,11 +251,11 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
     match args {
         [] => {}
         [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
-            eprintln!("usage: ork3 config check");
+            eprintln!("usage: herduck config check");
             return Ok(0);
         }
         _ => {
-            eprintln!("usage: ork3 config check");
+            eprintln!("usage: herduck config check");
             return Ok(2);
         }
     }
@@ -275,7 +275,7 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
 
 fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 config reset-keys");
+        eprintln!("usage: herduck config reset-keys");
         return Ok(2);
     }
 
@@ -340,8 +340,10 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
         "Removed [keys], [keys.indexed], and [[keys.command]] from {}.",
         path.display()
     );
-    println!("Built-in v2 keybindings will apply after ORK3 restarts or reloads config.");
-    println!("If a ORK3 server is running, run `ork3 server reload-config` to apply this now.");
+    println!("Built-in v2 keybindings will apply after HERDUCK restarts or reloads config.");
+    println!(
+        "If a HERDUCK server is running, run `herduck server reload-config` to apply this now."
+    );
     println!(
         "To restore: cp {} {}",
         backup_path.display(),
@@ -430,15 +432,15 @@ fn session_attach_help(args: &[String]) -> std::io::Result<i32> {
         args.first().map(String::as_str),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("usage: ork3 session attach <name>");
+        eprintln!("usage: herduck session attach <name>");
         return Ok(0);
     }
-    eprintln!("usage: ork3 session attach <name>");
+    eprintln!("usage: herduck session attach <name>");
     Ok(2)
 }
 
 fn session_list(args: &[String]) -> std::io::Result<i32> {
-    let json = match parse_session_json_only(args, "usage: ork3 session list [--json]") {
+    let json = match parse_session_json_only(args, "usage: herduck session list [--json]") {
         Ok(json) => json,
         Err(code) => return Ok(code),
     };
@@ -456,7 +458,7 @@ fn session_list(args: &[String]) -> std::io::Result<i32> {
 
 fn session_stop(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: ork3 session stop <name> [--json]") {
+        match parse_session_name_and_json(args, "usage: herduck session stop <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -489,7 +491,7 @@ fn session_stop(args: &[String]) -> std::io::Result<i32> {
 
 fn session_delete(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: ork3 session delete <name> [--json]") {
+        match parse_session_name_and_json(args, "usage: herduck session delete <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -516,7 +518,7 @@ fn session_delete(args: &[String]) -> std::io::Result<i32> {
 fn terminal_attach(args: &[String]) -> std::io::Result<i32> {
     let (terminal_id, takeover) = match parse_attach_target(
         args,
-        "usage: ork3 terminal attach <terminal_id> [--takeover]",
+        "usage: herduck terminal attach <terminal_id> [--takeover]",
     ) {
         Ok(parsed) => parsed,
         Err(code) => return Ok(code),
@@ -668,7 +670,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
     match args.first().map(|arg| arg.as_str()) {
         Some("set") => {
             if args.len() != 2 {
-                eprintln!("usage: ork3 terminal title set <title>");
+                eprintln!("usage: herduck terminal title set <title>");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -680,7 +682,7 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
         }
         Some("clear") => {
             if args.len() != 1 {
-                eprintln!("usage: ork3 terminal title clear");
+                eprintln!("usage: herduck terminal title clear");
                 return Ok(2);
             }
             print_response(&send_request(&Request {
@@ -689,13 +691,13 @@ fn terminal_title(args: &[String]) -> std::io::Result<i32> {
             })?)
         }
         Some("help" | "--help" | "-h") => {
-            eprintln!("usage: ork3 terminal title set <title>");
-            eprintln!("       ork3 terminal title clear");
+            eprintln!("usage: herduck terminal title set <title>");
+            eprintln!("       herduck terminal title clear");
             Ok(0)
         }
         _ => {
-            eprintln!("usage: ork3 terminal title set <title>");
-            eprintln!("       ork3 terminal title clear");
+            eprintln!("usage: herduck terminal title set <title>");
+            eprintln!("       herduck terminal title clear");
             Ok(2)
         }
     }
@@ -725,7 +727,7 @@ pub(super) fn parse_attach_target(args: &[String], usage: &str) -> Result<(Strin
 
 fn wait_output(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 wait output <pane_id> --match <text> [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--regex]");
+        eprintln!("usage: herduck wait output <pane_id> --match <text> [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--regex]");
         return Ok(2);
     };
 
@@ -821,7 +823,7 @@ fn wait_output(args: &[String]) -> std::io::Result<i32> {
 
 fn wait_agent_status(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: ork3 wait agent-status <pane_id> --status <idle|working|blocked|done|unknown> [--timeout MS]");
+        eprintln!("usage: herduck wait agent-status <pane_id> --status <idle|working|blocked|done|unknown> [--timeout MS]");
         return Ok(2);
     };
 
@@ -1153,35 +1155,35 @@ fn print_session_error(code: &str, message: &str) {
 }
 
 fn print_config_help() {
-    eprintln!("ork3 config commands:");
-    eprintln!("  ork3 config check  validate config.toml and print diagnostics");
-    eprintln!("  ork3 config reset-keys  back up config.toml and remove custom keybindings");
+    eprintln!("herduck config commands:");
+    eprintln!("  herduck config check  validate config.toml and print diagnostics");
+    eprintln!("  herduck config reset-keys  back up config.toml and remove custom keybindings");
 }
 
 fn print_terminal_help() {
-    eprintln!("ork3 terminal commands:");
-    eprintln!("  ork3 terminal attach <terminal_id> [--takeover]");
-    eprintln!("  ork3 terminal session control <target> [--takeover] [--cols N] [--rows N]");
-    eprintln!("  ork3 terminal session observe <target> [--cols N] [--rows N]");
-    eprintln!("  ork3 terminal title set <title>");
-    eprintln!("  ork3 terminal title clear");
+    eprintln!("herduck terminal commands:");
+    eprintln!("  herduck terminal attach <terminal_id> [--takeover]");
+    eprintln!("  herduck terminal session control <target> [--takeover] [--cols N] [--rows N]");
+    eprintln!("  herduck terminal session observe <target> [--cols N] [--rows N]");
+    eprintln!("  herduck terminal title set <title>");
+    eprintln!("  herduck terminal title clear");
     eprintln!("  detach from direct attach with ctrl+b q; send literal ctrl+b with ctrl+b ctrl+b");
 }
 
 fn print_wait_help() {
-    eprintln!("ork3 wait commands:");
-    eprintln!("  ork3 wait output <pane_id> --match <text> [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--regex] [--raw]");
+    eprintln!("herduck wait commands:");
+    eprintln!("  herduck wait output <pane_id> --match <text> [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--regex] [--raw]");
     eprintln!(
-        "  ork3 wait agent-status <pane_id> --status <idle|working|blocked|done|unknown> [--timeout MS]"
+        "  herduck wait agent-status <pane_id> --status <idle|working|blocked|done|unknown> [--timeout MS]"
     );
 }
 
 fn print_session_help() {
-    eprintln!("ork3 session commands:");
-    eprintln!("  ork3 session list [--json]");
-    eprintln!("  ork3 session attach <name>");
-    eprintln!("  ork3 session stop <name> [--json]");
-    eprintln!("  ork3 session delete <name> [--json]");
+    eprintln!("herduck session commands:");
+    eprintln!("  herduck session list [--json]");
+    eprintln!("  herduck session attach <name>");
+    eprintln!("  herduck session stop <name> [--json]");
+    eprintln!("  herduck session delete <name> [--json]");
     eprintln!("  use 'default' as <name> to target the default session for stop");
 }
 

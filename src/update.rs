@@ -1,7 +1,6 @@
 //! Self-update mechanism.
 //!
-//! Checks the hosted herdr.dev update manifest for newer versions.
-//! Manual `herdr update` downloads and installs the binary.
+//! HERDUCK's release manifest locations are reserved below; self-update is currently disabled.
 //! Background checks only surface availability and release notes.
 //! Uses `curl` as a subprocess for HTTP — no additional Rust HTTP dependencies.
 //! JSON parsing uses serde_json (already in deps for persistence).
@@ -24,12 +23,11 @@ use interprocess::local_socket::traits::Stream as _;
 use serde::{Deserialize, Deserializer};
 
 const STABLE_UPDATE_MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/wenhanweime/ork3/main/releases/latest.json";
+    "https://raw.githubusercontent.com/wenhanweime/herduck/main/releases/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/wenhanweime/ork3/main/releases/preview.json";
+    "https://raw.githubusercontent.com/wenhanweime/herduck/main/releases/preview.json";
 
-/// Self-update is disabled in this fork. The URLs above serve official Herdr builds, which would
-/// overwrite ork3 with upstream. Flip this only once ork3 publishes its own manifest.
+/// Enable only after HERDUCK publishes its own manifests and the inherited installers are adapted.
 const UPDATES_DISABLED: bool = true;
 const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdr.json";
 const HERDR_UPDATE_COMMAND: &str = "herdr update";
@@ -470,9 +468,9 @@ fn release_info_from_preview_manifest(
 
 /// Check the hosted update manifest for the latest release. Returns release info if newer.
 fn check_latest() -> Result<Option<ReleaseInfo>, String> {
-    // ork3 is a fork with its own version line. The upstream manifest only describes official
+    // herduck is a fork with its own version line. The upstream manifest only describes official
     // Herdr builds, so honoring it would offer — and on `update`, install — a binary that
-    // silently replaces this fork. There is no ork3 update channel yet, so never self-update.
+    // silently replaces this fork. There is no herduck update channel yet, so never self-update.
     if UPDATES_DISABLED {
         return Ok(None);
     }
@@ -569,7 +567,7 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
     let parent = current_exe.parent().ok_or("can't find binary directory")?;
 
     // Check write permissions early
-    let test_path = parent.join(".ork3-write-test");
+    let test_path = parent.join(".herduck-write-test");
     if let Err(e) = fs::write(&test_path, b"") {
         let _ = fs::remove_file(&test_path);
         return Err(format!(
@@ -581,7 +579,7 @@ fn download_update(release: &ReleaseInfo) -> Result<DownloadedUpdate, String> {
     let _ = fs::remove_file(&test_path);
 
     // Unique temp file (avoids races with concurrent instances)
-    let tmp_path = parent.join(format!(".ork3-update-{}.tmp", std::process::id()));
+    let tmp_path = parent.join(format!(".herduck-update-{}.tmp", std::process::id()));
 
     // Download the exact asset URL (pinned to the release we checked)
     let status = Command::new("curl")
@@ -874,7 +872,7 @@ fn plan_running_server_updates(
 
     if plans.is_empty() && target_client_protocol_server_is_running()? {
         return Err(format!(
-            "a herdr server is listening, but its status API is unavailable; try `{}`, or stop the old server process manually, then run `herdr update` again",
+            "an herduck server is listening, but its status API is unavailable; try `{}`, or stop the old server process manually, then run `herduck update` again",
             crate::session::local_stop_command()
         ));
     }
@@ -996,7 +994,7 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
             "--help" | "-h" => {
-                return Err("usage: herdr update [--handoff]".to_string());
+                return Err("usage: herduck update [--handoff]".to_string());
             }
             _ => return Err(format!("unknown update option: {arg}")),
         }
@@ -2004,7 +2002,7 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     }
 
     if running_inside_herdr() {
-        return Err("run `herdr update` outside herdr after detaching from the session".into());
+        return Err("run `herduck update` outside herduck after detaching from the session".into());
     }
 
     eprintln!("checking {} channel for updates...", channel.as_str());
@@ -2747,8 +2745,8 @@ mod tests {
             target: RunningUpdateTarget {
                 name: Some("work".to_string()),
                 label: "work".to_string(),
-                stop_command: "ork3 session stop work".to_string(),
-                attach_command: Some("ork3 session attach work".to_string()),
+                stop_command: "herduck session stop work".to_string(),
+                attach_command: Some("herduck session attach work".to_string()),
                 socket_path: crate::session::api_socket_path_for(Some("work")),
                 client_socket_path: crate::session::client_socket_path_for(Some("work")),
                 must_be_running: true,
@@ -2812,7 +2810,7 @@ mod tests {
     fn explicit_session_update_targets_only_that_session() {
         let _guard = env_lock().lock().unwrap();
         let config_home = set_test_config_home("explicit-session");
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ork3-ignored.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/herduck-ignored.sock");
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         let args = vec![
@@ -2841,7 +2839,7 @@ mod tests {
     #[test]
     fn socket_override_update_targets_socket_not_env_session() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ork3-custom.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/herduck-custom.sock");
         std::env::set_var(crate::session::SESSION_ENV_VAR, "work");
         crate::session::clear_explicit_session_for_test();
 
@@ -2855,7 +2853,7 @@ mod tests {
         assert_eq!(targets[0].name, None);
         assert_eq!(
             targets[0].socket_path,
-            PathBuf::from("/tmp/ork3-custom.sock")
+            PathBuf::from("/tmp/herduck-custom.sock")
         );
         assert!(targets[0]
             .stop_command
@@ -2886,7 +2884,7 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(
-            err.contains("ork3 session stop work"),
+            err.contains("herduck session stop work"),
             "unexpected error: {err}"
         );
     }
@@ -2962,8 +2960,8 @@ mod tests {
             target: RunningUpdateTarget {
                 name: Some("work".to_string()),
                 label: "work".to_string(),
-                stop_command: "ork3 session stop work".to_string(),
-                attach_command: Some("ork3 session attach work".to_string()),
+                stop_command: "herduck session stop work".to_string(),
+                attach_command: Some("herduck session attach work".to_string()),
                 socket_path: crate::session::api_socket_path_for(Some("work")),
                 client_socket_path: crate::session::client_socket_path_for(Some("work")),
                 must_be_running: true,
@@ -3439,9 +3437,9 @@ mod tests {
     }
 
     #[test]
-    fn self_update_stays_disabled_until_ork3_release_assets_exist() {
+    fn self_update_stays_disabled_until_herduck_release_assets_exist() {
         assert!(check_latest().unwrap().is_none());
-        assert!(STABLE_UPDATE_MANIFEST_URL.contains("wenhanweime/ork3"));
-        assert!(PREVIEW_UPDATE_MANIFEST_URL.contains("wenhanweime/ork3"));
+        assert!(STABLE_UPDATE_MANIFEST_URL.contains("wenhanweime/herduck"));
+        assert!(PREVIEW_UPDATE_MANIFEST_URL.contains("wenhanweime/herduck"));
     }
 }

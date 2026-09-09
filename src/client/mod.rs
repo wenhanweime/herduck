@@ -1,7 +1,7 @@
 //! Thin client mode — connects to the server's client socket.
 //!
 //! The client:
-//! - Connects to `ork3-client.sock`, sends Hello with terminal size and protocol version
+//! - Connects to `herduck-client.sock`, sends Hello with terminal size and protocol version
 //! - Sets up the real terminal (raw mode, mouse capture, keyboard enhancements)
 //! - Receives Frame messages and blits them to the terminal (diff against last frame)
 //! - Reads stdin events (keystrokes, mouse, paste) and sends them as ClientMessage::Input
@@ -286,7 +286,7 @@ impl std::fmt::Display for ClientError {
             ClientError::ConnectionLost(err) => {
                 if let Ok(reattach_command) = std::env::var(crate::remote::REATTACH_COMMAND_ENV_VAR)
                 {
-                    write!(f, "lost connection to remote ORK3: {err}")?;
+                    write!(f, "lost connection to remote HERDUCK: {err}")?;
                     write!(f, "\nIf the remote server survived the SSH or network drop, its panes may still be running.")?;
                     write!(f, "\nRun `{reattach_command}` to reattach")
                 } else {
@@ -2137,7 +2137,7 @@ fn write_host_terminal_theme_query(mut writer: impl io::Write) -> io::Result<()>
 }
 
 fn init_logging() {
-    crate::logging::init_file_logging("ork3-client.log");
+    crate::logging::init_file_logging("herduck-client.log");
 }
 
 // ---------------------------------------------------------------------------
@@ -2612,7 +2612,7 @@ mod tests {
             "should mention connection failure: {msg}"
         );
         assert!(
-            msg.contains("ork3 server"),
+            msg.contains("herduck server"),
             "should suggest starting server: {msg}"
         );
     }
@@ -2666,7 +2666,7 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(
-            msg.contains("Run `ork3` to reattach"),
+            msg.contains("Run `herduck` to reattach"),
             "should suggest default reattach command: {msg}"
         );
     }
@@ -2681,7 +2681,7 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(
-            msg.contains("Run `ork3 session attach work` to reattach"),
+            msg.contains("Run `herduck session attach work` to reattach"),
             "should suggest named session reattach command: {msg}"
         );
     }
@@ -2691,7 +2691,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         let _remote_env = EnvVarGuard::set(
             crate::remote::REATTACH_COMMAND_ENV_VAR,
-            "ork3 --remote host --session work",
+            "herduck --remote host --session work",
         );
         let _session_env = EnvVarGuard::set(crate::session::SESSION_ENV_VAR, "work");
         let err = ClientError::ServerShutdown {
@@ -2699,7 +2699,7 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(
-            msg.contains("Run `ork3 --remote host --session work` to reattach"),
+            msg.contains("Run `herduck --remote host --session work` to reattach"),
             "should prefer remote reattach command: {msg}"
         );
     }
@@ -2722,13 +2722,13 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         let _remote_env = EnvVarGuard::set(
             crate::remote::REATTACH_COMMAND_ENV_VAR,
-            "ork3 --remote host --session work",
+            "herduck --remote host --session work",
         );
         let err =
             ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
         let msg = err.to_string();
         assert!(
-            msg.contains("lost connection to remote ORK3"),
+            msg.contains("lost connection to remote HERDUCK"),
             "should mention remote connection loss: {msg}"
         );
         assert!(
@@ -2736,7 +2736,7 @@ mod tests {
             "should explain possible persistence: {msg}"
         );
         assert!(
-            msg.contains("Run `ork3 --remote host --session work` to reattach"),
+            msg.contains("Run `herduck --remote host --session work` to reattach"),
             "should show remote reattach command: {msg}"
         );
     }

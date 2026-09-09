@@ -214,21 +214,15 @@ impl App {
         if self.project_service.is_available() {
             return;
         }
-        let mut service = crate::projects::ProjectService::open_with_threshold(
+        let mut service = crate::projects::ProjectService::open_with_config(
             &crate::session::data_dir().join("projects/catalog.sqlite3"),
             self.event_hub.clone(),
-            self.loaded_projects_config.automation_title_threshold,
+            &self.loaded_projects_config,
         );
-        if let Err(error) =
-            service.set_title_language(self.loaded_projects_config.summary.title_language)
-        {
-            tracing::warn!("Could not configure title language: {}", error.message);
-        }
         service.start_background_scan(self.project_roots.roots());
-        let summary_config =
-            crate::projects::semantic::SemanticConfig::from_projects(&self.loaded_projects_config);
-        service.start_semantic_classification(summary_config.clone());
-        service.start_title_generation(summary_config);
+        if let Err(error) = service.configure_summaries(&self.loaded_projects_config.summary) {
+            tracing::warn!("Could not configure summaries: {}", error.message);
+        }
         self.project_service = service;
         self.project_runtime_leases.clear();
         self.next_project_runtime_generation = 1;
@@ -291,19 +285,78 @@ mod tests {
         );
         assert_eq!(session.runtime_generation, Some(1));
         let stable_key = session.stable_key.clone();
+        assert!(app.state.projects.snapshot.topics.is_empty());
         assert!(app
             .state
             .projects
             .snapshot
-            .topics
+            .projects
             .iter()
-            .flat_map(|topic| &topic.sessions)
+            .flat_map(|project| &project.sessions)
             .any(|session| session.stable_key == stable_key && session.live));
 
         app.handle_internal_event(AppEvent::PaneDied { pane_id });
         let snapshot = app.project_service.snapshot();
         assert!(!snapshot.projects[0].sessions[0].live);
         assert!(app.project_runtime_leases.is_empty());
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_keeps_catalog_mapping_and_native_conversation_live() {
+        let (mut app, pane_id) = app_with_project_runtime();
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        report(&mut app, pane_id, "inactive-native-session", 1, "startup");
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(crate::detect::Agent::Codex),
+            state: AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+        assert_eq!(app.state.terminals[&terminal_id].state, AgentState::Idle);
+        let snapshot = app.project_service.snapshot();
+        let lease = app.project_runtime_leases[&pane_id].clone();
+        let native_session = app.state.terminals[&terminal_id]
+            .persisted_agent_session
+            .clone();
+        assert!(native_session.is_some());
+        let now = std::time::Instant::now();
+        app.terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_set_last_activity_at(now - std::time::Duration::from_secs(3600));
+
+        assert!(app.refresh_agent_inactivity(now));
+        assert_eq!(app.project_runtime_leases[&pane_id], lease);
+        let after = app.project_service.snapshot();
+        assert_eq!(after.revision, snapshot.revision);
+        let session = &after.projects[0].sessions[0];
+        assert!(session.live);
+        assert_eq!(session.stable_key, lease.session_key);
+        assert_eq!(session.runtime_generation, Some(lease.generation));
+        assert_eq!(session.pane_id.as_deref(), Some(lease.pane_id.as_str()));
+        assert_eq!(
+            app.state.terminals[&terminal_id].persisted_agent_session,
+            native_session
+        );
+
+        app.terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .try_send_bytes(bytes::Bytes::from_static(b"continue this conversation\r"))
+            .unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), "continue this conversation\r");
+        assert!(app.refresh_agent_inactivity(std::time::Instant::now()));
+        assert!(!app.state.terminals[&terminal_id].agent_inactive);
+        assert_eq!(app.project_runtime_leases[&pane_id], lease);
+        assert_eq!(
+            app.state.terminals[&terminal_id].persisted_agent_session,
+            native_session
+        );
     }
 
     #[test]

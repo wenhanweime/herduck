@@ -14,8 +14,6 @@ use crate::layout::PaneId;
 /// type instead of the pane module's implementation detail.
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
-pub(crate) struct AgentProcessShutdown(crate::pane::ForegroundAgentShutdown);
-
 impl TerminalRuntime {
     pub fn shutdown(self) {
         self.0.shutdown();
@@ -469,31 +467,6 @@ impl TerminalRuntime {
 
     pub(crate) fn mark_activity_at(&self, observed_at: std::time::Instant) {
         self.0.mark_activity_at(observed_at);
-    }
-
-    pub(crate) fn begin_foreground_agent_shutdown(
-        &self,
-        expected_agent: crate::detect::Agent,
-        allow_child_process_group: bool,
-        inactive_before: std::time::Instant,
-        attempted_at: std::time::Instant,
-    ) -> Option<AgentProcessShutdown> {
-        self.0
-            .begin_foreground_agent_shutdown(
-                expected_agent,
-                allow_child_process_group,
-                inactive_before,
-                attempted_at,
-            )
-            .map(AgentProcessShutdown)
-    }
-
-    pub(crate) fn finish_agent_process_shutdowns(
-        shutdowns: Vec<AgentProcessShutdown>,
-    ) -> Vec<crate::layout::PaneId> {
-        crate::pane::finish_foreground_agent_shutdowns(
-            shutdowns.into_iter().map(|shutdown| shutdown.0).collect(),
-        )
     }
 
     pub(crate) fn current_size(&self) -> (u16, u16) {

@@ -2,7 +2,7 @@ mod tokens;
 
 use ratatui::{
     layout::{Alignment, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -33,10 +33,39 @@ pub(crate) struct AgentPanelEntry {
     pub agent_label: Option<String>,
     pub agent: Option<crate::detect::Agent>,
     pub state: AgentState,
+    pub agent_inactive: bool,
     pub seen: bool,
     pub last_agent_state_change_seq: Option<u64>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
+}
+
+impl AgentPanelEntry {
+    pub(super) fn status_label(&self) -> &str {
+        if self.agent_inactive {
+            return "inactive";
+        }
+        self.state_labels
+            .get(agent_panel_status_key(self.state, self.seen))
+            .map(String::as_str)
+            .unwrap_or_else(|| state_label(self.state, self.seen))
+    }
+
+    pub(super) fn status_color(&self, palette: &Palette) -> Color {
+        if self.agent_inactive {
+            palette.overlay0
+        } else {
+            state_label_color(self.state, self.seen, palette)
+        }
+    }
+
+    pub(super) fn status_icon(&self, tick: u32, palette: &Palette) -> (&'static str, Style) {
+        if self.agent_inactive {
+            ("○", Style::default().fg(palette.overlay0))
+        } else {
+            agent_icon(self.state, self.seen, tick, palette)
+        }
+    }
 }
 
 fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
@@ -63,7 +92,14 @@ pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, 
     }
 
     let (ws_h, detail_h) = sidebar_section_heights(content.height, split_ratio);
-    let ws_area = Rect::new(content.x, content.y, content.width, ws_h);
+    // Keep the Spaces header below the shared tabs without moving the section divider.
+    let tab_inset = super::projects::sidebar_tab_height(content.height).min(ws_h);
+    let ws_area = Rect::new(
+        content.x,
+        content.y + tab_inset,
+        content.width,
+        ws_h.saturating_sub(tab_inset),
+    );
     let detail_area = Rect::new(content.x, content.y + ws_h, content.width, detail_h);
     (ws_area, detail_area)
 }
@@ -155,6 +191,7 @@ fn agent_panel_entries_with_runtimes(
                         agent_label: Some(detail.agent_label),
                         agent: detail.agent,
                         state: detail.state,
+                        agent_inactive: detail.agent_inactive,
                         seen: detail.seen,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         state_labels: detail.state_labels,
@@ -594,12 +631,25 @@ pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
 }
 
 fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<ResolvedToken>> {
-    let label = entry
-        .state_labels
-        .get(agent_panel_status_key(entry.state, entry.seen))
-        .map(String::as_str)
-        .unwrap_or_else(|| state_label(entry.state, entry.seen));
-    tokens::agent_rows(&app.sidebar_agents, entry, label)
+    let mut rows = tokens::agent_rows(&app.sidebar_agents, entry, entry.status_label());
+    // Default rows omit ordinary status text. Keep inactivity explicit in an existing row,
+    // so a retained session is recognizable without increasing the card's height.
+    if entry.agent_inactive
+        && !rows
+            .iter()
+            .flatten()
+            .any(|token| matches!(token, ResolvedToken::StateText(_)))
+    {
+        let status_row = usize::from(rows.len() > 1);
+        let status = ResolvedToken::StateText(entry.status_label().to_string());
+        if let Some(row) = rows.get_mut(status_row) {
+            let index = usize::from(matches!(row.first(), Some(ResolvedToken::StateIcon)));
+            row.insert(index, status);
+        } else {
+            rows.push(vec![status]);
+        }
+    }
+    rows
 }
 
 pub(crate) fn agent_entry_height_in_body(
@@ -876,7 +926,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             }
             let position = detail_idx + 1;
             let position_style = Style::default().fg(p.overlay0);
-            let (icon, icon_style) = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
+            let (icon, icon_style) = detail.status_icon(app.spinner_tick, p);
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::styled(format!("{position:<2}"), position_style),
@@ -1340,24 +1390,30 @@ fn render_workspace_list(
             Paragraph::new(Span::styled(" new", Style::default().fg(p.overlay0))),
             new_rect,
         );
-
-        let menu_rect = app.global_launcher_rect();
-        let menu_line = if app.global_menu_attention_badge_visible() {
-            Line::from(vec![
-                Span::styled(
-                    "● ",
-                    Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("menu", Style::default().fg(p.overlay0)),
-            ])
-        } else {
-            Line::from(vec![Span::styled("menu", Style::default().fg(p.overlay0))])
-        };
-        frame.render_widget(
-            Paragraph::new(menu_line).alignment(Alignment::Right),
-            menu_rect,
-        );
     }
+}
+
+pub(super) fn render_sidebar_menu(app: &AppState, frame: &mut Frame) {
+    let p = &app.palette;
+    let menu_rect = app.global_launcher_rect();
+    let menu_line = if app.global_menu_attention_badge_visible() {
+        Line::from(vec![
+            Span::styled(
+                "● ",
+                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("settings / menu", Style::default().fg(p.overlay0)),
+        ])
+    } else {
+        Line::from(vec![Span::styled(
+            "settings / menu",
+            Style::default().fg(p.overlay0),
+        )])
+    };
+    frame.render_widget(
+        Paragraph::new(menu_line).alignment(Alignment::Right),
+        menu_rect,
+    );
 }
 
 fn render_agent_detail(
@@ -1408,7 +1464,7 @@ fn render_agent_detail(
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
     for (index, detail) in details.iter().enumerate().skip(app.agent_panel_scroll) {
-        let label_color = state_label_color(detail.state, detail.seen, p);
+        let label_color = detail.status_color(p);
         let rows = resolved_agent_rows(app, detail);
         let height = (rows.len().max(1) as u16).min(body.height);
         if row_y.saturating_add(height) > body_bottom {
@@ -1421,7 +1477,9 @@ fn render_agent_detail(
         } else {
             Style::default()
         };
-        let name_style = if is_active {
+        let name_style = if detail.agent_inactive {
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)
+        } else if is_active {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
@@ -1432,8 +1490,12 @@ fn render_agent_detail(
         } else {
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
-        let agent_style = agent_identity_style(detail.agent, p);
-        let state_icon = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
+        let agent_style = if detail.agent_inactive {
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)
+        } else {
+            agent_identity_style(detail.agent, p)
+        };
+        let state_icon = detail.status_icon(app.spinner_tick, p);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
@@ -1562,6 +1624,46 @@ mod tests {
         assert!(second.contains("one"));
         assert!(!first.contains("working"));
         assert!(!second.contains("working"));
+    }
+
+    #[test]
+    fn inactive_agents_keep_two_visible_rows_and_a_muted_status() {
+        let mut app = AppState::test_new();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+        app.ensure_test_terminals();
+        let terminal_id = app.terminal_id_for_pane(0, pane_id).unwrap();
+        let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal_state.detected_agent = Some(Agent::Codex);
+        terminal_state.state = AgentState::Idle;
+        terminal_state.set_terminal_title(Some("review auth".into()));
+        terminal_state.set_agent_inactive(true);
+
+        for palette in [Palette::catppuccin(), Palette::catppuccin_latte()] {
+            app.palette = palette;
+            let entries = agent_panel_entries(&app);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].pane_id, pane_id);
+            assert_eq!(resolved_agent_rows(&app, &entries[0]).len(), 2);
+            let area = Rect::new(0, 0, 40, 20);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+                .unwrap();
+            let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+            let body = agent_panel_body_rect(agent_area, false);
+            let buffer = terminal.backend().buffer();
+            assert!(row_text(buffer, body.y, area.width).contains("review auth"));
+            let second = row_text(buffer, body.y + 1, area.width);
+            assert!(second.contains("inactive"), "{second}");
+            assert!(second.contains("one"), "{second}");
+            let status_x = second.find("inactive").unwrap() as u16;
+            assert_eq!(buffer[(status_x, body.y + 1)].fg, app.palette.overlay0);
+            assert_eq!(buffer[(body.x, body.y)].symbol(), "▎");
+            assert_eq!(buffer[(body.x, body.y)].fg, app.palette.accent);
+        }
     }
 
     #[test]
@@ -2215,7 +2317,7 @@ mod tests {
     fn expanded_sidebar_sections_handle_tiny_heights() {
         let (ws_area, detail_area) = expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9);
 
-        assert_eq!(ws_area, Rect::new(0, 0, 19, 3));
+        assert_eq!(ws_area, Rect::new(0, 1, 19, 2));
         assert_eq!(detail_area, Rect::new(0, 3, 19, 2));
     }
 

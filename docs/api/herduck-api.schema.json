@@ -766,6 +766,10 @@
                 "null"
               ]
             },
+            "agent_inactive": {
+              "description": "Idle timeout reached without terminating the running conversation.",
+              "type": "boolean"
+            },
             "agent_session": {
               "anyOf": [
                 {
@@ -1977,7 +1981,7 @@
             "position": {
               "anyOf": [
                 {
-                  "$ref": "#/schemas/request/$defs/ToastOrk3Position"
+                  "$ref": "#/schemas/request/$defs/ToastHerduckPosition"
                 },
                 {
                   "type": "null"
@@ -3873,7 +3877,7 @@
           ],
           "type": "object"
         },
-        "ToastOrk3Position": {
+        "ToastHerduckPosition": {
           "enum": [
             "top-left",
             "top-right",
@@ -5840,6 +5844,10 @@
                 "null"
               ]
             },
+            "agent_inactive": {
+              "description": "Idle timeout reached without terminating the running conversation.",
+              "type": "boolean"
+            },
             "agent_session": {
               "anyOf": [
                 {
@@ -7199,6 +7207,10 @@
                 "string",
                 "null"
               ]
+            },
+            "agent_inactive": {
+              "description": "Idle timeout reached without terminating the running conversation.",
+              "type": "boolean"
             },
             "agent_session": {
               "anyOf": [
@@ -10028,5 +10040,5 @@
       "type": "object"
     }
   },
-  "title": "ORK3 API"
+  "title": "HERDUCK API"
 }

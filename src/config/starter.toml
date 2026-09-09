@@ -1,0 +1,44 @@
+# HERDUCK configuration
+# Save this file, then reopen Settings to load changes.
+# Full reference: herduck --default-config
+
+[session]
+# Used by Settings > Sessions > Start session. Empty also means a shell.
+# Tabs and splits open a shell; Resume uses the original Agent.
+default_agent = "shell"
+
+[projects.summary]
+# pending = off, auto = try sources in order, local = offline names only.
+mode = "pending"
+title_language = "en" # "en" or "zh"
+providers = []
+
+# Add sources below in priority order: first, second, third, ...
+# To enable the examples, set mode = "auto", remove providers = [],
+# and uncomment the sources you want to use.
+
+# Priority 1: an installed Agent, using its own login.
+# [[projects.summary.providers]]
+# id = "codex"
+# kind = "cli"
+# models = [] # Agent default; or model IDs to try in order.
+
+# Priority 2: an OpenAI-compatible API.
+# [[projects.summary.providers]]
+# id = "my-api"
+# kind = "openai_compatible"
+# endpoint = "http://localhost:11434/v1/chat/completions"
+# models = ["your-model"]
+# api_key_env = "SUMMARY_API_KEY" # Omit if no key is required.
+# Set the key in the environment before starting HERDUCK; never paste it here.
+
+# Session names use the same source order by default.
+# For a separate order, add [[projects.summary.title_providers]] entries
+# with the same fields. To use only local names, set title_providers = []
+# inside [projects.summary], before any provider entries.
+# Failed model attempts fall back to local names. Manual names are kept.
+
+# Extra history directories are optional; standard locations are discovered.
+# Changes to directories require an HERDUCK restart.
+# [projects.adapters.codex]
+# roots = ["~/other-codex-home/sessions"]

@@ -3,7 +3,7 @@
 > 状态：v0.1 · 已实现
 > 日期：2026-08-17
 > 关系：本文是 `SPEC-semantic-project-clustering.md` v0.1 的**修复增补**，不替换它。
-> 依据：对本机真实 Catalog（`~/.config/ork3-dev/projects/catalog.sqlite3`，12,486 会话 /
+> 依据：对本机真实 Catalog（`~/.config/herduck-dev/projects/catalog.sqlite3`，12,486 会话 /
 > 9,552 条语义分配）的实测审计，全部数字来自 2026-08-17 的直接 SQL 查询，非估计。
 
 ---
@@ -58,7 +58,7 @@ prompt 计入 `user_chars`（实测 2,856–67,912），轻松通过 substantive
 **R2 · 分类器自我污染（P0）**
 语义分类用 `opencode run` 跑批（`src/projects/semantic.rs::backend_command`），每次调用
 都在 `opencode.db` 落一条新 session；下一轮扫描把它们捡回 Catalog，形成
-`New session - …`、`user_chars=0` 的空会话，cwd 为 ork3 server 当时的工作目录 —— 因此
+`New session - …`、`user_chars=0` 的空会话，cwd 为 herduck server 当时的工作目录 —— 因此
 `herdr-projects/herdr` 项目凭空多出 1,140 条、`agent-session-atlas` 多出 561 条。时间
 分布（08-11 日 1,003 条 / 08-14 日 648 条）与分类运行日吻合。`codex exec` 兜底同样落
 盘（库中已有 1 条标题为聚类 prompt 本身的会话）。只有 pi 因 `--no-session` 幸免。
@@ -74,9 +74,9 @@ watchdog —— 这就是「聚类不合理」的主体。
 
 **R4 · Projects 视图不过滤垃圾 + 临时目录识别过窄（P1）**
 substantive 过滤只用在语义分类入口，Projects 树照单全收 2,161 条空会话与成片 0-turn
-会话；35 个项目为纯噪音。ephemeral 检测只硬编码 `paseo-multica-agent-` 前缀
+会话；35 个项目为纯噪音。ephemeral 检测只硬编码 `ci-worker-` 前缀
 （`src/projects/classifier.rs:5`），漏掉：AionUi 的 29 个
-`…/Application Support/AionUi/aionui/codex-temp-<epoch>`、`/private/tmp/ork-direct-accept.*`、
+`…/Application Support/AionUi/aionui/codex-temp-<epoch>`、`/private/tmp/ci-accept.*`、
 `…/Application Support/dev.ork.ork/general` 与 `dev.runboard.runboard/general` 等运行器
 状态目录（三个重名 `general` 项目并存）。
 
@@ -191,7 +191,7 @@ assignment evidence 承担）。
 将 `is_ephemeral_agent_cwd`（`src/projects/classifier.rs`）从单前缀硬编码改为规则集：
 
 1. cwd 位于系统 temp（现有逻辑保留，前缀列表扩展为可维护常量表，含
-   `paseo-multica-agent-*`、`ork-direct-accept.*` 等）。
+   `ci-worker-*`、`ci-accept.*` 等）。
 2. cwd 位于 `~/Library/Application Support/<AppId>/` 下且末段匹配临时模式
    `<name>-temp-<10+位数字>`（覆盖 AionUi `codex-temp-<epoch>`）。
 3. cwd 末段为运行器状态目录（如 `…/Application Support/dev.*/general`）：按
@@ -206,7 +206,7 @@ assignment evidence 承担）。
 
 1. Given 实测的 29 个 AionUi `codex-temp-*` cwd，When 重新分类，Then 归入
    `Ephemeral agent sessions`，Projects 快照不出现。
-2. Given `/private/tmp/ork-direct-accept.E1hQlA/state/general`，同上。
+2. Given `/private/tmp/ci-accept.E1hQlA/state/general`，同上。
 3. Given 用户真实项目 `~/Projects/my-temp-1234567890`（非 Application Support、目录存在、
    git 仓库），When 分类，Then 仍是正常项目。
 
@@ -257,7 +257,7 @@ assignment evidence 承担）。
 
 **Acceptance criteria：**
 
-1. Given `pot` 项目含 12 条 0-turn 会话与若干真实会话，When 打开 Projects，Then 真实
+1. Given 示例项目含 12 条 0-turn 会话与若干真实会话，When 打开 Projects，Then 真实
    会话在前，thin 折叠计数正确。
 2. Given 35 个纯 thin 项目，When 排序，Then 全部位于有实质会话的项目之后。
 

@@ -65,6 +65,8 @@ use self::{
 };
 use super::state::{AppState, Mode};
 use super::App;
+#[cfg(test)]
+pub(crate) use settings::select_settings_section;
 
 // ---------------------------------------------------------------------------
 // Key handling
@@ -144,6 +146,7 @@ impl App {
 
     pub(crate) fn paste_into_active_text_input(&mut self, text: &str) -> bool {
         match self.state.mode {
+            Mode::Settings => false,
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::RenameSession => {
                 insert_rename_input_text(&mut self.state, text);
                 true
@@ -280,12 +283,9 @@ impl App {
         self.state.projects.history_scroll = 0;
     }
 
-    /// Starts the historical agent only after the user submits non-empty content. The content is
+    /// Enter resumes even without a message. Non-empty content is
     /// held until detection confirms that the resumed CLI has reached its idle prompt.
     fn submit_project_history_draft(&mut self) {
-        if self.state.projects.history_draft.trim().is_empty() {
-            return;
-        }
         let Some(session) = self
             .state
             .projects
@@ -296,9 +296,41 @@ impl App {
             return;
         };
         let draft = self.state.projects.history_draft.clone();
+        let mapped_pane = session
+            .live
+            .then(|| {
+                let workspace = session.workspace_id.as_ref()?;
+                let pane = session.pane_id.as_ref()?;
+                self.parse_pane_id(pane)
+                    .filter(|(idx, _)| self.public_workspace_id(*idx) == *workspace)
+            })
+            .flatten();
+        if let Some((ws_idx, pane_id)) =
+            mapped_pane.or_else(|| self.pane_for_catalog_session(&session))
+        {
+            if !draft.trim().is_empty() {
+                self.pending_catalog_submissions.insert(pane_id, draft);
+                // An already-idle instance may not produce another state transition.
+                if let Some(state) = self.find_pane(pane_id).and_then(|(_, pane)| {
+                    self.state
+                        .terminals
+                        .get(&pane.attached_terminal_id)
+                        .map(|t| t.state)
+                }) {
+                    self.flush_pending_catalog_submission(pane_id, state);
+                }
+            }
+            self.state.projects.history_draft.clear();
+            self.state.projects.history_session_key = None;
+            self.focus_pane_internal_via_api(ws_idx, pane_id);
+            self.state.mode = Mode::Terminal;
+            return;
+        }
         match self.spawn_catalog_session_resume(&session) {
             Ok((_ws_idx, pane_id)) => {
-                self.pending_catalog_submissions.insert(pane_id, draft);
+                if !draft.trim().is_empty() {
+                    self.pending_catalog_submissions.insert(pane_id, draft);
+                }
                 self.state.projects.history_draft.clear();
             }
             Err(reason) => {
@@ -433,19 +465,10 @@ impl App {
     }
 
     fn ensure_project_selection_visible(&mut self) {
-        let viewport = usize::from(self.state.view.project_tree_rect.height).max(1);
-        if self.state.projects.selected_row < self.state.projects.scroll {
-            self.state.projects.scroll = self.state.projects.selected_row;
-        } else if self.state.projects.selected_row
-            >= self.state.projects.scroll.saturating_add(viewport)
-        {
-            self.state.projects.scroll = self
-                .state
-                .projects
-                .selected_row
-                .saturating_add(1)
-                .saturating_sub(viewport);
-        }
+        self.state.projects.scroll = crate::ui::project_tree_scroll_for_selection(
+            &self.state,
+            self.state.view.project_tree_rect.height,
+        );
     }
 
     pub(super) fn execute_project_tree_action(
@@ -772,7 +795,7 @@ impl App {
         self.state.projects.history_session_key = Some(session_key);
         self.state.projects.history_scroll = 0;
         if switching_session {
-            self.state.projects.history_view = crate::app::state::ProjectHistoryView::Preview;
+            self.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
             self.state.projects.history_draft.clear();
         }
         self.state.mode = Mode::ProjectHistory;
@@ -861,42 +884,12 @@ impl App {
         else {
             return;
         };
-        let groups = match grouping {
-            crate::app::state::ProjectGrouping::Directories => {
-                &mut self.state.projects.snapshot.projects
-            }
-            crate::app::state::ProjectGrouping::Topics => &mut self.state.projects.snapshot.topics,
-        };
-        let Some(project) = groups
-            .iter_mut()
-            .find(|project| project.canonical_key == project_key)
-        else {
-            return;
-        };
-        let mut seen = project
-            .sessions
-            .iter()
-            .map(|session| session.stable_key.clone())
-            .collect::<std::collections::HashSet<_>>();
-        project.sessions.extend(
-            page.sessions
-                .into_iter()
-                .filter(|session| seen.insert(session.stable_key.clone())),
-        );
-        project.sessions.sort_by(|left, right| {
-            right
-                .last_activity_at
-                .cmp(&left.last_activity_at)
-                .then_with(|| left.stable_key.cmp(&right.stable_key))
-        });
-        project.next_cursor = page.next_cursor;
-        self.state.projects.snapshot.revision =
-            self.state.projects.snapshot.revision.max(page.revision);
-        self.normalize_project_selection();
+        self.apply_project_sessions_page(grouping, page, self.project_service.snapshot());
     }
 
     pub(crate) fn handle_onboarding_key(&mut self, key: KeyEvent) {
         match key.code {
+            KeyCode::Esc => self.finish_onboarding(),
             KeyCode::Right | KeyCode::Char('l') => self.open_settings_from_onboarding(),
             _ => {
                 if let Some(ModalAction::Continue) =
@@ -1022,10 +1015,9 @@ impl App {
             if let Some(action) = self.state.handle_mouse(&mut self.terminal_runtimes, mouse) {
                 match action {
                     MouseAction::Settings(action) => match action {
+                        SettingsAction::OpenConfigFile => self.open_settings_config_file(),
+                        SettingsAction::NewSession => self.new_session_from_settings(),
                         SettingsAction::SaveTheme(name) => self.save_theme(&name),
-                        SettingsAction::SaveTitleLanguage(language) => {
-                            self.save_title_language(language)
-                        }
                         SettingsAction::SaveSound(enabled) => self.save_sound(enabled),
                         SettingsAction::SaveToastDelivery(delivery) => {
                             self.save_toast_delivery(delivery)
@@ -1078,6 +1070,11 @@ impl App {
             && self.state.settings.section == crate::app::state::SettingsSection::Integrations
         {
             self.refresh_integration_recommendations();
+        }
+        if previous_settings_section != crate::app::state::SettingsSection::Sessions
+            && self.state.settings.section == crate::app::state::SettingsSection::Sessions
+        {
+            self.refresh_session_setup();
         }
         if self.state.agent_panel_sort != previous_agent_panel_sort {
             self.save_agent_panel_sort(self.state.agent_panel_sort);
@@ -1310,6 +1307,7 @@ pub(crate) fn is_modal_paste_shortcut(key: &KeyEvent) -> bool {
 
 pub(crate) fn modal_paste_target_active(state: &AppState) -> bool {
     match state.mode {
+        Mode::Settings => false,
         Mode::RenameWorkspace
         | Mode::RenameTab
         | Mode::RenamePane
@@ -1670,7 +1668,7 @@ mod tests {
         );
         assert_eq!(
             app.state.projects.history_view,
-            crate::app::state::ProjectHistoryView::Preview
+            crate::app::state::ProjectHistoryView::Full
         );
     }
 
@@ -1703,7 +1701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn composing_in_full_history_does_not_activate_until_non_empty_enter() {
+    async fn composing_in_full_history_does_not_activate_before_enter() {
         let (mut app, _activation, mut receiver) = app_with_project_runtime();
         app.state.mode = Mode::ProjectHistory;
         app.state.projects.history_session_key = Some("session-live".into());
@@ -1718,12 +1716,85 @@ mod tests {
         assert_eq!(app.state.workspaces[0].tabs.len(), tabs_before);
         assert!(app.pending_catalog_submissions.is_empty());
         assert!(receiver.try_recv().is_err());
+        assert_eq!(app.state.mode, Mode::ProjectHistory);
 
         app.state.projects.history_draft = "   ".into();
         app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
             .await;
         assert_eq!(app.state.workspaces[0].tabs.len(), tabs_before);
         assert!(app.pending_catalog_submissions.is_empty());
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn submitting_to_an_already_idle_session_sends_once_without_another_transition() {
+        let (mut app, _, mut receiver) = app_with_project_runtime();
+        app.state.mode = Mode::ProjectHistory;
+        app.state.projects.history_session_key = Some("session-live".into());
+        app.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+        app.state.projects.history_draft = "继续处理".into();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .expect("terminal")
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .state = crate::detect::AgentState::Idle;
+        let tabs_before = app.state.workspaces[0].tabs.len();
+
+        app.handle_project_history_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].tabs.len(), tabs_before);
+        assert_eq!(
+            receiver.try_recv().expect("submitted message"),
+            "继续处理\r"
+        );
+        assert!(app.state.projects.history_draft.is_empty());
+        assert!(app.pending_catalog_submissions.is_empty());
+        app.flush_pending_catalog_submission(pane_id, crate::detect::AgentState::Idle);
+        assert!(receiver.try_recv().is_err(), "must not send a second time");
+    }
+
+    #[tokio::test]
+    async fn empty_enter_focuses_an_existing_runtime_without_sending_a_message() {
+        let (mut app, _, mut receiver) = app_with_project_runtime();
+        app.state.mode = Mode::ProjectHistory;
+        app.state.projects.history_session_key = Some("session-live".into());
+        app.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+        let tabs = app.state.workspaces[0].tabs.len();
+        app.handle_project_history_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].tabs.len(), tabs);
+        assert!(app.pending_catalog_submissions.is_empty());
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn empty_and_nonempty_enter_attempt_resume_and_keep_draft_on_failure() {
+        for draft in ["", "继续处理"] {
+            let (mut app, _, mut receiver) = app_with_project_runtime();
+            app.state.projects.snapshot.projects[0].sessions[0].live = false;
+            app.state.mode = Mode::ProjectHistory;
+            app.state.projects.history_session_key = Some("session-live".into());
+            app.state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+            app.state.projects.history_draft = draft.into();
+            // Missing native ref fails safely; this must not invoke a real CLI in tests.
+            app.handle_project_history_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+            assert!(app
+                .state
+                .projects
+                .history_fallback_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("No resume command")));
+            assert_eq!(app.state.projects.history_draft, draft);
+            assert_eq!(app.state.mode, Mode::ProjectHistory);
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     #[test]
@@ -1758,6 +1829,35 @@ mod tests {
             receiver.recv().await.expect("terminal input"),
             bytes::Bytes::from_static(b"x")
         );
+    }
+
+    #[tokio::test]
+    async fn inactive_project_activation_keeps_the_original_pane_and_input_channel() {
+        let (mut app, activation, mut receiver) = app_with_project_runtime();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(crate::detect::Agent::Codex);
+        terminal.state = crate::detect::AgentState::Idle;
+        terminal.set_agent_inactive(true);
+        let tabs = app.state.workspaces[0].tabs.len();
+        app.state.mode = Mode::Navigate;
+
+        app.execute_project_tree_action(crate::app::state::ProjectTreeAction::Activate(activation));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces[0].tabs.len(), tabs);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane_id));
+        assert_eq!(
+            app.state.terminal_id_for_pane(0, pane_id),
+            Some(terminal_id)
+        );
+        let session = &app.state.projects.snapshot.projects[0].sessions[0];
+        assert!(session.live);
+        assert_eq!(session.runtime_generation, Some(9));
+        app.handle_key(TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty()))
+            .await;
+        assert_eq!(receiver.try_recv().unwrap(), "x");
+        assert!(app.pending_catalog_submissions.is_empty());
     }
 
     #[tokio::test]
@@ -1999,6 +2099,86 @@ mod tests {
             app.state.sidebar_view,
             crate::app::state::SidebarView::SpacesAgents
         );
+    }
+
+    #[tokio::test]
+    async fn project_library_navigation_reaches_rows_with_live_status_lines() {
+        let (mut app, _, _receiver) = app_with_project_runtime();
+        let seed = app.state.projects.snapshot.projects[0].sessions[0].clone();
+        app.state.projects.snapshot.projects[0].sessions = (0..12)
+            .map(|index| {
+                let mut session = seed.clone();
+                session.stable_key = format!("session-{index}");
+                session.title = format!("Session {index}");
+                session.last_activity_at = 100 - index;
+                session.live = index % 2 == 0;
+                if !session.live {
+                    session.workspace_id = None;
+                    session.pane_id = None;
+                    session.runtime_generation = None;
+                }
+                session
+            })
+            .collect();
+        let mut topic = app.state.projects.snapshot.projects[0].clone();
+        topic.kind = crate::projects::ProjectKind::Semantic;
+        app.state.projects.snapshot.topics = vec![topic];
+        app.state.mode = Mode::Navigate;
+        let area = ratatui::layout::Rect::new(0, 0, 106, 12);
+
+        for view in [
+            crate::app::state::SidebarView::Sessions,
+            crate::app::state::SidebarView::Projects,
+            crate::app::state::SidebarView::Clusters,
+        ] {
+            app.state.sidebar_view = view;
+            app.state.projects.selected_row = 0;
+            app.state.projects.scroll = 0;
+            crate::ui::compute_view(&mut app.state, area);
+            let rows = crate::ui::project_tree_rows(&app.state);
+            let last = rows.len() - 1;
+            for (key, targets) in [
+                (KeyCode::Down, (1..=last).collect::<Vec<_>>()),
+                (KeyCode::Up, (0..last).rev().collect::<Vec<_>>()),
+            ] {
+                for target in targets {
+                    assert!(
+                        app.handle_projects_navigate_key(KeyEvent::new(key, KeyModifiers::empty()))
+                    );
+                    crate::ui::compute_view(&mut app.state, area);
+                    assert_eq!(app.state.projects.selected_row, target);
+                    let hit = app
+                        .state
+                        .view
+                        .project_row_hit_areas
+                        .iter()
+                        .find(|hit| hit.row_index == target)
+                        .unwrap_or_else(|| panic!("row {target} must be visible in {view:?}"));
+                    let height = match &rows[target] {
+                        crate::ui::ProjectTreeRow::Session(session) if session.live => 2,
+                        _ => 1,
+                    };
+                    assert_eq!(hit.rect.height, height, "the status line must be visible");
+                }
+            }
+
+            let tree = app.state.view.project_tree_rect;
+            for _ in 0..rows.len() {
+                app.handle_mouse(crossterm::event::MouseEvent {
+                    kind: crossterm::event::MouseEventKind::ScrollDown,
+                    column: tree.x + 1,
+                    row: tree.y,
+                    modifiers: KeyModifiers::empty(),
+                });
+                crate::ui::compute_view(&mut app.state, area);
+            }
+            assert!(app
+                .state
+                .view
+                .project_row_hit_areas
+                .iter()
+                .any(|hit| hit.row_index == last));
+        }
     }
 
     #[test]

@@ -18,6 +18,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -191,7 +192,7 @@ pub(crate) fn is_low_signal(intent: &str) -> bool {
         return true;
     }
     let lowered = trimmed.to_lowercase();
-    // Only a *whole* turn of filler is low signal. "继续修复 ork3 的侧栏" carries a subject and
+    // Only a *whole* turn of filler is low signal. "继续修复 herduck 的侧栏" carries a subject and
     // must survive, so this compares the entire trimmed turn rather than its prefix.
     LOW_SIGNAL_OPENERS.iter().any(|opener| {
         lowered == *opener || lowered.trim_end_matches(['。', '，', '?', '？']) == *opener
@@ -230,7 +231,7 @@ fn information_score(intent: &str) -> i32 {
             score += 1;
         }
         // Any remaining latin run of real length is a product, module or API name. This is what
-        // makes `ork3` / `projects` / `cluster` inside CJK prose count at all.
+        // makes `herduck` / `projects` / `cluster` inside CJK prose count at all.
         if token.chars().count() >= 3 {
             score += 1;
         }
@@ -245,7 +246,7 @@ fn information_score(intent: &str) -> i32 {
 
 /// Splits out latin identifier runs, ignoring CJK.
 ///
-/// CJK prose has no spaces, so `split_whitespace` returned "看下ork3这个项目，他的projects…" as a
+/// CJK prose has no spaces, so `split_whitespace` returned "看下herduck这个项目，他的projects…" as a
 /// single token and scored nothing, while a pasted English reply scored on its spacing alone. This
 /// finds the identifiers *inside* the prose instead.
 fn identifier_tokens(value: &str) -> Vec<String> {
@@ -546,7 +547,7 @@ fn title_backends(config: &SemanticConfig) -> Vec<super::semantic::BackendSpec> 
 pub(crate) fn run_title_generation_worker(
     sender: &Sender<ProjectCommand>,
     config: &SemanticConfig,
-    shutdown: &AtomicBool,
+    shutdown: &Arc<AtomicBool>,
 ) {
     while !shutdown.load(Ordering::Acquire) {
         let language = service::request_title_language(sender).unwrap_or_default();
@@ -586,7 +587,7 @@ pub(crate) fn run_title_generation_worker(
                 .iter()
                 .map(|session| session.stable_key.clone())
                 .collect();
-            if let Err(error) = service::request_claim_titles(sender, keys) {
+            if let Err(error) = service::request_claim_titles(sender, shutdown, keys) {
                 tracing::warn!(
                     category = "title_claim",
                     "Could not claim title batch: {error:?}"
@@ -639,10 +640,18 @@ pub(crate) fn run_title_generation_worker(
                             .collect()
                     };
                     models.into_iter().find_map(|model| {
+                        if shutdown.load(Ordering::Acquire) {
+                            return None;
+                        }
                         let prompt = build_prompt_for_language(&ready_envelopes, language);
-                        let output =
-                            super::semantic::run_provider(backend, model, &prompt, config.timeout)
-                                .ok()?;
+                        let output = super::semantic::run_provider(
+                            backend,
+                            model,
+                            &prompt,
+                            config.timeout,
+                            shutdown,
+                        )
+                        .ok()?;
                         parse_response(&output, &ready_envelopes)
                             .ok()
                             .filter(|items| {
@@ -654,6 +663,9 @@ pub(crate) fn run_title_generation_worker(
                     })
                 })
             };
+            if shutdown.load(Ordering::Acquire) {
+                return;
+            }
             if let Some((backend, model, items)) = generated {
                 backend_succeeded = true;
                 let titles = items
@@ -677,6 +689,8 @@ pub(crate) fn run_title_generation_worker(
                     }
                 }
             } else {
+                let local_only =
+                    config.mode == SummaryModeConfig::Local || config.backends.is_empty();
                 for (offset, (session, (_, fingerprint))) in
                     chunk.iter().zip(fingerprints.iter()).enumerate()
                 {
@@ -684,21 +698,20 @@ pub(crate) fn run_title_generation_worker(
                     updates.push(SessionTitleUpdate {
                         stable_key: session.stable_key.clone(),
                         title: localized_fallback(envelope, language),
-                        source: if config.mode == SummaryModeConfig::Local {
+                        source: if local_only {
                             "local".to_string()
                         } else {
                             "heuristic".to_string()
                         },
                         status: if envelope.intents.is_empty() {
                             "provisional".to_string()
-                        } else if config.mode == SummaryModeConfig::Local {
+                        } else if local_only {
                             "done".to_string()
                         } else {
                             "failed".to_string()
                         },
-                        error: (config.mode != SummaryModeConfig::Local
-                            && !envelope.intents.is_empty())
-                        .then(|| "all title backends failed".to_string()),
+                        error: (!local_only && !envelope.intents.is_empty())
+                            .then(|| "all title backends failed".to_string()),
                         backend: None,
                         model: None,
                         fingerprint: fingerprint.clone(),
@@ -738,7 +751,7 @@ pub(crate) fn run_title_generation_worker(
                 continue;
             }
             let update_count = updates.len();
-            if let Err(error) = service::request_apply_titles(sender, updates) {
+            if let Err(error) = service::request_apply_titles(sender, shutdown, updates) {
                 tracing::warn!(
                     category = "title_apply",
                     "Could not persist generated titles: {error:?}"
@@ -886,11 +899,12 @@ mod tests {
     #[test]
     fn a_pasted_reply_never_displaces_the_real_request_from_the_envelope() {
         let pasted = "推荐顺序： 1. Chrome Canary（最合适） bundle ID 是 com.google.Chrome.canary，图标是黄色，Dock 会变成两个 App";
-        let request = "看下ork3这个项目，他的projects 抓取和cluster聚类 聚类出来的内容有哪些问题";
+        let request =
+            "看下herduck这个项目，他的projects 抓取和cluster聚类 聚类出来的内容有哪些问题";
         let envelope = build_envelope(
             0,
             "claude",
-            Some("ork3"),
+            Some("herduck"),
             &intents(&[pasted, request]),
             None,
         );
@@ -899,12 +913,12 @@ mod tests {
             envelope
                 .intents
                 .iter()
-                .any(|intent| intent.contains("ork3")),
+                .any(|intent| intent.contains("herduck")),
             "the real request must reach the model: {:?}",
             envelope.intents
         );
         // And the folder gives the model an unambiguous subject even if it misreads the intents.
-        assert_eq!(envelope.folder.as_deref(), Some("ork3"));
+        assert_eq!(envelope.folder.as_deref(), Some("herduck"));
     }
 
     /// Whatever the model decides, the deterministic fallback must not repeat the old mistake of
@@ -912,16 +926,16 @@ mod tests {
     #[test]
     fn the_fallback_prefers_the_folder_over_a_pasted_reply() {
         let pasted = "推荐顺序： 1. Chrome Canary（最合适） bundle ID 是 com.google.Chrome.canary";
-        let request = "看下ork3这个项目 projects 抓取和 cluster 聚类有哪些问题";
+        let request = "看下herduck这个项目 projects 抓取和 cluster 聚类有哪些问题";
         let envelope = build_envelope(
             0,
             "claude",
-            Some("ork3"),
+            Some("herduck"),
             &intents(&[pasted, request]),
             None,
         );
         let title = fallback_title(&envelope);
-        assert!(title.starts_with("【ork3】"), "{title}");
+        assert!(title.starts_with("【herduck】"), "{title}");
         assert!(!title.contains("Chrome Canary"), "{title}");
     }
 
@@ -931,7 +945,7 @@ mod tests {
             0,
             "codex",
             None,
-            &intents(&["继续", "在吗", "继续修复 ork3 的侧栏高亮"]),
+            &intents(&["继续", "在吗", "继续修复 herduck 的侧栏高亮"]),
             None,
         );
         assert_eq!(envelope.intents.len(), 1);
@@ -965,8 +979,8 @@ mod tests {
 
     #[test]
     fn a_valid_title_round_trips() {
-        let title = validate(&clean_candidate("【ork3】修复侧栏高亮渲染")).expect("valid");
-        assert_eq!(title, "【ork3】修复侧栏高亮渲染");
+        let title = validate(&clean_candidate("【herduck】修复侧栏高亮渲染")).expect("valid");
+        assert_eq!(title, "【herduck】修复侧栏高亮渲染");
     }
 
     #[test]
@@ -977,13 +991,14 @@ mod tests {
 
     #[test]
     fn a_title_without_the_entity_prefix_is_rejected() {
-        let error = validate(&clean_candidate("修复 ork3 的侧栏高亮")).expect_err("shape");
+        let error = validate(&clean_candidate("修复 herduck 的侧栏高亮")).expect_err("shape");
         assert_eq!(error, TitleRejection::MalformedShape);
     }
 
     #[test]
     fn an_unsupported_completion_claim_is_rejected() {
-        let error = validate(&clean_candidate("【ork3】侧栏高亮已修复")).expect_err("completion");
+        let error =
+            validate(&clean_candidate("【herduck】侧栏高亮已修复")).expect_err("completion");
         assert!(matches!(
             error,
             TitleRejection::UnsupportedCompletionClaim(_)
@@ -993,19 +1008,19 @@ mod tests {
     /// Small models leak fences, quotes and reasoning blocks even when told not to.
     #[test]
     fn model_packaging_is_cleaned_before_validation() {
-        let raw = "```\n\"【ork3】修复侧栏高亮渲染\"\n```";
+        let raw = "```\n\"【herduck】修复侧栏高亮渲染\"\n```";
         assert_eq!(
             validate(&clean_candidate(raw)).expect("valid"),
-            "【ork3】修复侧栏高亮渲染"
+            "【herduck】修复侧栏高亮渲染"
         );
     }
 
     #[test]
     fn a_reasoning_block_is_removed() {
-        let raw = "<think>让我想想这个会话在做什么</think>【ork3】修复侧栏高亮";
+        let raw = "<think>让我想想这个会话在做什么</think>【herduck】修复侧栏高亮";
         assert_eq!(
             validate(&clean_candidate(raw)).expect("valid"),
-            "【ork3】修复侧栏高亮"
+            "【herduck】修复侧栏高亮"
         );
     }
 
@@ -1019,7 +1034,7 @@ mod tests {
 
     #[test]
     fn control_characters_are_stripped() {
-        let raw = "\u{1b}[31m【ork3】修复侧栏高亮\u{1b}[0m";
+        let raw = "\u{1b}[31m【herduck】修复侧栏高亮\u{1b}[0m";
         let cleaned = clean_candidate(raw);
         assert!(!cleaned.contains('\u{1b}'), "{cleaned:?}");
         assert!(validate(&cleaned).is_ok(), "{cleaned:?}");
@@ -1027,7 +1042,7 @@ mod tests {
 
     #[test]
     fn a_title_is_clipped_to_the_stored_limit() {
-        let long = format!("【ork3】{}", "修复".repeat(60));
+        let long = format!("【herduck】{}", "修复".repeat(60));
         let title = validate(&clean_candidate(&long)).expect("valid");
         assert!(title.chars().count() <= TITLE_MAX_CHARS);
     }
@@ -1039,12 +1054,12 @@ mod tests {
         let envelope = build_envelope(
             0,
             "claude",
-            Some("ork3"),
-            &intents(&["看下ork3这个项目 projects 抓取和 cluster 聚类有哪些问题"]),
+            Some("herduck"),
+            &intents(&["看下herduck这个项目 projects 抓取和 cluster 聚类有哪些问题"]),
             None,
         );
         let title = fallback_title(&envelope);
-        assert!(title.starts_with("【ork3】"), "{title}");
+        assert!(title.starts_with("【herduck】"), "{title}");
         assert!(title.chars().count() <= TITLE_MAX_CHARS);
         assert!(
             validate(&title).is_ok(),
@@ -1073,16 +1088,16 @@ mod tests {
         let batch = vec![build_envelope(
             1,
             "claude",
-            Some("ork3"),
+            Some("herduck"),
             &intents(&["修复 projects 页面标题"]),
             None,
         )];
         let parsed = parse_response(
-            r#"{"items":[{"id":1,"title":"【ork3】修复 Projects 页面标题"}]}"#,
+            r#"{"items":[{"id":1,"title":"【herduck】修复 Projects 页面标题"}]}"#,
             &batch,
         )
         .expect("valid title response");
-        assert_eq!(parsed[0].1, "【ork3】修复 Projects 页面标题");
+        assert_eq!(parsed[0].1, "【herduck】修复 Projects 页面标题");
         assert!(parse_response(r#"{"items":[]}"#, &batch).is_err());
     }
 }

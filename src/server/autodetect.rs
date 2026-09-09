@@ -48,7 +48,7 @@ pub fn is_server_listening() -> bool {
     is_server_listening_at(&client_socket_path())
 }
 
-/// Checks whether a herdr server is listening at a specific socket path.
+/// Checks whether an herduck server is listening at a specific socket path.
 fn is_server_listening_at(socket_path: &Path) -> bool {
     #[cfg(windows)]
     {
@@ -150,7 +150,7 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
 fn validate_running_server_compatibility() -> io::Result<()> {
     let Some(status) = read_server_status()? else {
         return Err(io::Error::other(format!(
-            "a herdr server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
+            "an herduck server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
             crate::session::active_restart_after_update_guidance()
         )));
     };
@@ -160,7 +160,7 @@ fn validate_running_server_compatibility() -> io::Result<()> {
     }
 
     Err(io::Error::other(format!(
-        "ORK3 was updated, but this session is still running the old server.\n\nserver: v{} protocol {}\nclient: v{} protocol {}\n\n{}",
+        "HERDUCK was updated, but this session is still running the old server.\n\nserver: v{} protocol {}\nclient: v{} protocol {}\n\n{}",
         status.version.as_deref().unwrap_or("unknown"),
         status
             .protocol
@@ -199,7 +199,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
     let mut command = build_server_daemon_command(exe);
 
     let child = command.spawn().map_err(|err: io::Error| {
-        io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
+        io::Error::new(err.kind(), format!("failed to spawn herduck server: {err}"))
     })?;
 
     let pid = child.id();
@@ -210,6 +210,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
 
 fn build_server_daemon_command(exe: PathBuf) -> Command {
     let mut command = Command::new(&exe);
+    crate::config::apply_runtime_namespace_env(&mut command);
     command
         .arg("server")
         // Redirect stdio to /dev/null
@@ -228,9 +229,7 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
     }
 
     if crate::session::explicit_session_requested() {
-        command
-            .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
-            .env_remove("HERDR_CLIENT_SOCKET_PATH");
+        crate::server::socket_paths::clear_socket_override_env(&mut command);
     }
 
     command
@@ -269,7 +268,7 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
             "server did not become ready within {}s (socket: {}). The background server may still be starting; try `herdr` again, or check {}",
             timeout.as_secs(),
             socket_path.display(),
-            crate::session::data_dir().join("ork3-server.log").display()
+            crate::session::data_dir().join("herduck-server.log").display()
         ),
     ))
 }
@@ -355,12 +354,13 @@ mod tests {
         let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
         let envs: Vec<_> = command.get_envs().collect();
 
-        assert!(envs.iter().any(|(key, value)| {
-            *key == OsStr::new(crate::api::SOCKET_PATH_ENV_VAR) && value.is_none()
-        }));
-        assert!(envs.iter().any(|(key, value)| {
-            *key == OsStr::new("HERDR_CLIENT_SOCKET_PATH") && value.is_none()
-        }));
+        for variable in crate::server::socket_paths::SOCKET_OVERRIDE_ENV_VARS {
+            assert!(
+                envs.iter()
+                    .any(|(key, value)| { *key == OsStr::new(variable) && value.is_none() }),
+                "daemon retained {variable}"
+            );
+        }
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
         std::env::remove_var("HERDR_CLIENT_SOCKET_PATH");
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
@@ -522,10 +522,10 @@ test "$sid" = "$$"
         let _guard = env_lock().lock().unwrap();
         let dir = unique_test_dir("missing-api");
         std::fs::create_dir_all(&dir).unwrap();
-        // Inside an upstream Herdr pane, non-ork3 socket names are intentionally ignored as
+        // Inside an upstream Herdr pane, non-herduck socket names are intentionally ignored as
         // inherited foreign overrides. Use the product socket prefix so this remains an explicit
         // test override in both standalone and nested test environments.
-        let path = dir.join("ork3-api.sock");
+        let path = dir.join("herduck-api.sock");
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
 
         let err = validate_running_server_compatibility().unwrap_err();
@@ -573,11 +573,11 @@ test "$sid" = "$$"
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("Run `ork3 session stop work`"),
+            message.contains("Run `herduck session stop work`"),
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("then run `ork3 session attach work` again"),
+            message.contains("then run `herduck session attach work` again"),
             "unexpected error: {message}"
         );
         std::env::remove_var("XDG_CONFIG_HOME");

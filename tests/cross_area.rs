@@ -96,11 +96,11 @@ fn spawn_server_with_path(
     api_socket_path: &Path,
     path_override: Option<&Path>,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("ork3-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herduck-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("ork3-dev/config.toml"),
+        config_home.join("herduck-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -114,15 +114,15 @@ fn spawn_server_with_path(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
@@ -152,15 +152,15 @@ fn spawn_client_process(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     cmd.arg("client");
     cmd.env("HERDR_DISABLE_SOUND", "1");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", api_socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", api_socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
 
     let child = pair.slave.spawn_command(cmd).unwrap();
     register_spawned_herdr_pid(child.process_id());
@@ -679,8 +679,8 @@ fn cross_area_detach_and_reattach_preserves_state() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -753,8 +753,8 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let bin_dir = base.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
@@ -875,8 +875,8 @@ fn cross_area_client_and_api_workspace_views_are_consistent() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -938,8 +938,8 @@ fn cross_area_two_clients_shared_view_and_single_detach_stability() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -1010,8 +1010,8 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let api_socket = runtime_dir.join("ork3.sock");
-    let client_socket = runtime_dir.join("ork3-client.sock");
+    let api_socket = runtime_dir.join("herduck.sock");
+    let client_socket = runtime_dir.join("herduck-client.sock");
 
     let mut server = spawn_server(&config_home, &runtime_dir, &api_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
@@ -1026,6 +1026,17 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
         .expect("thin client master")
         .try_clone_reader()
         .expect("clone thin client reader");
+    // Keep every deadline below effective even when the attached client stops drawing.
+    let fd = thin_client
+        ._master
+        .as_ref()
+        .and_then(|master| master.as_raw_fd())
+        .expect("PTY fd");
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        assert!(flags >= 0);
+        assert_eq!(libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK), 0);
+    }
 
     let attached_before_kill = {
         let deadline = Instant::now() + Duration::from_secs(8);
@@ -1036,6 +1047,9 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
                 Ok(n) if n > 0 => {
                     let out = String::from_utf8_lossy(&buf[..n]);
                     if out.contains("\u{2500}")
+                        // The session browser uses a vertical sidebar divider. Terminal escapes
+                        // may split text labels, so they are not reliable frame markers.
+                        || out.contains("\u{2502}")
                         || out.contains("workspace")
                         || out.contains("pane")
                         || out.contains("terminal")

@@ -1092,9 +1092,10 @@ impl AppState {
             }
             MouseEventKind::ScrollDown if in_sidebar => {
                 if self.sidebar_view.is_project_browser() && !self.sidebar_collapsed {
-                    let max_scroll = crate::ui::project_tree_rows(self)
-                        .len()
-                        .saturating_sub(usize::from(self.view.project_tree_rect.height));
+                    let max_scroll = crate::ui::project_tree_max_scroll(
+                        self,
+                        self.view.project_tree_rect.height,
+                    );
                     self.projects.scroll = self.projects.scroll.saturating_add(1).min(max_scroll);
                     return None;
                 }
@@ -2637,7 +2638,7 @@ mod tests {
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        app.state.toast_config.delivery = crate::config::ToastDelivery::Ork3;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herduck;
         app.state.toast_config.delay_seconds = 0;
         let target_terminal_id = app.state.workspaces[1]
             .panes
@@ -4171,5 +4172,58 @@ mod tests {
         assert_eq!(app.state.projects.filter, ProjectFilter::Open);
         assert_eq!(app.state.projects.selected_row, 0);
         assert_eq!(app.state.projects.scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn compact_sidebar_tabs_are_clickable_without_covering_workspace_cards() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("test")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+        app.state.projects.filter = ProjectFilter::Open;
+
+        for (height, tab_height) in [(12, 1), (24, 1)] {
+            let area = Rect::new(0, 0, 106, height);
+            for (index, target) in [
+                SidebarView::SpacesAgents,
+                SidebarView::Sessions,
+                SidebarView::Projects,
+                SidebarView::Clusters,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                for row in 0..tab_height {
+                    app.state.sidebar_view = if target == SidebarView::SpacesAgents {
+                        SidebarView::Sessions
+                    } else {
+                        SidebarView::SpacesAgents
+                    };
+                    crate::ui::compute_view(&mut app.state, area);
+                    let tab = app.state.view.project_sidebar_tabs[index];
+                    assert_eq!(tab.height, tab_height);
+                    app.handle_mouse(mouse(
+                        MouseEventKind::Down(MouseButton::Left),
+                        tab.x + tab.width / 2,
+                        tab.y + row,
+                    ));
+                    assert_eq!(app.state.sidebar_view, target);
+                    assert_eq!(app.state.projects.filter, ProjectFilter::Open);
+                }
+            }
+
+            app.state.sidebar_view = SidebarView::SpacesAgents;
+            crate::ui::compute_view(&mut app.state, area);
+            let tabs_bottom = app.state.view.project_sidebar_tabs[0].bottom();
+            assert!(!app.state.view.workspace_card_areas.is_empty());
+            assert!(app
+                .state
+                .view
+                .workspace_card_areas
+                .iter()
+                .all(|card| card.rect.y >= tabs_bottom));
+        }
     }
 }

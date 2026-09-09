@@ -225,11 +225,17 @@ fn validate_min_herdr_version(value: Option<&str>) -> Result<String, (&'static s
             ),
         )
     })?;
-    let current = crate::update::Version::current();
+    // This field describes the inherited Herdr plugin contract, independent of Herduck's
+    // product version. A branding/version reset must not reject existing compatible plugins.
+    let current = crate::update::Version {
+        major: 0,
+        minor: 7,
+        patch: 4,
+    };
     if required > current {
         return Err((
             "plugin_requires_newer_herdr",
-            format!("plugin requires Herdr {required} or newer; current Herdr is {current}"),
+            format!("plugin requires Herdr API {required} or newer; Herduck supports {current}"),
         ));
     }
     Ok(required.to_string())
@@ -586,4 +592,21 @@ fn normalize_local_identifier(value: &str, max_chars: usize) -> Option<String> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b':' | b'_' | b'-')))
     .then(|| value.to_string())
+}
+
+#[cfg(test)]
+mod product_compatibility_tests {
+    #[test]
+    fn herduck_version_reset_keeps_inherited_plugin_contract() {
+        assert_eq!(
+            super::validate_min_herdr_version(Some("0.7.4")),
+            Ok("0.7.4".into())
+        );
+        assert_eq!(
+            super::validate_min_herdr_version(Some("0.7.5"))
+                .unwrap_err()
+                .0,
+            "plugin_requires_newer_herdr"
+        );
+    }
 }

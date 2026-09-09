@@ -651,6 +651,12 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn text_file_editor_command(path: &Path) -> std::io::Result<Command> {
+    let mut command = Command::new("open");
+    command.arg("-t").arg(path);
+    Ok(command)
+}
+
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
     let path = std::env::temp_dir().join(format!(
         "herdr-clipboard-image-{}-{}.png",
@@ -1063,26 +1069,6 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     }
 }
 
-pub fn signal_process_group(process_group_id: u32, signal: Signal) -> bool {
-    if process_group_id <= 1 || process_group_id == unsafe { libc::getpgrp() } as u32 {
-        return false;
-    }
-    unsafe {
-        libc::kill(
-            -(process_group_id as libc::pid_t),
-            process_signal_number(signal),
-        ) == 0
-    }
-}
-
-pub fn process_group_exists(process_group_id: u32) -> bool {
-    if process_group_id <= 1 {
-        return false;
-    }
-    let result = unsafe { libc::kill(-(process_group_id as libc::pid_t), 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
 fn process_signal_number(signal: Signal) -> libc::c_int {
     match signal {
         Signal::Hangup => libc::SIGHUP,
@@ -1109,7 +1095,7 @@ mod tests {
 
     #[test]
     fn process_open_files_includes_an_owned_file() {
-        let path = std::env::temp_dir().join(format!("ork3-open-files-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("herduck-open-files-{}", std::process::id()));
         let file = std::fs::File::create(&path).expect("fixture");
         let expected = std::fs::canonicalize(&path).expect("path");
         assert!(process_open_files(std::process::id()).contains(&expected));
@@ -1159,7 +1145,7 @@ mod tests {
     fn procargs2_argv_excludes_environment_entries() {
         let buf = build_procargs2(
             "/usr/bin/node",
-            &["node", "/Users/can/.local/bin/pi"],
+            &["node", "/Users/example/.local/bin/pi"],
             &[
                 "PATH=/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin",
                 "TERM=tmux-256color",
@@ -1167,8 +1153,8 @@ mod tests {
         );
 
         let argv = procargs2_argv(&buf).expect("expected argv");
-        assert_eq!(argv, vec!["node", "/Users/can/.local/bin/pi"]);
-        assert_eq!(argv.join(" "), "node /Users/can/.local/bin/pi");
+        assert_eq!(argv, vec!["node", "/Users/example/.local/bin/pi"]);
+        assert_eq!(argv.join(" "), "node /Users/example/.local/bin/pi");
         assert!(!argv.join(" ").contains("codex.system"));
     }
 

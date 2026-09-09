@@ -694,6 +694,23 @@ mod tests {
         path
     }
 
+    // These values are persisted identity contracts, independent of the product's name.
+    #[test]
+    fn product_rename_preserves_persisted_identity_vectors() {
+        assert_eq!(
+            semantic_fingerprint("Session history", Some("/workspace/app"), "codex"),
+            "43ad965e5886c8318ae4e455ecfa2bf1aad0b942e7760b00d27b0d0362f39e6c"
+        );
+        assert_eq!(
+            semantic_topic_key("  Coding   Tools  "),
+            "42eb8e888578ac0a375f9c023ff8daecd7117f5a11bdb86d23caf2e9033e14da"
+        );
+        assert_eq!(
+            title_input_fingerprint("codex", Some("app"), &["resume work".into()], Some("done")),
+            "02b095d6eef712672bf6c9a2df83d4380fe6abd3b58f7d0ae881771721bca07f"
+        );
+    }
+
     #[test]
     fn backend_normalization_is_ascii_and_bounded() {
         assert_eq!(normalize_backend(" Codex ").unwrap(), "codex");

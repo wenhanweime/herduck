@@ -26,7 +26,7 @@ pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>
 
 fn server_stop(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 server stop");
+        eprintln!("usage: herduck server stop");
         return Ok(2);
     }
 
@@ -41,7 +41,7 @@ fn server_stop(args: &[String]) -> std::io::Result<i32> {
 
 fn server_reload_config(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 server reload-config");
+        eprintln!("usage: herduck server reload-config");
         return Ok(2);
     }
 
@@ -56,7 +56,7 @@ fn server_agent_manifests(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--json" => true,
         _ => {
-            eprintln!("usage: ork3 server agent-manifests [--json]");
+            eprintln!("usage: herduck server agent-manifests [--json]");
             return Ok(2);
         }
     };
@@ -75,7 +75,7 @@ fn server_agent_manifests(args: &[String]) -> std::io::Result<i32> {
 
 fn server_reload_agent_manifests(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: ork3 server reload-agent-manifests");
+        eprintln!("usage: herduck server reload-agent-manifests");
         return Ok(2);
     }
 
@@ -90,7 +90,7 @@ fn server_update_agent_manifests(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--json" => true,
         _ => {
-            eprintln!("usage: ork3 server update-agent-manifests [--json]");
+            eprintln!("usage: herduck server update-agent-manifests [--json]");
             return Ok(2);
         }
     };
@@ -196,7 +196,7 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     let Some(params) = parse_live_handoff_params(args) else {
         eprintln!(
-            "usage: ork3 server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>]"
+            "usage: herduck server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>]"
         );
         return Ok(2);
     };
@@ -217,7 +217,9 @@ fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
 
     eprintln!(
         "live handoff complete; server log: {}",
-        crate::session::data_dir().join("ork3-server.log").display()
+        crate::session::data_dir()
+            .join("herduck-server.log")
+            .display()
     );
     Ok(0)
 }
@@ -249,16 +251,16 @@ fn parse_live_handoff_params(args: &[String]) -> Option<ServerLiveHandoffParams>
 }
 
 fn print_server_help() {
-    eprintln!("ork3 server commands:");
-    eprintln!("  ork3 server                run as headless server");
-    eprintln!("  ork3 server stop           stop the running server via the API socket");
-    eprintln!("  ork3 server live-handoff   hand off live panes to a new local server");
-    eprintln!("  ork3 server reload-config  reload config.toml in the running server");
-    eprintln!("  ork3 server agent-manifests [--json]  show agent detection manifest status");
+    eprintln!("herduck server commands:");
+    eprintln!("  herduck server                run as headless server");
+    eprintln!("  herduck server stop           stop the running server via the API socket");
+    eprintln!("  herduck server live-handoff   hand off live panes to a new local server");
+    eprintln!("  herduck server reload-config  reload config.toml in the running server");
+    eprintln!("  herduck server agent-manifests [--json]  show agent detection manifest status");
     eprintln!(
-        "  ork3 server update-agent-manifests [--json]  fetch and reload agent detection manifests"
+        "  herduck server update-agent-manifests [--json]  fetch and reload agent detection manifests"
     );
-    eprintln!("  ork3 server reload-agent-manifests  reload agent detection manifests in the running server");
+    eprintln!("  herduck server reload-agent-manifests  reload agent detection manifests in the running server");
 }
 
 #[cfg(test)]

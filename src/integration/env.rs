@@ -19,6 +19,10 @@ pub(crate) const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
+    cmd.env(
+        crate::api::ORK3_SOCKET_PATH_ENV_VAR,
+        crate::api::socket_path(),
+    );
     // Bundled integration assets keep the upstream protocol variable during migration.
     cmd.env(
         crate::api::LEGACY_SOCKET_PATH_ENV_VAR,

@@ -42,10 +42,10 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             return Ok(args.to_vec());
         }
         let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("usage: herduck session attach <name>".to_string());
         };
         if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("usage: herduck session attach <name>".to_string());
         }
         apply_explicit_name(name)?;
         return Ok(cleaned);
@@ -172,48 +172,38 @@ pub fn data_dir_for(name: Option<&str>) -> PathBuf {
     }
 }
 
-/// Socket file names are tied to the product name so an ork3 server and an upstream Herdr
-/// server can coexist even if they ever share a directory.
+/// The legacy namespace retains both sockets so existing ORK3 sessions remain discoverable.
 pub fn api_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("ork3.sock")
+    data_dir_for(name).join(format!("{}.sock", crate::config::runtime_product_name()))
 }
 
-/// True when a socket override was inherited from another product's pane rather than set
-/// deliberately for this process.
-///
-/// A pane started by an upstream Herdr exports both `HERDR_ENV=1` and `HERDR_SOCKET_PATH` to every
-/// child, so launching ork3 from inside a Herdr pane would otherwise attach ork3 to the running
-/// Herdr server. An override that names an ork3 socket is treated as deliberate even inside such a
-/// pane, so explicit overrides and the integration tests keep working.
-pub(crate) fn is_foreign_socket_override(path: &str) -> bool {
-    inherited_from_foreign_pane(path, std::env::var(crate::HERDR_ENV_VAR).ok().as_deref())
-}
-
-pub(crate) fn is_ork3_socket_path(path: &str) -> bool {
+pub(crate) fn is_herduck_socket_path(path: &str) -> bool {
     std::path::Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(crate::build_info::PRODUCT_NAME))
-}
-
-fn socket_override_from_env() -> Option<String> {
-    std::env::var(crate::api::SOCKET_PATH_ENV_VAR)
-        .ok()
-        .or_else(|| {
-            std::env::var(crate::api::LEGACY_SOCKET_PATH_ENV_VAR)
-                .ok()
-                .filter(|path| is_ork3_socket_path(path))
+        .is_some_and(|name| {
+            name.starts_with(crate::build_info::PRODUCT_NAME) || name.starts_with("ork3")
         })
 }
 
-fn inherited_from_foreign_pane(path: &str, herdr_env: Option<&str>) -> bool {
-    if herdr_env != Some(crate::HERDR_ENV_VALUE) {
-        return false;
-    }
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| !name.starts_with(crate::build_info::PRODUCT_NAME))
+/// Product-specific overrides are deliberate, including custom filenames. The upstream alias
+/// is accepted only for our namespaces because it is also inherited from upstream Herdr panes.
+pub(crate) fn socket_override_from_values<'a>(
+    current: Option<&'a str>,
+    ork3: Option<&'a str>,
+    upstream: Option<&'a str>,
+) -> Option<&'a str> {
+    current
+        .or(ork3)
+        .or_else(|| upstream.filter(|path| is_herduck_socket_path(path)))
+}
+
+pub(crate) fn socket_override_from_env() -> Option<String> {
+    let current = std::env::var(crate::api::SOCKET_PATH_ENV_VAR).ok();
+    let ork3 = std::env::var(crate::api::ORK3_SOCKET_PATH_ENV_VAR).ok();
+    let upstream = std::env::var(crate::api::LEGACY_SOCKET_PATH_ENV_VAR).ok();
+    socket_override_from_values(current.as_deref(), ork3.as_deref(), upstream.as_deref())
+        .map(str::to_string)
 }
 
 pub fn active_api_socket_path() -> PathBuf {
@@ -221,15 +211,16 @@ pub fn active_api_socket_path() -> PathBuf {
         return api_socket_path_for(active_name().as_deref());
     }
     if let Some(path) = socket_override_from_env() {
-        if !is_foreign_socket_override(&path) {
-            return PathBuf::from(path);
-        }
+        return PathBuf::from(path);
     }
     api_socket_path_for(active_name().as_deref())
 }
 
 pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("ork3-client.sock")
+    data_dir_for(name).join(format!(
+        "{}-client.sock",
+        crate::config::runtime_product_name()
+    ))
 }
 
 pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
@@ -820,7 +811,7 @@ mod tests {
             active_api_socket_path(),
             config_home
                 .join(crate::config::app_dir_name())
-                .join("ork3.sock")
+                .join("herduck.sock")
         );
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var(SESSION_ENV_VAR);
@@ -871,7 +862,7 @@ mod tests {
             active_api_socket_path(),
             config_home
                 .join(crate::config::app_dir_name())
-                .join("ork3.sock")
+                .join("herduck.sock")
         );
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var(SESSION_ENV_VAR);
@@ -884,7 +875,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var(SESSION_ENV_VAR);
 
-        assert_eq!(local_attach_command(), "ork3");
+        assert_eq!(local_attach_command(), "herduck");
     }
 
     #[test]
@@ -892,7 +883,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(SESSION_ENV_VAR, "work");
 
-        assert_eq!(local_attach_command(), "ork3 session attach work");
+        assert_eq!(local_attach_command(), "herduck session attach work");
 
         std::env::remove_var(SESSION_ENV_VAR);
     }
@@ -902,7 +893,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::remove_var(SESSION_ENV_VAR);
 
-        assert_eq!(local_stop_command(), "ork3 server stop");
+        assert_eq!(local_stop_command(), "herduck server stop");
 
         std::env::remove_var(SESSION_ENV_VAR);
     }
@@ -912,7 +903,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(SESSION_ENV_VAR, "work");
 
-        assert_eq!(local_stop_command(), "ork3 session stop work");
+        assert_eq!(local_stop_command(), "herduck session stop work");
 
         std::env::remove_var(SESSION_ENV_VAR);
     }
@@ -921,23 +912,23 @@ mod tests {
     fn restart_after_update_guidance_names_stop_and_attach_commands() {
         assert_eq!(
             restart_after_update_guidance(
-                "ork3 session stop work",
-                Some("ork3 session attach work")
+                "herduck session stop work",
+                Some("herduck session attach work")
             ),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `ork3 session stop work`, then run `ork3 session attach work` again."
+            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `herduck session stop work`, then run `herduck session attach work` again."
         );
     }
 
     #[test]
     fn active_restart_after_update_guidance_respects_socket_override() {
         let _guard = env_lock().lock().unwrap();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ork3-custom.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/herduck-custom.sock");
         std::env::remove_var(SESSION_ENV_VAR);
         clear_explicit_session_for_test();
 
         assert_eq!(
             active_restart_after_update_guidance(),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `ORK3_SOCKET_PATH=/tmp/ork3-custom.sock ork3 server stop`, then restart ork3 with the same socket override."
+            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HERDUCK_SOCKET_PATH=/tmp/herduck-custom.sock herduck server stop`, then restart herduck with the same socket override."
         );
 
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
@@ -961,7 +952,7 @@ mod tests {
                 .join(crate::config::app_dir_name())
                 .join("sessions")
                 .join("work")
-                .join("ork3.sock")
+                .join("herduck.sock")
         );
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::remove_var(SESSION_ENV_VAR);
@@ -994,7 +985,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         std::env::set_var(SESSION_ENV_VAR, "bad/name");
         clear_explicit_session_for_test();
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ork3.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/herduck.sock");
         let args = vec![
             "herdr".to_string(),
             "workspace".to_string(),
@@ -1005,7 +996,7 @@ mod tests {
 
         assert_eq!(cleaned, vec!["herdr", "workspace", "list"]);
         assert!(!explicit_session_requested());
-        assert_eq!(active_api_socket_path(), PathBuf::from("/tmp/ork3.sock"));
+        assert_eq!(active_api_socket_path(), PathBuf::from("/tmp/herduck.sock"));
         assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("bad/name"));
 
         std::env::remove_var(SESSION_ENV_VAR);
@@ -1014,34 +1005,76 @@ mod tests {
     }
 
     #[test]
-    fn socket_override_inherited_from_a_foreign_pane_is_ignored() {
-        const HERDR_PANE: Option<&str> = Some(crate::HERDR_ENV_VALUE);
-
-        // An upstream Herdr pane exports HERDR_ENV=1 plus its own socket to every child process.
-        // Honoring that socket would attach ork3 to the running Herdr server, which must never
-        // happen — that is the whole point of shipping ork3 as a separate product.
-        assert!(inherited_from_foreign_pane(
-            "/Users/someone/.config/herdr/herdr.sock",
-            HERDR_PANE
-        ));
-        assert!(inherited_from_foreign_pane(
-            "/Users/someone/.config/herdr/herdr-client.sock",
-            HERDR_PANE
-        ));
-
-        // A deliberate ork3 socket is honored even inside such a pane.
-        assert!(!inherited_from_foreign_pane("/tmp/ork3.sock", HERDR_PANE));
-        assert!(!inherited_from_foreign_pane(
+    fn socket_overrides_preserve_product_precedence_and_upstream_isolation() {
+        assert_eq!(
+            socket_override_from_values(
+                Some("/tmp/new.sock"),
+                Some("/tmp/old.sock"),
+                Some("/tmp/herdr.sock")
+            ),
+            Some("/tmp/new.sock")
+        );
+        assert_eq!(
+            socket_override_from_values(None, Some("/tmp/old.sock"), Some("/tmp/herdr.sock")),
+            Some("/tmp/old.sock")
+        );
+        for path in [
+            "/tmp/herduck.sock",
+            "/tmp/herduck-client.sock",
+            "/tmp/ork3.sock",
             "/tmp/ork3-client.sock",
-            HERDR_PANE
-        ));
+        ] {
+            assert_eq!(
+                socket_override_from_values(None, None, Some(path)),
+                Some(path)
+            );
+        }
+        for path in [
+            "/tmp/herdr.sock",
+            "/tmp/herdr-client.sock",
+            "/tmp/foreign.sock",
+        ] {
+            assert_eq!(socket_override_from_values(None, None, Some(path)), None);
+        }
+    }
 
-        // Outside a foreign pane, any deliberate override is honored as before.
-        assert!(!inherited_from_foreign_pane("/tmp/explicit.sock", None));
-        assert!(!inherited_from_foreign_pane(
-            "/Users/someone/.config/herdr/herdr.sock",
-            None
-        ));
+    #[test]
+    fn socket_environment_honors_ork3_alias_and_new_override() {
+        let _guard = env_lock().lock().unwrap();
+        let variables = [
+            crate::api::SOCKET_PATH_ENV_VAR,
+            crate::api::ORK3_SOCKET_PATH_ENV_VAR,
+            crate::api::LEGACY_SOCKET_PATH_ENV_VAR,
+            crate::HERDR_ENV_VAR,
+        ];
+        let saved: Vec<_> = variables
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        std::env::set_var(crate::api::ORK3_SOCKET_PATH_ENV_VAR, "/tmp/custom-old.sock");
+        std::env::set_var(crate::api::LEGACY_SOCKET_PATH_ENV_VAR, "/tmp/herdr.sock");
+        std::env::set_var(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+        clear_explicit_session_for_test();
+        assert_eq!(
+            active_api_socket_path(),
+            PathBuf::from("/tmp/custom-old.sock")
+        );
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/custom-new.sock");
+        assert_eq!(
+            active_api_socket_path(),
+            PathBuf::from("/tmp/custom-new.sock")
+        );
+        assert_eq!(
+            crate::server::socket_paths::client_socket_path(),
+            PathBuf::from("/tmp/custom-new-client.sock")
+        );
+        for (key, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
     }
 
     #[cfg(unix)]

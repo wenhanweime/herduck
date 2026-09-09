@@ -452,14 +452,6 @@ pub fn signal_processes(pids: &[u32], signal: Signal) {
     let _ = terminate_process_trees(pids);
 }
 
-pub fn signal_process_group(process_group_id: u32, signal: Signal) -> bool {
-    process_group_id > 1 && signal != Signal::Hangup && terminate_process_trees(&[process_group_id])
-}
-
-pub fn process_group_exists(process_group_id: u32) -> bool {
-    process_group_id > 1 && process_exists(process_group_id)
-}
-
 fn terminate_process_trees(pids: &[u32]) -> bool {
     let entries = snapshot_processes();
     let mut targets = Vec::new();
@@ -478,8 +470,8 @@ fn terminate_process_trees(pids: &[u32]) -> bool {
     }
 
     // Windows has no Unix-style process-group signal. Terminate descendants
-    // before their selected Agent parent so helper processes do not survive as
-    // orphans after idle reclamation.
+    // before their parent so helper processes do not survive as orphans after
+    // an explicitly requested process shutdown.
     let processes = targets
         .into_iter()
         .filter_map(|pid| ProcessHandle::open(pid, PROCESS_TERMINATE))
@@ -572,6 +564,14 @@ pub fn open_url(url: &str) -> std::io::Result<()> {
             result as isize
         )))
     }
+}
+
+pub(crate) fn text_file_editor_command(
+    path: &std::path::Path,
+) -> std::io::Result<std::process::Command> {
+    let mut command = std::process::Command::new("notepad.exe");
+    command.arg(path);
+    Ok(command)
 }
 
 // Windows does not wire clipboard-image bridging into semantic input yet.

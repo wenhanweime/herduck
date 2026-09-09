@@ -256,10 +256,6 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     }
 
     top_level.sort_by(|left, right| {
-        let activity = |item: &TopLevelItem<'_>| match item {
-            TopLevelItem::Session(session) => session_tree_activity(app, session),
-            TopLevelItem::Project(project) => project_tree_activity(app, project),
-        };
         let latest = |item: &TopLevelItem<'_>| match item {
             TopLevelItem::Session(session) => session.last_activity_at,
             TopLevelItem::Project(project) => project
@@ -269,9 +265,8 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
                 .max()
                 .unwrap_or(i64::MIN),
         };
-        activity(right)
-            .cmp(&activity(left))
-            .then_with(|| latest(right).cmp(&latest(left)))
+        latest(right)
+            .cmp(&latest(left))
             .then_with(|| match (left, right) {
                 (TopLevelItem::Session(left), TopLevelItem::Session(right)) => {
                     left.stable_key.cmp(&right.stable_key)
@@ -345,7 +340,8 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             activity,
         });
         if !collapsed {
-            let collapse_thin = query.is_empty()
+            let collapse_thin = grouping == crate::app::state::ProjectGrouping::Directories
+                && query.is_empty()
                 && app.projects.filter == ProjectFilter::All
                 && !app
                     .projects
@@ -425,7 +421,7 @@ fn scan_status_rows(app: &AppState) -> Vec<ProjectTreeRow> {
 
 /// Lays out the visible tree rows, returning each row with the rect it occupies.
 ///
-/// The current session's row is two lines tall so it can carry a status line. Hit testing and
+/// Live sessions and the current history preview are two lines tall. Hit testing and
 /// rendering must agree on those heights, so both read this one function — computing them twice
 /// would let a click land on the row above or below.
 fn visible_row_layout<'a>(
@@ -450,14 +446,54 @@ fn visible_row_layout<'a>(
 
 /// Height of one tree row, in lines.
 ///
-/// The current session gets a second line for its agent status. That extra line is what makes the
-/// current row unmistakable — a one-line row differing only in background was reported as "no
-/// highlight" four times.
+/// Live sessions keep their status line when focus moves to another pane or history preview.
 fn row_height(app: &AppState, row: &ProjectTreeRow) -> u16 {
     match row {
-        ProjectTreeRow::Session(session) if is_current_session(app, session) => 2,
+        ProjectTreeRow::Session(session) if session.live || is_current_session(app, session) => 2,
         _ => 1,
     }
+}
+
+/// Earliest row that keeps the target's full height visible at the bottom of the viewport.
+fn scroll_to_show_row(
+    app: &AppState,
+    rows: &[ProjectTreeRow],
+    target: usize,
+    viewport: u16,
+) -> usize {
+    if rows.is_empty() {
+        return 0;
+    }
+    let target = target.min(rows.len() - 1);
+    let mut scroll = target;
+    let mut height = 0;
+    for (index, row) in rows[..=target].iter().enumerate().rev() {
+        height += usize::from(row_height(app, row));
+        if height > usize::from(viewport.max(1)) && index < target {
+            break;
+        }
+        scroll = index;
+    }
+    scroll
+}
+
+pub(crate) fn project_tree_max_scroll(app: &AppState, viewport: u16) -> usize {
+    let rows = project_tree_rows(app);
+    scroll_to_show_row(app, &rows, rows.len().saturating_sub(1), viewport)
+}
+
+pub(crate) fn project_tree_scroll_for_selection(app: &AppState, viewport: u16) -> usize {
+    let rows = project_tree_rows(app);
+    let last = rows.len().saturating_sub(1);
+    let selected = app.projects.selected_row.min(last);
+    let minimum = scroll_to_show_row(app, &rows, selected, viewport);
+    let maximum = scroll_to_show_row(app, &rows, last, viewport);
+    app.projects.scroll.clamp(minimum, selected).min(maximum)
+}
+
+/// Terminal cells have integral heights; one row keeps compact labels vertically centered.
+pub(super) fn sidebar_tab_height(available_height: u16) -> u16 {
+    available_height.min(1)
 }
 
 pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSidebarGeometry {
@@ -497,28 +533,30 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
         let fourth = tab_inner.saturating_sub(first.saturating_add(second).saturating_add(third));
         (first, second, third, fourth)
     };
+    let tab_height = sidebar_tab_height(content.height);
     let sidebar_tabs = [
-        Rect::new(content.x, content.y, first_width, 1),
+        Rect::new(content.x, content.y, first_width, tab_height),
         Rect::new(
             content.x + first_width + tab_gap,
             content.y,
             second_width,
-            1,
+            tab_height,
         ),
         Rect::new(
             content.x + first_width + tab_gap + second_width + tab_gap,
             content.y,
             third_width,
-            1,
+            tab_height,
         ),
         Rect::new(
             content.x + first_width + tab_gap + second_width + tab_gap + third_width + tab_gap,
             content.y,
             fourth_width,
-            1,
+            tab_height,
         ),
     ];
-    let controls_y = content.y.saturating_add(1);
+    let controls_y = content.y.saturating_add(tab_height);
+    let filter_height = content.height.saturating_sub(tab_height).min(1);
     // Filter chips paint a background when selected, so two adjacent chips would read as one block.
     // Keep their own gap while the sidebar can still fit both labels; top tabs use a separate rule
     // because four full labels need considerably more width.
@@ -527,31 +565,33 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
     let first_width = filter_inner.min(5);
     let second_width = filter_inner.saturating_sub(first_width).min(6);
     let filter_tabs = [
-        Rect::new(content.x, controls_y, first_width, 1),
+        Rect::new(content.x, controls_y, first_width, filter_height),
         Rect::new(
             content.x + first_width + filter_gap,
             controls_y,
             second_width,
-            1,
+            filter_height,
         ),
     ];
+    let search_offset = tab_height.saturating_add(filter_height);
+    let search_height = content.height.saturating_sub(search_offset).min(1);
     let search = Rect::new(
         content.x,
-        content.y.saturating_add(2),
+        content.y.saturating_add(search_offset),
         content.width,
-        u16::from(content.height >= 3),
+        search_height,
     );
-    let tree_y = content.y.saturating_add(3);
+    let tree_offset = search_offset.saturating_add(search_height);
+    let tree_y = content.y.saturating_add(tree_offset);
     let tree = Rect::new(
         content.x,
         tree_y,
         content.width,
-        content.height.saturating_sub(3),
+        content.height.saturating_sub(tree_offset).saturating_sub(1),
     );
 
     let rows = project_tree_rows(app);
-    let viewport = usize::from(tree.height);
-    let max_scroll = rows.len().saturating_sub(viewport);
+    let max_scroll = scroll_to_show_row(app, &rows, rows.len().saturating_sub(1), tree.height);
     let normalized_scroll = app.projects.scroll.min(max_scroll);
     let row_hits = visible_row_layout(app, &rows, tree, normalized_scroll)
         .into_iter()
@@ -577,18 +617,27 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 
 pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 4]) {
     if let (Some(first), Some(last)) = (
-        tabs.iter().find(|rect| rect.width > 0),
-        tabs.iter().rev().find(|rect| rect.width > 0),
+        tabs.iter().find(|rect| rect.width > 0 && rect.height > 0),
+        tabs.iter()
+            .rev()
+            .find(|rect| rect.width > 0 && rect.height > 0),
     ) {
+        let strip = Rect::new(
+            first.x,
+            first.y,
+            last.right().saturating_sub(first.x),
+            first.height,
+        );
+        frame.render_widget(Clear, strip);
         frame.render_widget(
             Paragraph::new("").style(Style::default().bg(app.palette.panel_bg)),
-            Rect::new(first.x, first.y, last.right().saturating_sub(first.x), 1),
+            strip,
         );
     }
 
     let labels = ["Agents", "Sessions", "Projects", "Topics"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
-        if rect.width == 0 {
+        if rect.width == 0 || rect.height == 0 {
             continue;
         }
         let active = matches!(
@@ -600,13 +649,23 @@ pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect
         );
         let style = if active {
             Style::default()
+                .fg(super::widgets::panel_contrast_fg(&app.palette))
+                .bg(app.palette.accent)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
                 .fg(app.palette.text)
                 .bg(app.palette.surface0)
                 .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(app.palette.overlay0)
         };
-        frame.render_widget(Paragraph::new(label).style(style).centered(), rect);
+        frame.render_widget(Paragraph::new("").style(style), rect);
+        let label_rect = Rect::new(
+            rect.x,
+            rect.y + rect.height.saturating_sub(1) / 2,
+            rect.width,
+            1,
+        );
+        frame.render_widget(Paragraph::new(label).style(style).centered(), label_rect);
     }
 }
 
@@ -698,7 +757,7 @@ fn is_current_session(app: &AppState, session: &IndexedSessionSummary) -> bool {
 fn session_agent_state(
     app: &AppState,
     session: &IndexedSessionSummary,
-) -> Option<(crate::detect::AgentState, bool)> {
+) -> Option<(crate::detect::AgentState, bool, bool)> {
     if !session.live {
         return None;
     }
@@ -717,7 +776,7 @@ fn session_agent_state(
             })?;
     app.terminals
         .get(&pane.attached_terminal_id)
-        .map(|terminal| (terminal.state, pane.seen))
+        .map(|terminal| (terminal.state, pane.seen, terminal.agent_inactive))
 }
 
 pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: Rect) {
@@ -835,18 +894,18 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         let cursor = app.projects.selected_row == absolute_idx;
         let current =
             matches!(row, ProjectTreeRow::Session(session) if is_current_session(app, session));
+        let highlighted_session =
+            current || matches!(row, ProjectTreeRow::Session(session) if session.live);
         let project_activity = match row {
             ProjectTreeRow::Project { activity, .. } => *activity,
             _ => ProjectTreeActivity::Inactive,
         };
-        // Neither state is gated on `app.mode`. Clicking a session switches the mode away from
-        // `Navigate`, so gating here erased the marking exactly when the row became the current
-        // one. Current wins the stronger fill because "what am I working in" outranks "where is
-        // the keyboard cursor".
+        // Live sessions keep the stronger fill independently of focus, cursor position, or mode.
+        // The accent bar still distinguishes the current session from other live sessions.
         //
         // The background has to travel with the text: painting it first and then rendering an
         // unstyled `Paragraph` over the same rect resets every cell the glyphs occupy.
-        let row_style = match (current, project_activity, cursor) {
+        let row_style = match (highlighted_session, project_activity, cursor) {
             (true, _, _) => Style::default().bg(app.palette.surface1),
             (false, ProjectTreeActivity::Current | ProjectTreeActivity::Live, _)
             | (false, ProjectTreeActivity::Inactive, true) => {
@@ -855,7 +914,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
             (false, ProjectTreeActivity::Inactive, false) => Style::default(),
         };
         // Fill the whole row, including a second line, before any text lands on it.
-        if current || cursor || project_activity != ProjectTreeActivity::Inactive {
+        if highlighted_session || cursor || project_activity != ProjectTreeActivity::Inactive {
             frame.render_widget(Paragraph::new("").style(row_style), row_rect);
         }
         let line = match row {
@@ -989,7 +1048,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                 .set_fg(app.palette.accent);
         }
 
-        // The status line of an expanded current row.
+        // The status line stays visible for every live session.
         if row_rect.height > 1 {
             if let ProjectTreeRow::Session(session) = row {
                 let status_rect = Rect::new(row_rect.x, row_rect.y + 1, row_rect.width, 1);
@@ -1002,21 +1061,28 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
     }
 }
 
-/// Second line of the current session's row: what it is doing and where it lives.
+/// Second line of an expanded session row: what it is doing and where it lives.
 ///
-/// A live session reports its agent state (`working` / `done` / `idle` / `blocked`) using the same
+/// A live session reports its status (`working` / `done` / `idle` / `inactive` / `blocked`) using the same
 /// vocabulary as the Sessions sidebar. A historical session has no pane, so it says so rather than
 /// borrowing a state it does not have.
 fn session_status_line<'a>(app: &AppState, session: &IndexedSessionSummary) -> Line<'a> {
     let mut spans = vec![Span::raw("    ")];
     match session_agent_state(app, session) {
-        Some((state, seen)) => {
+        Some((_, _, true)) => spans.push(Span::styled(
+            "○ inactive",
+            Style::default().fg(app.palette.overlay0),
+        )),
+        Some((state, seen, false)) => {
             let (glyph, glyph_style) = super::status::state_dot(state, seen, &app.palette);
             spans.push(Span::styled(format!("{glyph} "), glyph_style));
             spans.push(Span::styled(
                 super::status::state_label(state, seen),
                 Style::default().fg(super::status::state_label_color(state, seen, &app.palette)),
             ));
+        }
+        None if session.live => {
+            spans.push(Span::styled("open", Style::default().fg(app.palette.green)))
         }
         None => spans.push(Span::styled(
             "read-only history",
@@ -1191,6 +1257,18 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
         ]));
     }
 
+    if let Some(reason) = app
+        .projects
+        .history_fallback_reason
+        .as_deref()
+        .filter(|reason| !reason.starts_with("Read-only preview."))
+    {
+        lines.push(Line::from(Span::styled(
+            reason.to_string(),
+            Style::default().fg(app.palette.peach),
+        )));
+    }
+
     let title = label.topic.map_or_else(
         || format!(" {} ", label.task),
         |topic| format!(" 【{topic}】{} ", label.task),
@@ -1219,7 +1297,7 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
             Line::from(app.projects.history_draft.clone())
         };
         let composer_block = Block::default()
-            .title(" message · Enter sends + resumes · Shift+Enter newline · Esc back ")
+            .title(" Enter 恢复 · 有内容时同时发送 · Shift+Enter 换行 ")
             .borders(Borders::TOP)
             .border_style(Style::default().fg(app.palette.overlay0));
         let composer_inner = composer_block.inner(composer_area);
@@ -1357,12 +1435,103 @@ mod tests {
     }
 
     #[test]
+    fn focusing_a_history_topic_does_not_reorder_group_headers() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Clusters;
+        state.projects.snapshot = snapshot();
+        state.projects.snapshot.topics = vec![
+            topic_with_sessions("a", "A", 2),
+            topic_with_sessions("b", "B", 2),
+        ];
+        let keys = |state: &AppState| {
+            project_tree_rows(state)
+                .into_iter()
+                .filter_map(|row| {
+                    if let ProjectTreeRow::Project { project_key, .. } = row {
+                        Some(project_key)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = keys(&state);
+        state.projects.history_session_key = Some("b-session-0".into());
+        assert_eq!(keys(&state), before);
+    }
+
+    #[test]
+    fn topics_do_not_hide_recent_sessions_using_a_total_thin_count() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Clusters;
+        let mut topic = topic_with_sessions("recent", "Recent", 2);
+        topic.thin_count = 20;
+        state
+            .expanded_project_keys
+            .insert(topic.canonical_key.clone());
+        state.projects.snapshot.topics = vec![topic];
+
+        let rows = project_tree_rows(&state);
+        let sessions = rows
+            .iter()
+            .filter_map(|row| match row {
+                ProjectTreeRow::Session(session) => Some(session),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sessions.len(), 2, "both loaded sessions must stay visible");
+        assert!(sessions
+            .windows(2)
+            .all(|pair| pair[0].last_activity_at >= pair[1].last_activity_at));
+        assert!(!rows
+            .iter()
+            .any(|row| matches!(row, ProjectTreeRow::Thin { .. })));
+    }
+
+    #[test]
+    fn sidebar_headers_and_menu_remain_visible_in_every_view() {
+        use crate::app::state::SidebarView;
+        for view in [
+            SidebarView::SpacesAgents,
+            SidebarView::Sessions,
+            SidebarView::Projects,
+            SidebarView::Clusters,
+        ] {
+            let mut state = AppState::test_new();
+            state.sidebar_view = view;
+            state.sidebar_collapsed = false;
+            let area = Rect::new(0, 0, 120, 30);
+            crate::ui::compute_view(&mut state, area);
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
+                .expect("terminal");
+            terminal
+                .draw(|frame| crate::ui::render(&state, frame))
+                .expect("render");
+            let buffer = terminal.backend().buffer();
+            let menu = state.global_launcher_rect();
+            let text = (menu.x..menu.right())
+                .map(|x| buffer[(x, menu.y)].symbol())
+                .collect::<String>();
+            assert!(text.contains("settings / menu"), "{view:?}: {text}");
+            if view == SidebarView::SpacesAgents {
+                let y = state.view.project_sidebar_tabs[0].bottom();
+                let text = (0..state.view.sidebar_rect.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>();
+                assert!(text.contains("spaces"), "{text}");
+            } else {
+                assert!(state.view.project_tree_rect.bottom() <= menu.y);
+            }
+        }
+    }
+
+    #[test]
     fn filters_are_one_row_and_share_geometry_with_hit_testing() {
         let mut state = AppState::test_new();
         state.projects.snapshot = snapshot();
         let geometry = project_sidebar_geometry(&state, Rect::new(0, 0, 40, 12));
         assert!(geometry.sidebar_tabs.iter().all(|rect| rect.height == 1));
-        assert_eq!(geometry.sidebar_tabs[0].y, geometry.filter_tabs[0].y - 1);
+        assert_eq!(geometry.sidebar_tabs[0].bottom(), geometry.filter_tabs[0].y);
         assert_eq!(geometry.sidebar_tabs[3].right(), 39);
         assert!(
             geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
@@ -1391,30 +1560,67 @@ mod tests {
     }
 
     #[test]
-    fn top_level_tabs_clear_the_spaces_heading_under_narrow_layouts() {
-        let state = AppState::test_new();
-        let area = Rect::new(0, 0, 30, 4);
-        let tabs = project_sidebar_geometry(&state, area).sidebar_tabs;
-        let backend = ratatui::backend::TestBackend::new(area.width, area.height);
-        let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
-        terminal
-            .draw(|frame| {
-                frame.render_widget(Paragraph::new(" spaces"), Rect::new(0, 0, 29, 1));
-                render_sidebar_tabs(&state, frame, tabs);
-            })
-            .expect("draw tabs");
-        let first_row = (0..29)
-            .map(|x| terminal.backend().buffer()[(x, 0)].symbol())
-            .collect::<String>();
-
-        assert!(
-            first_row.contains("Agents"),
-            "first tab should name the agent view"
-        );
-        assert!(
-            !first_row.to_lowercase().contains("spaces"),
-            "the underlying section title must not bleed through: {first_row}"
-        );
+    fn top_level_tabs_fill_their_height_and_clear_underlying_content() {
+        let mut state = AppState::test_new();
+        state.sidebar_view = crate::app::state::SidebarView::Sessions;
+        for palette in [
+            crate::app::state::Palette::catppuccin(),
+            crate::app::state::Palette::catppuccin_latte(),
+            crate::app::state::Palette::terminal(),
+        ] {
+            state.palette = palette;
+            for (height, tab_height) in [(4, 1), (12, 1), (24, 1)] {
+                let area = Rect::new(0, 0, 30, height);
+                let tabs = project_sidebar_geometry(&state, area).sidebar_tabs;
+                assert!(tabs.iter().all(|rect| rect.height == tab_height));
+                let backend = ratatui::backend::TestBackend::new(area.width, area.height);
+                let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
+                terminal
+                    .draw(|frame| {
+                        for y in 0..tab_height {
+                            frame.render_widget(
+                                Paragraph::new(" spaces spaces spaces spaces"),
+                                Rect::new(0, y, 29, 1),
+                            );
+                        }
+                        render_sidebar_tabs(&state, frame, tabs);
+                    })
+                    .expect("draw tabs");
+                let buffer = terminal.backend().buffer();
+                let label_y = (tab_height - 1) / 2;
+                for y in 0..tab_height {
+                    let line = (0..29).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+                    assert!(!line.to_lowercase().contains("spaces"));
+                    if y == label_y {
+                        for label in ["Agents", "Sessions", "Projects", "Topics"] {
+                            assert!(line.contains(label), "missing {label}: {line}");
+                        }
+                    } else {
+                        assert!(line.trim().is_empty(), "padding must stay clear: {line}");
+                    }
+                }
+                for (index, rect) in tabs.into_iter().enumerate() {
+                    let (fg, bg) = if index == 1 {
+                        (
+                            super::super::widgets::panel_contrast_fg(&state.palette),
+                            state.palette.accent,
+                        )
+                    } else {
+                        (state.palette.text, state.palette.surface0)
+                    };
+                    for y in rect.y..rect.bottom() {
+                        for x in rect.x..rect.right() {
+                            let cell = &buffer[(x, y)];
+                            assert_eq!(cell.style().bg, Some(bg));
+                            if !cell.symbol().trim().is_empty() {
+                                assert_eq!(cell.style().fg, Some(fg));
+                                assert!(cell.modifier.contains(Modifier::BOLD));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1489,7 +1695,7 @@ mod tests {
     }
 
     #[test]
-    fn current_and_live_topics_are_pinned_and_expanded_before_newer_history() {
+    fn current_and_live_topics_expand_without_overriding_recency() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Clusters;
         let mut snapshot = snapshot();
@@ -1508,6 +1714,12 @@ mod tests {
             &rows[..],
             [
                 ProjectTreeRow::Project {
+                    project_key: history,
+                    collapsed: true,
+                    activity: ProjectTreeActivity::Inactive,
+                    ..
+                },
+                ProjectTreeRow::Project {
                     project_key: current,
                     collapsed: false,
                     activity: ProjectTreeActivity::Current,
@@ -1523,18 +1735,12 @@ mod tests {
                 },
                 ProjectTreeRow::Session(_),
                 ProjectTreeRow::Session(_),
-                ProjectTreeRow::Project {
-                    project_key: history,
-                    collapsed: true,
-                    activity: ProjectTreeActivity::Inactive,
-                    ..
-                }
             ] if current == "topic-current" && live == "topic-live" && history == "topic-latest"
         ));
     }
 
     #[test]
-    fn explicit_collapse_keeps_a_live_topic_folded_while_it_stays_pinned() {
+    fn explicit_collapse_keeps_a_live_topic_folded_without_pinning() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Clusters;
         let mut snapshot = snapshot();
@@ -1550,15 +1756,15 @@ mod tests {
             &rows[..],
             [
                 ProjectTreeRow::Project {
-                    project_key: live,
-                    collapsed: true,
-                    activity: ProjectTreeActivity::Live,
-                    ..
-                },
-                ProjectTreeRow::Project {
                     project_key: history,
                     collapsed: true,
                     activity: ProjectTreeActivity::Inactive,
+                    ..
+                },
+                ProjectTreeRow::Project {
+                    project_key: live,
+                    collapsed: true,
+                    activity: ProjectTreeActivity::Live,
                     ..
                 }
             ] if live == "topic-live" && history == "topic-history"
@@ -1728,7 +1934,7 @@ mod tests {
     }
 
     #[test]
-    fn live_project_is_pinned_before_newer_history_and_parentless_sessions() {
+    fn library_orders_history_and_parentless_sessions_by_recency_not_liveness() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Projects;
         let mut snapshot = snapshot();
@@ -1753,7 +1959,7 @@ mod tests {
 
         let rows = project_tree_rows(&state);
         assert!(matches!(
-            &rows[0],
+            &rows[3],
             ProjectTreeRow::Project {
                 project_key,
                 activity: ProjectTreeActivity::Live,
@@ -1761,11 +1967,11 @@ mod tests {
             } if project_key == "p1"
         ));
         assert!(matches!(
-            &rows[2],
+            &rows[0],
             ProjectTreeRow::Project { project_key, .. } if project_key == "recent"
         ));
         assert!(matches!(
-            &rows[4],
+            &rows[2],
             ProjectTreeRow::Session(session) if session.stable_key == "parentless"
         ));
     }
@@ -1977,6 +2183,67 @@ mod tests {
         );
     }
 
+    #[test]
+    fn live_rows_keep_two_filled_lines_across_tabs_and_focus_changes() {
+        let mut state = state_with_open_session();
+        state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("other-workspace"));
+        state.ensure_test_terminals();
+        let mut topic = state.projects.snapshot.projects[0].clone();
+        topic.kind = ProjectKind::Semantic;
+        state.projects.snapshot.topics = vec![topic];
+        let area = Rect::new(0, 0, 40, 12);
+
+        for palette in [
+            crate::app::state::Palette::catppuccin(),
+            crate::app::state::Palette::catppuccin_latte(),
+            crate::app::state::Palette::terminal(),
+        ] {
+            state.palette = palette;
+            for view in [
+                crate::app::state::SidebarView::Sessions,
+                crate::app::state::SidebarView::Projects,
+                crate::app::state::SidebarView::Clusters,
+            ] {
+                state.sidebar_view = view;
+                for active in [0, 1] {
+                    state.active = Some(active);
+                    for mode in [crate::app::Mode::Navigate, crate::app::Mode::Terminal] {
+                        state.mode = mode;
+                        let geometry = project_sidebar_geometry(&state, area);
+                        let hit = geometry
+                            .row_hits
+                            .iter()
+                            .find(|hit| {
+                                matches!(
+                                    hit.action,
+                                    ProjectTreeAction::Activate(
+                                        ProjectSessionActivation::Live { .. }
+                                    )
+                                )
+                            })
+                            .expect("live session must remain visible");
+                        assert_eq!(hit.rect.height, 2, "{view:?}, {mode:?}, focus {active}");
+
+                        let cells = row_cells(&state, area);
+                        for y in hit.rect.y..hit.rect.bottom() {
+                            assert!(cells[usize::from(y)]
+                                [usize::from(hit.rect.x)..usize::from(hit.rect.right())]
+                                .iter()
+                                .all(|cell| cell.bg == Some(state.palette.surface1)));
+                        }
+                        let title = &cells[usize::from(hit.rect.y)];
+                        assert!(title.iter().any(|cell| {
+                            cell.symbol == "●" && cell.fg == Some(state.palette.green)
+                        }));
+                        assert_eq!(title[0].symbol == "▎", active == 0);
+                    }
+                }
+            }
+        }
+    }
+
     /// A click below an expanded row must select that row, not its neighbour.
     ///
     /// The click handler derived the index from `scroll + (mouse.row - tree.y)`, which assumed
@@ -2024,12 +2291,16 @@ mod tests {
         ));
     }
 
-    /// A row that is neither current nor under the cursor stays one line, or the tree wastes the
-    /// sidebar's height.
+    /// Unopened history stays compact while live sessions retain their status lines.
     #[test]
-    fn ordinary_rows_stay_one_line() {
+    fn ordinary_history_rows_stay_one_line() {
         let mut state = AppState::test_new();
         state.projects.snapshot = snapshot();
+        let session = &mut state.projects.snapshot.projects[0].sessions[0];
+        session.live = false;
+        session.workspace_id = None;
+        session.pane_id = None;
+        session.runtime_generation = None;
         state.mode = crate::app::Mode::Terminal;
         let rows = project_tree_rows(&state);
         let tree = project_sidebar_geometry(&state, Rect::new(0, 0, 40, 12)).tree;
@@ -2239,12 +2510,12 @@ mod tests {
 
     /// `surface_dim` and `panel_bg` are background slots. `surface_dim` sits at roughly 1.1:1
     /// against `panel_bg`, so any glyph drawn in either colour is invisible on the panel. This
-    /// walks every cell the Projects sidebar paints and refuses both slots as a foreground.
+    /// walks every cell and permits these foregrounds only as contrast text on an accent fill.
     ///
     /// The snapshot deliberately carries every row variant — thin, automation, load-older and
     /// scan status — because a guard that never renders a variant cannot protect it.
     #[test]
-    fn no_foreground_uses_a_background_palette_slot() {
+    fn background_foregrounds_are_only_used_on_accent_fills() {
         let mut state = AppState::test_new();
         let mut snapshot = snapshot();
         let project = &mut snapshot.projects[0];
@@ -2318,6 +2589,13 @@ mod tests {
                         continue;
                     }
                     let fg = cell.style().fg;
+                    if cell.style().bg == Some(state.palette.accent) {
+                        assert_eq!(
+                            fg,
+                            Some(super::super::widgets::panel_contrast_fg(&state.palette))
+                        );
+                        continue;
+                    }
                     assert_ne!(
                         fg,
                         Some(state.palette.surface_dim),
@@ -2420,7 +2698,7 @@ mod tests {
     fn history_preview_renders_the_real_conversation() {
         use std::io::Write as _;
 
-        let dir = std::env::temp_dir().join("ork3-history-preview");
+        let dir = std::env::temp_dir().join("herduck-history-preview");
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("transcript.jsonl");
         let mut file = std::fs::File::create(&path).expect("create");
@@ -2485,7 +2763,7 @@ mod tests {
     fn full_history_renders_lines_that_the_preview_elides() {
         use std::io::Write as _;
 
-        let dir = std::env::temp_dir().join("ork3-history-full-context");
+        let dir = std::env::temp_dir().join("herduck-history-full-context");
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("transcript.jsonl");
         let mut file = std::fs::File::create(&path).expect("create");
@@ -2524,7 +2802,7 @@ mod tests {
             "the entered session must show text beyond the three-line preview:\n{text}"
         );
         assert!(
-            text.contains("Enter sends + resumes"),
+            text.contains("Enter") && text.contains("Shift+Enter"),
             "composer missing:\n{text}"
         );
     }
@@ -2555,7 +2833,7 @@ mod tests {
     fn history_preview_renders_markdown_instead_of_its_source_marks() {
         use std::io::Write as _;
 
-        let dir = std::env::temp_dir().join("ork3-history-markdown");
+        let dir = std::env::temp_dir().join("herduck-history-markdown");
         std::fs::create_dir_all(&dir).expect("dir");
         let path = dir.join("transcript.jsonl");
         let mut file = std::fs::File::create(&path).expect("create");
@@ -2734,7 +3012,7 @@ mod tests {
         let mut topic = snapshot.projects[0].clone();
         topic.canonical_key = "topic-1".into();
         topic.kind = ProjectKind::Semantic;
-        topic.display_name = "ORK3 architecture".into();
+        topic.display_name = "HERDUCK architecture".into();
         topic.canonical_path = "semantic-topic-key".into();
         snapshot.topics.push(topic);
         state.projects.snapshot = snapshot;
@@ -2751,7 +3029,7 @@ mod tests {
         assert!(matches!(
             &topic_rows[0],
             ProjectTreeRow::Project { display_name, kind: ProjectKind::Semantic, .. }
-                if display_name == "ORK3 architecture"
+                if display_name == "HERDUCK architecture"
         ));
         assert!(!topic_rows.iter().any(|row| matches!(
             row,

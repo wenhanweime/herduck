@@ -65,8 +65,8 @@
 ## 4. 验收
 
 ```bash
-cd /Users/pot/Workspace/ork3
-cargo test --locked --bin ork3 -- \
+cd /Users/example/Workspace/herduck
+cargo test --locked --bin herduck -- \
   clicking_project_session_row_opens_history \
   project_session_resume \
   grok_resume \

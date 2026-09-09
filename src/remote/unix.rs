@@ -156,7 +156,7 @@ fn validate_remote_target(target: &str) -> Result<&str, String> {
 pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     if !REMOTE_MODE_ENABLED {
         return Err(io::Error::other(
-            "ORK3 remote mode is temporarily disabled until ORK3 release binaries are published; it will never install an upstream Herdr binary",
+            "HERDUCK remote mode is temporarily disabled until HERDUCK release binaries are published; it will never install an upstream Herdr binary",
         ));
     }
     let session_name = crate::session::active_name()
@@ -2508,13 +2508,13 @@ mod tests {
         });
         let candidates = remote_herdrs_from_path_discovery(
             &remote_herdr,
-            "/home/can/.local/share/mise/shims/herdr\n/home/can/.local/share/mise/installs/herdr/0.7.1/bin/herdr\n",
+            "/home/example/.local/share/mise/shims/herdr\n/home/example/.local/share/mise/installs/herdr/0.7.1/bin/herdr\n",
         );
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(
             candidates[0].shell_path,
-            "/home/can/.local/share/mise/installs/herdr/0.7.1/bin/herdr"
+            "/home/example/.local/share/mise/installs/herdr/0.7.1/bin/herdr"
         );
     }
 
@@ -2594,10 +2594,10 @@ mod tests {
     #[test]
     fn remote_shell_path_warning_accepts_managed_install() {
         assert!(remote_shell_resolves_managed_install(
-            "/home/can/.local/bin/herdr\n"
+            "/home/example/.local/bin/herdr\n"
         ));
         assert!(remote_shell_resolves_managed_install(
-            "/Users/can/.local/bin/herdr\n"
+            "/Users/example/.local/bin/herdr\n"
         ));
         assert!(!remote_shell_resolves_managed_install(
             "/usr/local/bin/herdr\n"

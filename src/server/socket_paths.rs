@@ -1,13 +1,25 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Legacy environment variable for overriding the client socket path.
-///
-/// Contractual override behavior for auto-detect uses `HERDR_SOCKET_PATH`.
-/// This variable is kept as a fallback for callers that explicitly need a
-/// client-only override when `HERDR_SOCKET_PATH` is not set.
-pub const CLIENT_SOCKET_PATH_ENV_VAR: &str = "ORK3_CLIENT_SOCKET_PATH";
+/// Client-only override, used when there is no API socket override.
+pub const CLIENT_SOCKET_PATH_ENV_VAR: &str = "HERDUCK_CLIENT_SOCKET_PATH";
+pub const ORK3_CLIENT_SOCKET_PATH_ENV_VAR: &str = "ORK3_CLIENT_SOCKET_PATH";
 pub const LEGACY_CLIENT_SOCKET_PATH_ENV_VAR: &str = "HERDR_CLIENT_SOCKET_PATH";
+
+pub(crate) const SOCKET_OVERRIDE_ENV_VARS: [&str; 6] = [
+    crate::api::SOCKET_PATH_ENV_VAR,
+    crate::api::ORK3_SOCKET_PATH_ENV_VAR,
+    crate::api::LEGACY_SOCKET_PATH_ENV_VAR,
+    CLIENT_SOCKET_PATH_ENV_VAR,
+    ORK3_CLIENT_SOCKET_PATH_ENV_VAR,
+    LEGACY_CLIENT_SOCKET_PATH_ENV_VAR,
+];
+
+pub(crate) fn clear_socket_override_env(command: &mut std::process::Command) {
+    for variable in SOCKET_OVERRIDE_ENV_VARS {
+        command.env_remove(variable);
+    }
+}
 
 /// Socket permission mode (owner read/write only).
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
@@ -16,34 +28,25 @@ const SOCKET_PERMISSION_MODE: u32 = 0o600;
 ///
 /// Contract-aligned override behavior:
 /// 1. If CLI `--session <name>` is active, use that session's client socket.
-/// 2. If `HERDR_SOCKET_PATH` is set, derive the client socket path from it by
-///    inserting `-client` before `.sock` (e.g. `ork3.sock` -> `ork3-client.sock`).
+/// 2. Resolve the API override in HERDUCK, ORK3, then filtered HERDR order; derive the client path by
+///    inserting `-client` before `.sock` (e.g. `herduck.sock` -> `herduck-client.sock`).
 ///    This keeps JSON API and client socket overrides consistent.
-/// 3. Otherwise, honor `HERDR_CLIENT_SOCKET_PATH` (legacy/testing fallback).
+/// 3. Otherwise, resolve the client-only override in the same namespace order.
 /// 4. Otherwise, use the active session data directory.
 pub fn client_socket_path() -> PathBuf {
     if crate::session::explicit_session_requested() {
         return crate::session::client_socket_path_for(crate::session::active_name().as_deref());
     }
-    // Drop overrides inherited from another product's pane so ork3 cannot be pulled onto an
-    // upstream ORK3 server; see `session::is_foreign_socket_override`.
+    let current = std::env::var(CLIENT_SOCKET_PATH_ENV_VAR).ok();
+    let ork3 = std::env::var(ORK3_CLIENT_SOCKET_PATH_ENV_VAR).ok();
+    let upstream = std::env::var(LEGACY_CLIENT_SOCKET_PATH_ENV_VAR).ok();
     client_socket_path_from_overrides(
-        std::env::var(crate::api::SOCKET_PATH_ENV_VAR)
-            .ok()
-            .or_else(|| {
-                std::env::var(crate::api::LEGACY_SOCKET_PATH_ENV_VAR)
-                    .ok()
-                    .filter(|path| crate::session::is_ork3_socket_path(path))
-            })
-            .as_deref(),
-        std::env::var(CLIENT_SOCKET_PATH_ENV_VAR)
-            .ok()
-            .or_else(|| {
-                std::env::var(LEGACY_CLIENT_SOCKET_PATH_ENV_VAR)
-                    .ok()
-                    .filter(|path| crate::session::is_ork3_socket_path(path))
-            })
-            .as_deref(),
+        crate::session::socket_override_from_env().as_deref(),
+        crate::session::socket_override_from_values(
+            current.as_deref(),
+            ork3.as_deref(),
+            upstream.as_deref(),
+        ),
     )
 }
 
@@ -66,7 +69,7 @@ pub(crate) fn derive_client_socket_from_api_socket(api_socket_path: &Path) -> Pa
     let stem = api_socket_path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("ork3");
+        .unwrap_or("herduck");
     let parent = api_socket_path.parent().unwrap_or_else(|| Path::new(""));
 
     if api_socket_path
@@ -86,7 +89,7 @@ pub(crate) fn derive_client_socket_from_api_socket(api_socket_path: &Path) -> Pa
 pub(crate) fn prepare_socket_path(path: &Path) -> io::Result<()> {
     crate::ipc::prepare_socket_path(path, |path| {
         format!(
-            "ork3 server is already running (socket busy at {})",
+            "herduck server is already running (socket busy at {})",
             path.display()
         )
     })
@@ -106,23 +109,23 @@ mod tests {
 
     #[test]
     fn client_socket_path_derived_from_api_socket_override() {
-        let path = client_socket_path_from_overrides(Some("/tmp/ork3-test.sock"), None);
-        assert_eq!(path, PathBuf::from("/tmp/ork3-test-client.sock"));
+        let path = client_socket_path_from_overrides(Some("/tmp/herduck-test.sock"), None);
+        assert_eq!(path, PathBuf::from("/tmp/herduck-test-client.sock"));
     }
 
     #[test]
     fn client_socket_path_api_override_takes_precedence_over_legacy_client_override() {
         let path = client_socket_path_from_overrides(
-            Some("/tmp/ork3-test.sock"),
+            Some("/tmp/herduck-test.sock"),
             Some("/tmp/legacy-client.sock"),
         );
-        assert_eq!(path, PathBuf::from("/tmp/ork3-test-client.sock"));
+        assert_eq!(path, PathBuf::from("/tmp/herduck-test-client.sock"));
     }
 
     #[test]
     fn client_socket_path_respects_legacy_client_override_without_api_override() {
-        let path = client_socket_path_from_overrides(None, Some("/tmp/ork3-test-client.sock"));
-        assert_eq!(path, PathBuf::from("/tmp/ork3-test-client.sock"));
+        let path = client_socket_path_from_overrides(None, Some("/tmp/herduck-test-client.sock"));
+        assert_eq!(path, PathBuf::from("/tmp/herduck-test-client.sock"));
     }
 
     #[test]
@@ -130,7 +133,61 @@ mod tests {
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         let path = client_socket_path_from_overrides(None, None);
-        assert_eq!(path, crate::config::config_dir().join("ork3-client.sock"));
+        assert_eq!(
+            path,
+            crate::config::config_dir().join(format!(
+                "{}-client.sock",
+                crate::config::runtime_product_name()
+            ))
+        );
+    }
+
+    #[test]
+    fn client_socket_environment_accepts_ork3_and_clears_all_aliases() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let saved: Vec<_> = SOCKET_OVERRIDE_ENV_VARS
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+        for variable in SOCKET_OVERRIDE_ENV_VARS {
+            std::env::remove_var(variable);
+        }
+        crate::session::clear_explicit_session_for_test();
+        std::env::set_var(
+            ORK3_CLIENT_SOCKET_PATH_ENV_VAR,
+            "/tmp/legacy-custom-client.sock",
+        );
+        std::env::set_var(LEGACY_CLIENT_SOCKET_PATH_ENV_VAR, "/tmp/herdr-client.sock");
+        assert_eq!(
+            client_socket_path(),
+            PathBuf::from("/tmp/legacy-custom-client.sock")
+        );
+        std::env::set_var(CLIENT_SOCKET_PATH_ENV_VAR, "/tmp/new-custom-client.sock");
+        assert_eq!(
+            client_socket_path(),
+            PathBuf::from("/tmp/new-custom-client.sock")
+        );
+        std::env::set_var(
+            crate::api::ORK3_SOCKET_PATH_ENV_VAR,
+            "/tmp/api-override.sock",
+        );
+        assert_eq!(
+            client_socket_path(),
+            PathBuf::from("/tmp/api-override-client.sock")
+        );
+        let mut child = std::process::Command::new("herduck");
+        clear_socket_override_env(&mut child);
+        for variable in SOCKET_OVERRIDE_ENV_VARS {
+            assert!(child
+                .get_envs()
+                .any(|(key, value)| key == variable && value.is_none()));
+        }
+        for (key, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
     }
 
     #[test]

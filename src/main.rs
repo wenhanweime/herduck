@@ -8,16 +8,17 @@ use crossterm::event::{
 use crossterm::event::{PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
 use crossterm::execute;
 
+pub(crate) const HERDUCK_ENV_VAR: &str = "HERDUCK_ENV";
+pub(crate) const HERDUCK_ENV_VALUE: &str = "1";
 pub(crate) const ORK3_ENV_VAR: &str = "ORK3_ENV";
-pub(crate) const ORK3_ENV_VALUE: &str = "1";
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
-const NESTED_ORK3_MESSAGES: [&str; 6] = [
+const NESTED_HERDUCK_MESSAGES: [&str; 6] = [
     "inception detected. we need to go deeper... said no one ever.",
     "recursion is a pathway to many abilities some consider to be... unnatural.",
     "you were so preoccupied with whether you could, you didn't stop to think if you should. — dr. malcolm",
     "recursive orchestration is disabled. somewhere, a call stack breathes a sigh of relief.",
-    "recursive descent denied. one ORK3 at a time is enough.",
+    "recursive descent denied. one HERDUCK at a time is enough.",
     "recursion detected. base case not found. aborting.",
 ];
 
@@ -104,14 +105,14 @@ mod workspace;
 mod worktree;
 
 fn init_logging() {
-    crate::logging::init_file_logging("ork3.log");
+    crate::logging::init_file_logging("herduck.log");
 }
 
-const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
-# Place this file at ~/.config/ork3/config.toml
+const DEFAULT_CONFIG: &str = r##"# HERDUCK configuration
+# Place this file at ~/.config/herduck/config.toml
 
-# Show first-run notification setup on startup.
-# Missing also shows onboarding; set false after you've chosen.
+# Show a welcome with View configuration / Skip on startup.
+# Both actions dismiss it permanently; Settings remains available with ctrl+b, s.
 # onboarding = true
 
 [theme]
@@ -120,7 +121,7 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 #                  vesper
 # name = "catppuccin"
 
-# Follow host terminal light/dark appearance and switch ORK3 UI themes.
+# Follow host terminal light/dark appearance and switch HERDUCK UI themes.
 # Existing manual behavior is unchanged unless this is true.
 # auto_switch = false
 # dark_name = "catppuccin"
@@ -145,20 +146,75 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 
 # CWD policy for new panes, tabs, and workspaces when no explicit --cwd is provided.
 # Use "follow" to inherit the source pane/workspace, "home" for $HOME,
-# "current" for Herdr's process directory, or a fixed path such as "~/Projects".
+# "current" for HERDUCK's process directory, or a fixed path such as "~/Projects".
 # new_cwd = "follow"
 
 [update]
-# Update channel used by background version checks and `ork3 update`.
+# Update channel used by background version checks and `herduck update`.
 # Defaults to "stable" on Linux/macOS and "preview" on Windows.
 # Set explicitly to choose stable releases or opt-in preview builds.
 # channel = "stable"
 
-# Check the ORK3 release channel for new versions in the background.
-# version_check = true
+# Check the HERDUCK release channel for new versions in the background.
+# Disabled until HERDUCK publishes its own release feeds.
+# version_check = false
 
-# Check the ORK3 release channel for remote agent-detection manifest updates in the background.
-# manifest_check = true
+# Check the HERDUCK release channel for remote agent-detection manifest updates in the background.
+# manifest_check = false
+
+[projects]
+# Repeated normalized titles at this count become automation templates.
+# automation_title_threshold = 20
+
+# Literal directory-name prefixes for disposable agent runners under a system temp directory.
+# Default is empty. Example: ["ci-worker-", "batch-worker-"]
+# These also match descendants of the runner; normal project directories are unaffected.
+# Changes require an HERDUCK restart and reclassify existing automatic assignments.
+# ephemeral_cwd_prefixes = []
+
+# Additional agent history roots. Standard locations are always retained; empty lists add none.
+# [projects.adapters.codex]
+# roots = ["~/.codex/sessions"]
+# [projects.adapters.claude]
+# roots = ["~/.claude/projects"]
+# [projects.adapters.pi]
+# roots = ["~/.pi/agent/sessions"]
+# [projects.adapters.opencode]
+# roots = ["~/.local/share/opencode"]
+# [projects.adapters.grok]
+# roots = ["~/.grok/sessions"]
+
+[projects.summary]
+# Title language: "en" (English) or "zh" (Chinese).
+# Save this file, then reopen Settings (or use Reload Config) to apply changes.
+# "english", "chinese", and "zh-CN" are accepted aliases.
+# title_language = "en"
+
+# "pending" (default) keeps summaries off until you enable them in this file.
+# "auto" and "llm" try only configured providers; titles fall back locally on failure.
+# "local" generates basic offline titles, retaining existing topics without model calls.
+# mode = "pending"
+
+# Settings only displays current priorities and details; Open config file edits this file.
+# Providers and each provider's models are tried from top to bottom.
+# Agent CLIs use their own login. Empty models use the Agent's default model.
+# A providers list replaces the chain; providers = [] disables model attempts.
+# Legacy explicit auto/llm configs without a list retain their preset provider chain.
+# Session names inherit the summary chain. title_providers = [] uses only local names;
+# [[projects.summary.title_providers]] entries define a separate naming order.
+# Put scalar/list options before any [[...providers]] entries. Manual names are kept.
+# Keep API keys in the environment and reference only the variable name.
+# [[projects.summary.providers]]
+# id = "codex"
+# kind = "cli"
+# models = []
+#
+# [[projects.summary.providers]]
+# id = "local-server"
+# kind = "openai_compatible"
+# endpoint = "http://localhost:11434/v1/chat/completions"
+# models = ["your-model"]
+# api_key_env = "SUMMARY_API_KEY" # omit for a server that needs no key
 
 [keys]
 # Prefix key to enter prefix mode (default: "ctrl+b")
@@ -190,7 +246,7 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # previous_agent = ""     # optional, unset by default
 # next_agent = ""         # optional, unset by default
 # focus_agent = ""        # optional indexed binding, e.g. "prefix+alt+1..9"
-# remote_image_paste = "ctrl+v" # only active in ork3 --remote; empty disables raw-key image paste
+# remote_image_paste = "ctrl+v" # only active in herduck --remote; empty disables raw-key image paste
 # new_tab = "prefix+c"
 # rename_tab = "prefix+shift+t"
 # previous_tab = "prefix+p"
@@ -244,7 +300,7 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # agents = ""     # e.g. "alt" makes alt+1..9 focus agent rows directly
 
 # [worktrees]
-# directory = "~/.ork3/worktrees"
+# directory = "~/.herduck/worktrees"
 
 [ui]
 # Sidebar width (auto-scaled based on workspace names, this sets the default)
@@ -259,11 +315,11 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # Collapsed sidebar presentation: "compact" keeps the narrow status rail, "hidden" uses zero width.
 # sidebar_collapsed_mode = "compact"
 
-# Terminal width at or below which ORK3 uses the mobile single-column layout.
+# Terminal width at or below which HERDUCK uses the mobile single-column layout.
 # Increase this for foldables, tablets, or wide phone terminals.
 # mobile_width_threshold = 64
 
-# Capture mouse input for Herdr's mouse UI.
+# Capture mouse input for HERDUCK's mouse UI.
 # Set false to let the terminal handle normal clicks, such as Cmd-clicking URLs.
 # Pane apps like lazygit and btop can still receive mouse when they request it.
 # mouse_capture = true
@@ -273,16 +329,16 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # copy_on_select = true
 
 # Host cursor policy: "auto", "native", or "drawn".
-# "auto" draws Herdr's own cursor on native Windows builds and WSL to avoid ConPTY cursor flicker, and uses the native terminal cursor elsewhere.
-# "native" always uses the outer terminal cursor. "drawn" always draws Herdr's cursor as terminal cell content.
+# "auto" draws HERDUCK's own cursor on native Windows builds and WSL to avoid ConPTY cursor flicker, and uses the native terminal cursor elsewhere.
+# "native" always uses the outer terminal cursor. "drawn" always draws HERDUCK's cursor as terminal cell content.
 # host_cursor = "auto"
 
-# Optional modifier that forwards right-click hold/drag gestures to pane apps instead of opening Herdr's pane menu.
+# Optional modifier that forwards right-click hold/drag gestures to pane apps instead of opening HERDUCK's pane menu.
 # Empty/off disables this. Shift is intentionally unsupported because terminals commonly reserve Shift+mouse.
 # right_click_passthrough_modifier = ""
 
 # Force a full redraw when the outer terminal regains focus.
-# Set false to reduce visible flashing when switching back to Herdr.
+# Set false to reduce visible flashing when switching back to HERDUCK.
 # Trade-off: rare host terminal surface corruption may persist until the next full redraw.
 # redraw_on_focus_gained = true
 
@@ -338,13 +394,13 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # Background notification popup delivery
 [ui.toast]
 # off = disable pop-up notifications
-# ork3 = show in-app toasts
+# herduck = show in-app toasts
 # terminal = ask the outer terminal to show a desktop notification
 # system = ask the OS notification service directly
 # delivery = "off"
 # delay_seconds = 1
 
-[ui.toast.ork3]
+[ui.toast.herduck]
 # position = "bottom-right"
 
 [ui.toast.clipboard]
@@ -365,28 +421,32 @@ const DEFAULT_CONFIG: &str = r##"# ORK3 configuration
 # droid = "off"
 
 [session]
+# Default for Settings > Sessions > Start session. Set an installed Agent or "shell".
+# Empty also means shell. Tabs/splits use a shell; Resume uses the original Agent.
+# default_agent = "shell"
+
 # Resume supported AI-agent panes into their native conversation sessions after
-# a ORK3 server restart. Requires official integrations that report session refs.
+# a HERDUCK server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
 
-# Stop an identified idle Agent after this many seconds without terminal input
-# or output. The pane and shell stay open when the Agent was launched from a shell.
-# Set to 0 to disable automatic Agent process reclamation.
+# Mark an idle Agent inactive after this many seconds without input, output, or
+# state changes. Its process stays alive; new activity restores its active status.
+# Set to 0 to disable inactivity marking. Sessions are never closed by this timeout.
 # agent_idle_timeout_secs = 3600
 
 [remote]
-# Whether ork3 manages the ssh config used for `ork3 --remote`.
-# When true (default), ork3 runs remote ssh through a generated config that
+# Whether herduck manages the ssh config used for `herduck --remote`.
+# When true (default), herduck runs remote ssh through a generated config that
 # includes your ~/.ssh/config first and adds ServerAliveInterval/
 # ServerAliveCountMax as fallbacks (so any keepalive values you set yourself
-# still win) to survive idle network/NAT timeouts. ORK3 also uses a private
+# still win) to survive idle network/NAT timeouts. HERDUCK also uses a private
 # per-attach OpenSSH control socket to reuse the first authenticated connection.
 # Set false to run plain ssh against your ssh config unchanged — this does not
-# force keepalive or multiplexing off, it only stops ork3 from adding its own.
+# force keepalive or multiplexing off, it only stops herduck from adding its own.
 # manage_ssh_config = true
 
 [experimental]
-# Allow launching ork3 from inside a herdr-managed pane.
+# Allow launching herduck from inside a herdr-managed pane.
 # allow_nested = false
 # Experimental local Kitty graphics rendering for attached clients.
 # Requires a Kitty graphics-compatible outer terminal.
@@ -420,11 +480,20 @@ pane_history = false
 "##;
 
 fn should_block_nested(config: &config::Config) -> bool {
-    should_block_nested_for_env(config, std::env::var(ORK3_ENV_VAR).ok().as_deref())
+    should_block_nested_for_env(
+        config,
+        std::env::var(HERDUCK_ENV_VAR).ok().as_deref(),
+        std::env::var(ORK3_ENV_VAR).ok().as_deref(),
+    )
 }
 
-fn should_block_nested_for_env(config: &config::Config, herdr_env: Option<&str>) -> bool {
-    !config.experimental.allow_nested && herdr_env == Some(HERDR_ENV_VALUE)
+fn should_block_nested_for_env(
+    config: &config::Config,
+    herduck_env: Option<&str>,
+    ork3_env: Option<&str>,
+) -> bool {
+    !config.experimental.allow_nested
+        && (herduck_env == Some(HERDUCK_ENV_VALUE) || ork3_env == Some(HERDUCK_ENV_VALUE))
 }
 
 fn random_nested_message() -> &'static str {
@@ -434,13 +503,13 @@ fn random_nested_message() -> &'static str {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.subsec_nanos() as usize)
         .unwrap_or(0);
-    let index = (nanos ^ (std::process::id() as usize)) % NESTED_ORK3_MESSAGES.len();
-    NESTED_ORK3_MESSAGES[index]
+    let index = (nanos ^ (std::process::id() as usize)) % NESTED_HERDUCK_MESSAGES.len();
+    NESTED_HERDUCK_MESSAGES[index]
 }
 
 fn exit_if_nested_disabled(config: &config::Config) {
     if should_block_nested(config) {
-        eprintln!("\x1b[1merror:\x1b[0m nested ork3 is disabled by default.");
+        eprintln!("\x1b[1merror:\x1b[0m nested herduck is disabled by default.");
         eprintln!("see configuration if you want to enable it.");
         eprintln!();
         eprintln!("\x1b[2m\"{}\"\x1b[0m", random_nested_message());
@@ -454,7 +523,7 @@ fn main() -> io::Result<()> {
         Ok(args) => args,
         Err(err) => {
             eprintln!("error: {err}");
-            eprintln!("run 'ork3 --help' for usage");
+            eprintln!("run 'herduck --help' for usage");
             std::process::exit(2);
         }
     };
@@ -462,7 +531,7 @@ fn main() -> io::Result<()> {
         Ok(parsed) => parsed,
         Err(err) => {
             eprintln!("error: {err}");
-            eprintln!("run 'ork3 --help' for usage");
+            eprintln!("run 'herduck --help' for usage");
             std::process::exit(2);
         }
     };
@@ -477,7 +546,7 @@ fn main() -> io::Result<()> {
         })
     {
         eprintln!("error: --remote can only be used with the default launch command");
-        eprintln!("run 'ork3 --help' for usage");
+        eprintln!("run 'herduck --help' for usage");
         std::process::exit(2);
     }
 
@@ -510,7 +579,7 @@ fn main() -> io::Result<()> {
             }
             Err(err) => {
                 eprintln!("{err}");
-                eprintln!("usage: ork3 update [--handoff]");
+                eprintln!("usage: herduck update [--handoff]");
                 std::process::exit(2);
             }
         };
@@ -528,95 +597,101 @@ fn main() -> io::Result<()> {
     }
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("ork3 — terminal workspace manager for AI coding agents");
+        println!("herduck — terminal workspace manager for AI coding agents");
         println!();
-        println!("Usage: ork3 [options]");
-        println!("       ork3 --session <name> [options]");
-        println!("       ork3 --remote <ssh-target> [--session <name>]");
-        println!("       ork3 session attach <name>");
-        println!("       ork3 completion zsh");
-        println!("       ork3 update [--handoff]");
-        println!("       ork3 channel set <stable|preview>");
-        println!("       ork3 server stop");
-        println!("       ork3 server reload-config");
-        println!("       ork3 api <subcommand> ...");
-        println!("       ork3 completion <shell>");
-        println!("       ork3 config <subcommand> ...");
-        println!("       ork3 channel <subcommand> ...");
-        println!("       ork3 workspace <subcommand> ...");
-        println!("       ork3 worktree <subcommand> ...");
-        println!("       ork3 tab <subcommand> ...");
-        println!("       ork3 notification <subcommand> ...");
-        println!("       ork3 agent <subcommand> ...");
-        println!("       ork3 pane <subcommand> ...");
-        println!("       ork3 wait <subcommand> ...");
-        println!("       ork3 session <subcommand> ...");
-        println!("       ork3 integration <subcommand> ...");
+        println!("Usage: herduck [options]");
+        println!("       herduck --session <name> [options]");
+        println!("       herduck --remote <ssh-target> [--session <name>]");
+        println!("       herduck session attach <name>");
+        println!("       herduck completion zsh");
+        println!("       herduck update [--handoff]");
+        println!("       herduck channel set <stable|preview>");
+        println!("       herduck server stop");
+        println!("       herduck server reload-config");
+        println!("       herduck api <subcommand> ...");
+        println!("       herduck completion <shell>");
+        println!("       herduck config <subcommand> ...");
+        println!("       herduck channel <subcommand> ...");
+        println!("       herduck workspace <subcommand> ...");
+        println!("       herduck worktree <subcommand> ...");
+        println!("       herduck tab <subcommand> ...");
+        println!("       herduck notification <subcommand> ...");
+        println!("       herduck agent <subcommand> ...");
+        println!("       herduck pane <subcommand> ...");
+        println!("       herduck wait <subcommand> ...");
+        println!("       herduck session <subcommand> ...");
+        println!("       herduck integration <subcommand> ...");
         println!();
         println!("Common commands:");
         for (command, description) in [
-            ("ork3", "Launch or attach to the persistent session"),
+            ("herduck", "Launch or attach to the persistent session"),
             (
-                "ork3 status [server|client]",
+                "herduck status [server|client]",
                 "Show local client and running server status",
             ),
-            ("ork3 update", "Download and install the latest version"),
-            ("ork3 completion zsh", "Generate shell completions for zsh"),
+            ("herduck update", "Download and install the latest version"),
             (
-                "ork3 server stop",
+                "herduck completion zsh",
+                "Generate shell completions for zsh",
+            ),
+            (
+                "herduck server stop",
                 "Stop the running server via the API socket",
             ),
             (
-                "ork3 channel set <stable|preview>",
+                "herduck channel set <stable|preview>",
                 "Choose the stable or preview update channel",
             ),
             (
-                "ork3 server reload-config",
+                "herduck server reload-config",
                 "Reload config.toml in the running server",
             ),
             (
-                "ork3 config reset-keys",
+                "herduck config reset-keys",
                 "Back up config.toml and remove custom keybindings",
             ),
             (
-                "ork3 channel <subcommand>",
+                "herduck channel <subcommand>",
                 "Manage the stable or preview update channel",
             ),
             (
-                "ork3 api <subcommand>",
+                "herduck api <subcommand>",
                 "Inspect socket API metadata and live runtime state",
             ),
             (
-                "ork3 workspace <subcommand>",
+                "herduck workspace <subcommand>",
                 "Workspace helpers over the socket API",
             ),
             (
-                "ork3 worktree <subcommand>",
+                "herduck worktree <subcommand>",
                 "Git worktree helpers over the socket API",
             ),
-            ("ork3 tab <subcommand>", "Tab helpers over the socket API"),
             (
-                "ork3 notification <subcommand>",
+                "herduck tab <subcommand>",
+                "Tab helpers over the socket API",
+            ),
+            (
+                "herduck notification <subcommand>",
                 "Notification helpers over the socket API",
             ),
             (
-                "ork3 agent <subcommand>",
+                "herduck agent <subcommand>",
                 "Agent/terminal helpers over the socket API",
             ),
             (
-                "ork3 pane <subcommand>",
+                "herduck pane <subcommand>",
                 "Pane control helpers over the socket API",
             ),
             (
-                "ork3 wait <subcommand>",
+                "herduck wait <subcommand>",
                 "Blocking wait helpers over the socket API",
             ),
             (
-                "ork3 session <subcommand>",
+                "herduck session <subcommand>",
                 "Manage named persistent sessions",
             ),
             (
-                "ork3 integration <subcommand>",
+                "herduck integration <subcommand>",
                 "Manage built-in agent integrations",
             ),
         ] {
@@ -624,12 +699,12 @@ fn main() -> io::Result<()> {
         }
         println!();
         println!("Advanced commands:");
-        println!("  {:<32} Run as headless server", "ork3 server");
+        println!("  {:<32} Run as headless server", "herduck server");
         println!();
         println!("Options:");
         println!("  --no-session        Run monolithically (no server/client, escape hatch)");
         println!("  --session <name>    Use or create a named persistent session");
-        println!("  --remote <target>   Attach through SSH to a remote ORK3 server");
+        println!("  --remote <target>   Attach through SSH to a remote HERDUCK server");
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
         println!("  --handoff           Opt into live handoff for update or remote attach");
@@ -639,7 +714,7 @@ fn main() -> io::Result<()> {
         println!();
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
-        println!("Env:    ORK3_CONFIG_PATH overrides config file path");
+        println!("Env:    HERDUCK_CONFIG_PATH overrides config file path");
         println!("License and upstream provenance: docs/UPSTREAM.md");
         return Ok(());
     }
@@ -674,7 +749,7 @@ fn main() -> io::Result<()> {
         let arg_name = arg.split_once('=').map(|(name, _)| name).unwrap_or(arg);
         if arg.starts_with('-') && !known_flags.contains(&arg_name) {
             eprintln!("unknown option: {arg}");
-            eprintln!("run 'ork3 --help' for usage");
+            eprintln!("run 'herduck --help' for usage");
             std::process::exit(1);
         }
         if !arg.starts_with('-')
@@ -696,7 +771,7 @@ fn main() -> io::Result<()> {
             .contains(&arg.as_str())
         {
             eprintln!("unknown command: {arg}");
-            eprintln!("run 'ork3 --help' for usage");
+            eprintln!("run 'herduck --help' for usage");
             std::process::exit(1);
         }
     }
@@ -736,7 +811,7 @@ fn main() -> io::Result<()> {
     let _api_server = match api::start_server_with_capabilities(api_tx, event_hub.clone(), None) {
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            eprintln!("error: ork3 is already running");
+            eprintln!("error: herduck is already running");
             eprintln!("socket: {}", api::socket_path().display());
             std::process::exit(1);
         }
@@ -852,31 +927,50 @@ mod tests {
     #[test]
     fn nested_herdr_blocks_when_env_is_set() {
         let config = config::Config::default();
-        assert!(should_block_nested_for_env(&config, Some(HERDR_ENV_VALUE)));
+        assert!(should_block_nested_for_env(
+            &config,
+            Some(HERDUCK_ENV_VALUE),
+            None
+        ));
     }
 
     #[test]
     fn nested_herdr_does_not_block_when_allowed() {
         let config: config::Config =
             toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
-        assert!(!should_block_nested_for_env(&config, Some(HERDR_ENV_VALUE)));
+        assert!(!should_block_nested_for_env(
+            &config,
+            Some(HERDUCK_ENV_VALUE),
+            None
+        ));
     }
 
     #[test]
     fn nested_herdr_does_not_block_without_env() {
         let config = config::Config::default();
-        assert!(!should_block_nested_for_env(&config, None));
+        assert!(!should_block_nested_for_env(&config, None, None));
+    }
+
+    #[test]
+    fn legacy_ork3_marker_prevents_nesting() {
+        let config = config::Config::default();
+        assert!(should_block_nested_for_env(&config, None, Some("1")));
+        assert!(should_block_nested_for_env(&config, Some("0"), Some("1")));
+        assert!(!should_block_nested_for_env(&config, Some("0"), Some("0")));
+        let allowed: config::Config =
+            toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
+        assert!(!should_block_nested_for_env(&allowed, None, Some("1")));
     }
 
     #[test]
     fn random_nested_message_comes_from_known_set() {
         let message = random_nested_message();
-        assert!(NESTED_ORK3_MESSAGES.contains(&message));
+        assert!(NESTED_HERDUCK_MESSAGES.contains(&message));
     }
 
     #[test]
     fn nested_message_strings_no_longer_repeat_herdr_prefix() {
-        assert!(NESTED_ORK3_MESSAGES
+        assert!(NESTED_HERDUCK_MESSAGES
             .iter()
             .all(|message| !message.starts_with("herdr:")));
     }

@@ -9,10 +9,23 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-check:
-    cargo fmt --all -- --check
+typecheck:
+    cargo check --locked --all-targets
+
+lint:
     cargo clippy --locked --all-targets -- -D warnings
-    cargo test --locked -- --test-threads=1
+
+# Pass a test filter or --test <target> to run only the affected tests locally.
+test *args:
+    cargo test --locked {{args}} -- --test-threads=1
+
+check-public:
+    python3 tooling/check_public.py
+
+test-public:
+    python3 -m unittest discover -s tooling -p 'test_check_public.py'
+
+check: fmt-check check-public lint test
 
 build:
     cargo build --locked
@@ -23,12 +36,13 @@ release:
 install:
     cargo install --path . --locked
 
-# Debug binary into ~/.local/bin (ork3-dev data). Re-sign after copy;
+# Debug binary into ~/.local/bin (herduck-dev data). Re-sign after copy;
 # macOS kills an unsigned/invalid adhoc Mach-O with `zsh: killed`.
 install-debug:
     cargo build --locked
-    cp target/debug/ork3 ~/.local/bin/ork3
-    codesign --force --sign - ~/.local/bin/ork3
+    mkdir -p ~/.local/bin
+    cp target/debug/herduck ~/.local/bin/herduck
+    codesign --force --sign - ~/.local/bin/herduck
 
 # Install the debug binary and make a running server actually use it.
 #
@@ -44,12 +58,16 @@ install-debug-live: install-debug
     set -euo pipefail
     # Clear inherited socket overrides: a pane started by the running server exports them, which
     # would point this command back at whichever server spawned the shell.
-    running=$(env -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH \
-        ork3 status --json 2>/dev/null | grep -o '"running":true' || true)
+    running=$(env -u HERDUCK_SOCKET_PATH -u HERDUCK_CLIENT_SOCKET_PATH \
+        -u ORK3_SOCKET_PATH -u ORK3_CLIENT_SOCKET_PATH \
+        -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH \
+        herduck status --json 2>/dev/null | grep -o '"running":true' || true)
     if [[ -n "$running" ]]; then
         echo "handing live panes to the new binary…"
-        env -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH \
-            ork3 server live-handoff --import-exe ~/.local/bin/ork3
+        env -u HERDUCK_SOCKET_PATH -u HERDUCK_CLIENT_SOCKET_PATH \
+            -u ORK3_SOCKET_PATH -u ORK3_CLIENT_SOCKET_PATH \
+            -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH \
+            herduck server live-handoff --import-exe ~/.local/bin/herduck
     else
-        echo "no server running; the next \`ork3\` starts the new binary."
+        echo "no server running; the next \`herduck\` starts the new binary."
     fi

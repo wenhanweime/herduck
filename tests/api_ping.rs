@@ -120,11 +120,11 @@ fn spawn_herdr_with_options(
     path_override: Option<&Path>,
     shell: &str,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("ork3-dev")).unwrap();
+    fs::create_dir_all(config_home.join("herduck-dev")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("ork3-dev/config.toml"),
+        config_home.join("herduck-dev/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -138,15 +138,15 @@ fn spawn_herdr_with_options(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_ork3"));
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herduck"));
     support::isolate_project_history_for_pty(&mut cmd, runtime_dir);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("ORK3_SOCKET_PATH", socket_path);
-    cmd.env_remove("ORK3_CLIENT_SOCKET_PATH");
+    cmd.env("HERDUCK_SOCKET_PATH", socket_path);
+    cmd.env_remove("HERDUCK_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", shell);
-    cmd.env_remove("ORK3_ENV");
+    cmd.env_remove("HERDUCK_ENV");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
@@ -291,7 +291,7 @@ fn ping_over_socket_returns_version() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -316,12 +316,12 @@ fn server_reload_agent_manifests_reports_runtime_override() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
-    let override_dir = config_home.join("ork3-dev").join("agent-detection");
+    let override_dir = config_home.join("herduck-dev").join("agent-detection");
     fs::create_dir_all(&override_dir).unwrap();
     let override_path = override_dir.join("codex.toml");
     fs::write(
@@ -362,7 +362,7 @@ fn workspace_list_and_create_round_trip() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -587,7 +587,7 @@ fn tab_methods_round_trip_over_socket() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -710,7 +710,7 @@ fn pane_info_reports_foreground_cwd_without_changing_pane_cwd() {
     fs::create_dir_all(&foreground).unwrap();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/bash");
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -903,7 +903,7 @@ fn agent_start_creates_named_terminal_over_socket() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -958,7 +958,7 @@ fn agent_methods_round_trip_over_socket() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -1122,7 +1122,7 @@ fn tab_create_with_no_focus_preserves_active_tab() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -1181,7 +1181,7 @@ fn events_subscribe_streams_workspace_tab_and_agent_events() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();
@@ -1326,7 +1326,7 @@ fn events_subscribe_streams_pane_split_and_close_events() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -1403,7 +1403,7 @@ fn events_subscribe_streams_tab_and_workspace_close_events() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
@@ -1487,7 +1487,7 @@ fn pane_report_agent_updates_effective_state() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();
@@ -1693,7 +1693,7 @@ fn pane_report_agent_accepts_unknown_agent_labels() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -1738,7 +1738,7 @@ fn pane_release_agent_suppresses_reacquire_during_graceful_exit() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();
@@ -1886,7 +1886,7 @@ fn pane_clear_agent_authority_restores_fallback_state() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();
@@ -2007,7 +2007,7 @@ fn events_subscribe_streams_output_and_agent_status_events() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let bin_dir = base.join("bin");
 
     fs::create_dir_all(&bin_dir).unwrap();
@@ -2131,7 +2131,7 @@ fn pane_info_and_subscriptions_expose_done_agent_status() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
@@ -2262,7 +2262,7 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("ork3.sock");
+    let socket_path = runtime_dir.join("herduck.sock");
 
     let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));

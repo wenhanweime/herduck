@@ -11,7 +11,7 @@ use super::sidebar::{
     next_entry_is_indented_workspace, workspace_list_entries_expanded, AgentPanelEntry,
     WorkspaceListEntry,
 };
-use super::status::{agent_icon, state_dot};
+use super::status::state_dot;
 use super::text::{display_width_u16, truncate_end};
 use crate::app::state::{Palette, ToastKind, ToastNotification};
 use crate::app::AppState;
@@ -513,7 +513,7 @@ fn render_mobile_switcher_content(
                 entry.ws_idx == ws_idx && entry.tab_idx == tab_idx && entry.pane_id == pane_id
             });
             let bg = mobile_item_bg(false, active, p);
-            let (icon, icon_style) = agent_icon(entry.state, entry.seen, app.spinner_tick, p);
+            let (icon, icon_style) = entry.status_icon(app.spinner_tick, p);
             let title = Line::from(vec![
                 Span::styled("  ", Style::default().bg(bg)),
                 Span::styled(icon, icon_style.bg(bg)),
@@ -524,7 +524,11 @@ fn render_mobile_switcher_content(
                         content.width.saturating_sub(5) as usize,
                     ),
                     Style::default()
-                        .fg(p.text)
+                        .fg(if entry.agent_inactive {
+                            p.overlay0
+                        } else {
+                            p.text
+                        })
                         .bg(bg)
                         .add_modifier(Modifier::BOLD),
                 ),
@@ -719,15 +723,7 @@ fn mobile_agent_detail(entry: &AgentPanelEntry) -> String {
     if let Some(tab_label) = entry.primary_tab_label.as_deref() {
         parts.push(tab_label.to_string());
     }
-    let status = entry
-        .state_labels
-        .get(super::sidebar::agent_panel_status_key(
-            entry.state,
-            entry.seen,
-        ))
-        .cloned()
-        .unwrap_or_else(|| super::status::state_label(entry.state, entry.seen).to_string());
-    parts.push(status);
+    parts.push(entry.status_label().to_string());
     if let Some(agent_label) = entry.agent_label.as_deref() {
         parts.push(agent_label.to_string());
     }
@@ -1143,6 +1139,7 @@ mod tests {
             agent_label: agent_label.map(str::to_string),
             agent: agent_label.and_then(crate::detect::parse_agent_label),
             state: AgentState::Idle,
+            agent_inactive: false,
             seen: true,
             last_agent_state_change_seq: None,
             state_labels: std::collections::HashMap::new(),
@@ -1323,6 +1320,13 @@ mod tests {
         let entry = agent_entry(Some("mobile-state"), Some("pi"));
 
         assert_eq!(mobile_agent_detail(&entry), "  mobile-state · idle · pi");
+    }
+
+    #[test]
+    fn mobile_inactive_agent_keeps_its_tab_and_session_context() {
+        let mut entry = agent_entry(Some("review"), Some("codex"));
+        entry.agent_inactive = true;
+        assert_eq!(mobile_agent_detail(&entry), "  review · inactive · codex");
     }
 
     #[test]

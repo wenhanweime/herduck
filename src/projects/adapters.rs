@@ -1918,6 +1918,28 @@ mod tests {
     }
 
     #[test]
+    fn temporary_worker_locations_do_not_delete_history_sources() {
+        let root = temp_dir("opencode-temporary-source");
+        write_fixture(
+            "opencode",
+            &root,
+            "worker",
+            Some("New session - 2026-09-05T16:36:19.009Z"),
+            Some("/tmp/ci-worker-abc123"),
+        );
+        let scan = scan_default_root("opencode", &root);
+        assert_eq!(scan.completion, ScanCompletion::Complete);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.seen_source_keys.len(), 1);
+        assert!(scan.excluded_source_keys.is_empty());
+        assert_eq!(
+            scan.candidates[0].session_class,
+            Some(SessionClass::Interactive)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn opencode_classifier_artifacts_are_not_reimported_from_history() {
         let root = temp_dir("opencode-classifier-artifact");
         write_fixture(
@@ -1925,7 +1947,7 @@ mod tests {
             &root,
             "classifier-1",
             Some("New session - 2026-08-17T00:00:00Z"),
-            Some("/tmp/ork3"),
+            Some("/tmp/herduck"),
         );
         let connection = opencode_connection(&root);
         connection

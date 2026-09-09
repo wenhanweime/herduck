@@ -863,6 +863,7 @@ mod tests {
             terminal_title_stripped: None,
             display_agent: None,
             agent_status,
+            agent_inactive: false,
             state_labels: HashMap::new(),
             tokens: HashMap::new(),
             agent_session: None,
@@ -908,7 +909,7 @@ mod tests {
     #[test]
     fn socket_path_prefers_explicit_env_override() {
         let _guard = env_lock().lock().unwrap();
-        let unique = format!("/tmp/ork3-test-{}.sock", std::process::id());
+        let unique = format!("/tmp/herduck-test-{}.sock", std::process::id());
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &unique);
@@ -929,7 +930,7 @@ mod tests {
 
         let expected = config_home
             .join(crate::config::app_dir_name())
-            .join("ork3.sock");
+            .join("herduck.sock");
         assert_eq!(socket_path(), expected);
 
         std::env::remove_var("XDG_CONFIG_HOME");
@@ -949,7 +950,7 @@ mod tests {
             .join(crate::config::app_dir_name())
             .join("sessions")
             .join("work")
-            .join("ork3.sock");
+            .join("herduck.sock");
         assert_eq!(socket_path(), expected);
 
         std::env::remove_var(crate::session::SESSION_ENV_VAR);

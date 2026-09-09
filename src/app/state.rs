@@ -1081,6 +1081,8 @@ pub enum AgentPanelSort {
 pub enum SettingsSection {
     Theme,
     Titles,
+    Sessions,
+    Summaries,
     Sound,
     Toast,
     PaneLabels,
@@ -1091,23 +1093,37 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::Theme,
+        Self::PaneLabels,
+        Self::Sessions,
+        Self::Summaries,
         Self::Titles,
         Self::Sound,
         Self::Toast,
-        Self::PaneLabels,
         Self::Integrations,
         Self::Experiments,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Theme => "theme",
-            Self::Titles => "titles",
-            Self::Sound => "sound",
-            Self::Toast => "toasts",
-            Self::PaneLabels => "pane labels",
-            Self::Experiments => "experiments",
-            Self::Integrations => "integrations",
+            Self::Theme => "Appearance",
+            Self::Titles => "Session names",
+            Self::Sessions => "Sessions",
+            Self::Summaries => "Summaries",
+            Self::Sound => "Sounds",
+            Self::Toast => "Notifications",
+            Self::PaneLabels => "Pane labels",
+            Self::Experiments => "Advanced",
+            Self::Integrations => "Integrations",
+        }
+    }
+
+    pub(crate) fn compact_label(self) -> &'static str {
+        match self {
+            Self::Theme => "Theme",
+            Self::Titles => "Names",
+            Self::PaneLabels => "Labels",
+            Self::Toast => "Alerts",
+            _ => self.label(),
         }
     }
 }
@@ -1124,9 +1140,7 @@ impl ExperimentSetting {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::PaneHistory => "pane screen history",
-            Self::SwitchAsciiInputSourceInPrefix => {
-                "switch to ascii input source in prefix (macOS)"
-            }
+            Self::SwitchAsciiInputSourceInPrefix => "ASCII input in prefix mode (macOS)",
         }
     }
 
@@ -1233,6 +1247,9 @@ pub struct SettingsState {
     pub original_palette: Option<Palette>,
     /// The theme name before opening settings.
     pub original_theme: Option<String>,
+    pub config_path: std::path::PathBuf,
+    pub scroll: u16,
+    pub status: String,
 }
 
 pub(crate) enum DragTarget {
@@ -1437,7 +1454,7 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub title: String,
     pub context: String,
-    pub position: Option<crate::config::ToastOrk3Position>,
+    pub position: Option<crate::config::ToastHerduckPosition>,
     pub target: Option<ToastTarget>,
 }
 
@@ -1556,6 +1573,7 @@ pub struct AppState {
     pub sidebar_view: SidebarView,
     pub projects: ProjectsViewState,
     pub request_complete_onboarding: bool,
+    pub request_skip_onboarding: bool,
     pub name_input: String,
     pub name_input_replace_on_type: bool,
     pub release_notes: Option<ReleaseNotesState>,
@@ -1653,6 +1671,8 @@ pub struct AppState {
     /// Currently applied theme name (for settings UI).
     pub theme_name: String,
     pub title_language: crate::config::TitleLanguage,
+    pub(crate) summary_config: crate::config::SummaryConfig,
+    pub(crate) session_setup: super::session_setup::SessionSetupState,
     /// Runtime theme configuration used to resolve manual and auto-switch palettes.
     pub theme_runtime: ThemeRuntimeConfig,
     /// Last known foreground host terminal appearance.
@@ -1929,6 +1949,7 @@ impl AppState {
             sidebar_view: SidebarView::SpacesAgents,
             projects: ProjectsViewState::default(),
             request_complete_onboarding: false,
+            request_skip_onboarding: false,
             name_input: String::new(),
             name_input_replace_on_type: false,
             release_notes: None,
@@ -2027,7 +2048,9 @@ impl AppState {
             spinner_tick: 0,
             palette: Palette::catppuccin(),
             theme_name: "catppuccin".to_string(),
-            title_language: crate::config::TitleLanguage::Chinese,
+            title_language: crate::config::TitleLanguage::default(),
+            summary_config: crate::config::SummaryConfig::default(),
+            session_setup: super::session_setup::SessionSetupState::default(),
             theme_runtime: ThemeRuntimeConfig {
                 manual_name: "catppuccin".to_string(),
                 dark_name: "catppuccin".to_string(),
@@ -2043,6 +2066,9 @@ impl AppState {
                 list: SelectionListState::new(0),
                 original_palette: None,
                 original_theme: None,
+                config_path: std::path::PathBuf::from("/tmp/herduck/config.toml"),
+                scroll: 0,
+                status: String::new(),
             },
             integration_recommendations: Vec::new(),
             agent_manifest_summaries: Vec::new(),

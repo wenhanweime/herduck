@@ -1,5 +1,5 @@
 use crate::api::schema::{Method, NotificationShowParams, NotificationShowSound, Request};
-use crate::config::ToastOrk3Position;
+use crate::config::ToastHerduckPosition;
 
 pub(super) fn run_notification_command(args: &[String]) -> std::io::Result<i32> {
     let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
@@ -25,7 +25,7 @@ fn notification_show(args: &[String]) -> std::io::Result<i32> {
         Ok(params) => params,
         Err(NotificationShowArgError::Usage) => {
             eprintln!(
-                "usage: ork3 notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
+                "usage: herduck notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
             );
             return Ok(2);
         }
@@ -106,12 +106,12 @@ fn parse_notification_show_args(
     })
 }
 
-fn parse_toast_position(value: &str) -> Result<ToastOrk3Position, NotificationShowArgError> {
+fn parse_toast_position(value: &str) -> Result<ToastHerduckPosition, NotificationShowArgError> {
     match value {
-        "top-left" => Ok(ToastOrk3Position::TopLeft),
-        "top-right" => Ok(ToastOrk3Position::TopRight),
-        "bottom-left" => Ok(ToastOrk3Position::BottomLeft),
-        "bottom-right" => Ok(ToastOrk3Position::BottomRight),
+        "top-left" => Ok(ToastHerduckPosition::TopLeft),
+        "top-right" => Ok(ToastHerduckPosition::TopRight),
+        "bottom-left" => Ok(ToastHerduckPosition::BottomLeft),
+        "bottom-right" => Ok(ToastHerduckPosition::BottomRight),
         _ => Err(NotificationShowArgError::Message(format!(
             "invalid position: {value} (expected top-left, top-right, bottom-left, or bottom-right)"
         ))),
@@ -132,9 +132,9 @@ fn parse_notification_sound(
 }
 
 fn print_notification_help() {
-    eprintln!("ork3 notification commands:");
+    eprintln!("herduck notification commands:");
     eprintln!(
-        "  ork3 notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
+        "  herduck notification show <title> [--body TEXT] [--position top-left|top-right|bottom-left|bottom-right] [--sound none|done|request]"
     );
 }
 
@@ -164,7 +164,7 @@ mod tests {
             NotificationShowParams {
                 title: "build failed".into(),
                 body: Some("api workspace".into()),
-                position: Some(ToastOrk3Position::TopRight),
+                position: Some(ToastHerduckPosition::TopRight),
                 sound: NotificationShowSound::Request,
             }
         );
