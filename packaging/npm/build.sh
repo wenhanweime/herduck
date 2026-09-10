@@ -16,7 +16,7 @@ mkdir -p "$out"
 
 make_platform() {
   os="$1" cpu="$2" asset="$3"
-  name="@herduck/${os}-${cpu}"
+  name="herduck-${os}-${cpu}"
   dir="$out/${os}-${cpu}"
   mkdir -p "$dir"
   cp "$dist/$asset" "$dir/herduck"

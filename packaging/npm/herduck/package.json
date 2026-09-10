@@ -19,9 +19,9 @@
   "os": ["darwin", "linux"],
   "cpu": ["x64", "arm64"],
   "optionalDependencies": {
-    "@herduck/darwin-arm64": "0.0.0",
-    "@herduck/darwin-x64": "0.0.0",
-    "@herduck/linux-arm64": "0.0.0",
-    "@herduck/linux-x64": "0.0.0"
+    "herduck-darwin-arm64": "0.0.0",
+    "herduck-darwin-x64": "0.0.0",
+    "herduck-linux-arm64": "0.0.0",
+    "herduck-linux-x64": "0.0.0"
   }
 }
