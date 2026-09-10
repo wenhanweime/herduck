@@ -31,3 +31,15 @@ Source of truth for the Herduck identity. Keep new artwork consistent with these
   colour individual glyphs.
 - Do not stretch, rotate, or add drop shadows to the logo.
 - The `</>` on the laptop is part of the mark; keep it.
+
+## Illustrations
+
+| File | Scene | Suggested use |
+| --- | --- | --- |
+| `ill-focus.png` | typing on laptop | "too many windows" / working state |
+| `ill-together.png` | duck with sheep | "agents herd together" / multi-agent |
+| `ill-tea.png` | holding `</>` mug | "no overview" / calm review |
+| `ill-rest.png` | asleep, zzz | "no memory" / persistence, idle state |
+
+Transparent PNG, ≤600px on the long side. Generated from the brand sheet character; regenerate
+with the same three-colour flat-vector prompt if a new pose is needed.

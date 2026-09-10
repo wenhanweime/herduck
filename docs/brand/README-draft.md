@@ -29,7 +29,7 @@ Half an hour later:
 | <img src="../../assets/brand/ill-together.png" width="120" alt=""> | **No memory.** Close the terminal, the conversation is gone. Resume means scrolling logs or starting over. |
 | <img src="../../assets/brand/ill-tea.png" width="120" alt=""> | **No overview.** Which session was the auth bug? Which project was that database migration in? |
 
-<!-- TODO: illustrations from the brand sheet (11_ILLUSTRATIONS): focus / together / tea / rest -->
+
 
 ## What Herduck does
 
