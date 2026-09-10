@@ -50,3 +50,4 @@ __pycache__/
 
 /.wrangler/
 **/.wrangler/
+/packaging/npm/out/

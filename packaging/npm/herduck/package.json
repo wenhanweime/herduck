@@ -1,0 +1,27 @@
+{
+  "name": "herduck",
+  "version": "0.0.0",
+  "description": "Terminal workspace manager for AI coding-agent sessions. Make AI work for you.",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wenhanweime/herduck.git"
+  },
+  "homepage": "https://github.com/wenhanweime/herduck",
+  "keywords": ["terminal", "tui", "ai", "agents", "claude-code", "codex", "workspace"],
+  "bin": {
+    "herduck": "bin/herduck.js"
+  },
+  "files": ["bin", "README.md"],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": ["darwin", "linux"],
+  "cpu": ["x64", "arm64"],
+  "optionalDependencies": {
+    "@herduck/darwin-arm64": "0.0.0",
+    "@herduck/darwin-x64": "0.0.0",
+    "@herduck/linux-arm64": "0.0.0",
+    "@herduck/linux-x64": "0.0.0"
+  }
+}
