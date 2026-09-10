@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::warn;
 
-use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR, LEGACY_CONFIG_PATH_ENV_VAR};
+use super::{model::LoadedConfig, Config, CONFIG_PATH_ENV_VAR};
 
 const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "advanced",
@@ -19,7 +19,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "worktrees",
 ];
 
-/// Directory name for a fresh installation; existing ORK3 roots remain in use.
+/// Product-specific directory name keeps Herduck isolated from upstream Herdr.
 pub fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
         "herduck-dev"
@@ -28,110 +28,12 @@ pub fn app_dir_name() -> &'static str {
     }
 }
 
-const RUNTIME_NAMESPACE_ENV_VAR: &str = "HERDUCK_RUNTIME_NAMESPACE";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RuntimeNamespace {
-    Herduck,
-    Ork3,
-}
-
-impl RuntimeNamespace {
-    fn select(current_exists: bool, legacy_exists: bool) -> Self {
-        if !current_exists && legacy_exists {
-            Self::Ork3
-        } else {
-            Self::Herduck
-        }
-    }
-
-    fn product_name(self) -> &'static str {
-        match self {
-            Self::Herduck => crate::build_info::PRODUCT_NAME,
-            Self::Ork3 => "ork3",
-        }
-    }
-
-    fn dir_name(self) -> &'static str {
-        match self {
-            Self::Herduck => app_dir_name(),
-            Self::Ork3 if cfg!(debug_assertions) => "ork3-dev",
-            Self::Ork3 => "ork3",
-        }
-    }
-
-    fn from_inherited(value: Option<&str>) -> Option<Self> {
-        match value {
-            Some("herduck") => Some(Self::Herduck),
-            Some("ork3") => Some(Self::Ork3),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct RuntimePaths {
-    namespace: RuntimeNamespace,
-    config: PathBuf,
-    state: PathBuf,
-}
-
-fn discover_runtime_paths() -> RuntimePaths {
-    let current = config_dir_for_name(app_dir_name());
-    let legacy = config_dir_for_name(RuntimeNamespace::Ork3.dir_name());
-    let inherited = std::env::var(RUNTIME_NAMESPACE_ENV_VAR).ok();
-    let namespace = RuntimeNamespace::from_inherited(inherited.as_deref())
-        .unwrap_or_else(|| RuntimeNamespace::select(current.exists(), legacy.is_dir()));
-    RuntimePaths {
-        namespace,
-        config: match namespace {
-            RuntimeNamespace::Herduck => current,
-            RuntimeNamespace::Ork3 => legacy,
-        },
-        state: state_dir_for_name(namespace.dir_name()),
-    }
-}
-
-fn cached_runtime_paths(
-    paths: &std::sync::OnceLock<RuntimePaths>,
-    discover: impl FnOnce() -> RuntimePaths,
-) -> RuntimePaths {
-    paths.get_or_init(discover).clone()
-}
-
-fn runtime_paths() -> RuntimePaths {
-    #[cfg(not(test))]
-    {
-        // A live server must not switch storage when another process creates the new root.
-        static PATHS: std::sync::OnceLock<RuntimePaths> = std::sync::OnceLock::new();
-        cached_runtime_paths(&PATHS, discover_runtime_paths)
-    }
-    #[cfg(test)]
-    {
-        // Unit tests deliberately vary XDG roots; the cache contract is tested with a local cell.
-        discover_runtime_paths()
-    }
-}
-
-pub(crate) fn uses_legacy_namespace() -> bool {
-    runtime_paths().namespace == RuntimeNamespace::Ork3
-}
-
-pub(crate) fn runtime_product_name() -> &'static str {
-    runtime_paths().namespace.product_name()
-}
-
-pub(crate) fn apply_runtime_namespace_env(command: &mut std::process::Command) {
-    // Daemon and handoff children retain the parent's choice even if a new root appears.
-    command.env(RUNTIME_NAMESPACE_ENV_VAR, runtime_product_name());
-}
-
 pub fn config_dir() -> PathBuf {
-    runtime_paths().config
+    config_dir_for_name(app_dir_name())
 }
 
 pub fn state_dir() -> PathBuf {
-    runtime_paths().state
+    state_dir_for_name(app_dir_name())
 }
 
 fn config_dir_for_name(app_name: &str) -> PathBuf {
@@ -264,20 +166,10 @@ pub(crate) fn resolve_config_relative_path(path: &Path) -> PathBuf {
 }
 
 pub fn config_path() -> PathBuf {
-    if let Some(path) = config_path_override(
-        std::env::var_os(CONFIG_PATH_ENV_VAR),
-        std::env::var_os(LEGACY_CONFIG_PATH_ENV_VAR),
-    ) {
+    if let Some(path) = std::env::var_os(CONFIG_PATH_ENV_VAR) {
         return PathBuf::from(path);
     }
     config_dir().join("config.toml")
-}
-
-fn config_path_override(
-    current: Option<std::ffi::OsString>,
-    legacy: Option<std::ffi::OsString>,
-) -> Option<std::ffi::OsString> {
-    current.or(legacy)
 }
 
 pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
@@ -710,98 +602,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn runtime_roots_and_sockets_select_one_namespace_without_moving_legacy_data() {
+    fn product_paths_keep_settings_state_and_named_session_sockets_isolated() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        let base = std::env::temp_dir().join(format!("herduck-namespace-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("herduck-paths-{}", std::process::id()));
         let config_home = base.join("config");
         let state_home = base.join("state");
-        let _ = std::fs::remove_dir_all(&base);
-        let variables = [
-            "XDG_CONFIG_HOME",
-            "XDG_STATE_HOME",
-            RUNTIME_NAMESPACE_ENV_VAR,
-        ];
+        let variables = ["XDG_CONFIG_HOME", "XDG_STATE_HOME", CONFIG_PATH_ENV_VAR];
         let saved: Vec<_> = variables
             .iter()
             .map(|key| (*key, std::env::var_os(key)))
             .collect();
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::set_var("XDG_STATE_HOME", &state_home);
-        std::env::remove_var(RUNTIME_NAMESPACE_ENV_VAR);
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
 
-        let assert_namespace = |namespace: RuntimeNamespace| {
-            let config = config_home.join(namespace.dir_name());
-            assert_eq!(config_dir(), config);
-            assert_eq!(state_dir(), state_home.join(namespace.dir_name()));
-            assert_eq!(uses_legacy_namespace(), namespace == RuntimeNamespace::Ork3);
-            assert_eq!(
-                crate::session::api_socket_path_for(Some("work")),
-                config
-                    .join("sessions/work")
-                    .join(format!("{}.sock", namespace.product_name()))
-            );
-            assert_eq!(
-                crate::session::client_socket_path_for(Some("work")),
-                config
-                    .join("sessions/work")
-                    .join(format!("{}-client.sock", namespace.product_name()))
-            );
-        };
-        assert_namespace(RuntimeNamespace::Herduck);
-        let legacy = config_home.join(RuntimeNamespace::Ork3.dir_name());
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("session.json"), "legacy-session").unwrap();
-        assert_namespace(RuntimeNamespace::Ork3);
-        assert!(!config_home.join(app_dir_name()).exists());
-        std::fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
-        assert_namespace(RuntimeNamespace::Herduck);
+        let root = config_home.join(app_dir_name());
+        assert_eq!(config_dir(), root);
+        assert_eq!(state_dir(), state_home.join(app_dir_name()));
+        assert_eq!(config_path(), root.join("config.toml"));
+        assert_ne!(root, config_home.join("herdr"));
+        assert_ne!(root, config_home.join("herdr-dev"));
         assert_eq!(
-            std::fs::read_to_string(legacy.join("session.json")).unwrap(),
-            "legacy-session"
+            crate::session::api_socket_path_for(None),
+            root.join("herduck.sock")
+        );
+        assert_eq!(
+            crate::session::client_socket_path_for(None),
+            root.join("herduck-client.sock")
+        );
+        assert_eq!(
+            crate::session::api_socket_path_for(Some("work")),
+            root.join("sessions/work/herduck.sock")
+        );
+        assert_eq!(
+            crate::session::client_socket_path_for(Some("work")),
+            root.join("sessions/work/herduck-client.sock")
         );
 
-        // A daemon/handoff launched from the old runtime retains that namespace when both exist.
-        std::env::set_var(RUNTIME_NAMESPACE_ENV_VAR, "ork3");
-        assert_namespace(RuntimeNamespace::Ork3);
+        // Choosing a config file does not relocate runtime/session identity or plugin state.
+        let config_override = base.join("custom/settings.toml");
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &config_override);
+        assert_eq!(config_path(), config_override);
+        assert_eq!(config_dir(), root);
+        assert_eq!(state_dir(), state_home.join(app_dir_name()));
+        assert_eq!(
+            crate::session::api_socket_path_for(Some("work")),
+            root.join("sessions/work/herduck.sock")
+        );
         for (key, value) in saved {
             match value {
                 Some(value) => std::env::set_var(key, value),
                 None => std::env::remove_var(key),
             }
         }
-        let _ = std::fs::remove_dir_all(base);
-    }
-
-    #[test]
-    fn runtime_namespace_cache_preserves_roots_after_new_directory_appears() {
-        let paths = std::sync::OnceLock::new();
-        let candidate = |current_exists| {
-            let namespace = RuntimeNamespace::select(current_exists, true);
-            RuntimePaths {
-                namespace,
-                config: Path::new("config").join(namespace.dir_name()),
-                state: Path::new("state").join(namespace.dir_name()),
-            }
-        };
-        let first = cached_runtime_paths(&paths, || candidate(false));
-        let later = cached_runtime_paths(&paths, || candidate(true));
-        assert_eq!(later.namespace, RuntimeNamespace::Ork3);
-        assert_eq!(later.config, first.config);
-        assert_eq!(later.state, first.state);
-        assert_eq!(later.namespace.product_name(), "ork3");
-    }
-
-    #[test]
-    fn config_override_prefers_herduck_and_accepts_ork3() {
-        use std::ffi::OsString;
-        let current = Some(OsString::from("new-config.toml"));
-        let legacy = Some(OsString::from("old-config.toml"));
-        assert_eq!(
-            config_path_override(current.clone(), legacy.clone()),
-            current
-        );
-        assert_eq!(config_path_override(None, legacy.clone()), legacy);
-        assert_eq!(config_path_override(None, None), None);
     }
 
     #[test]

@@ -60,12 +60,22 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
         return;
     }
 
-    let layout = settings_layout(inner);
+    let layout = settings_layout(app, inner);
+    let details = matches!(
+        app.settings.section,
+        SettingsSection::Sessions | SettingsSection::Summaries | SettingsSection::Titles
+    );
     frame.render_widget(
         Paragraph::new(format!(" settings · {}", app.settings.section.label()))
             .style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
         layout.title,
     );
+    if details && layout.title.width >= 52 {
+        frame.render_widget(
+            Paragraph::new("read only ").style(Style::default().fg(p.overlay1)),
+            Rect::new(layout.title.right() - 10, layout.title.y, 10, 1),
+        );
+    }
     for (section, rect) in &layout.navigation {
         let style = if *section == app.settings.section {
             Style::default()
@@ -103,7 +113,10 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
 
     match app.settings.section {
         SettingsSection::Sessions | SettingsSection::Summaries | SettingsSection::Titles => {
-            render_setup_form(app, frame, content_area)
+            render_setup_form(app, frame, content_area, layout.config.is_empty());
+            if !layout.config.is_empty() {
+                forms::config_footer(app, layout.config.width).render(frame, layout.config, 0);
+            }
         }
         SettingsSection::Theme => {
             render_settings_theme(app, frame, content_area);
@@ -199,21 +212,16 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
     );
 }
 
-fn render_setup_form(app: &AppState, frame: &mut Frame, area: Rect) {
+fn render_setup_form(app: &AppState, frame: &mut Frame, area: Rect, inline_config: bool) {
     if area.is_empty() {
         return;
     }
-    let Some(form) = settings_form(app, area.width) else {
+    let Some(form) = settings_form(app, area.width, inline_config) else {
         return;
     };
     let offset = form.scroll_offset(area.height, app.settings.scroll);
     let max_scroll = form.max_scroll(area.height);
-    frame.render_widget(
-        Paragraph::new(form.lines)
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .scroll((offset, 0)),
-        area,
-    );
+    form.render(frame, area, offset);
     for (visible, row, marker) in [
         (offset > 0, area.y, "↑"),
         (offset < max_scroll, area.bottom() - 1, "↓"),
@@ -445,7 +453,7 @@ mod tests {
     }
 
     fn form_text(app: &AppState) -> String {
-        settings_form(app, 40)
+        settings_form(app, 40, true)
             .unwrap()
             .lines
             .iter()
@@ -469,13 +477,13 @@ providers = [
         app.summary_config = config.projects.summary;
         let text = form_text(&app);
         for detail in [
-            "read only",
             "Ordered fallback",
-            "1. API · my-api",
-            "2. Agent · codex",
-            "first → second",
+            "1. my-api  API",
+            "2. codex  Agent",
+            "├─ first",
+            "└─ second",
             "https://example.invalid/a/long/目录/v1/chat/completions",
-            "from $SUMMARY_TEST_KEY",
+            "$SUMMARY_TEST_KEY",
             "/opt/agent tools/codex",
             "Agent default",
             "/tmp/herduck/config.toml",
@@ -483,7 +491,7 @@ providers = [
         ] {
             assert!(text.contains(detail), "missing {detail}: {text}");
         }
-        assert!(text.find("1. API").unwrap() < text.find("2. Agent").unwrap());
+        assert!(text.find("1. my-api").unwrap() < text.find("2. codex").unwrap());
         for old_control in ["+ Add source", "Save to", "Choose model", "▏"] {
             assert!(!text.contains(old_control));
         }
@@ -499,14 +507,14 @@ providers = [
         let config: crate::config::Config = toml::from_str("[projects.summary]\nmode='auto'\nproviders=[{id='codex',kind='cli',models=['name-model']}]\n").unwrap();
         app.summary_config = config.projects.summary;
         let inherited = form_text(&app);
-        assert!(inherited.contains("use Summary priorities (default)"));
-        assert!(inherited.contains("1. Agent · codex"));
+        assert!(inherited.contains("Same as Summaries"));
+        assert!(inherited.contains("1. codex  Agent"));
         app.summary_config.title_providers = Some(vec![]);
         let local = form_text(&app);
-        assert!(local.contains("independent naming priorities"));
+        assert!(local.contains("Independent naming priorities"));
         assert!(local.contains("No model sources configured."));
-        assert!(local.contains("Final fallback: a name from local session text"));
-        assert!(!local.contains("1. Agent"));
+        assert!(local.contains("Use local session text for names."));
+        assert!(!local.contains("1. codex"));
     }
 
     #[test]
@@ -514,7 +522,7 @@ providers = [
         let mut app = AppState::test_new();
         app.settings.section = SettingsSection::Summaries;
         let initial = form_text(&app);
-        assert!(initial.contains("Generation: Off"));
+        assert!(initial.contains("Generation       Off"));
         assert!(initial.contains("No model sources configured."));
         assert!(!initial.contains("opencode_free"));
         app.summary_config.providers_explicit = true;
@@ -523,8 +531,17 @@ providers = [
             &["saved-model"],
         )];
         let saved = form_text(&app);
-        assert!(saved.contains("These sources are not being used."));
+        assert!(saved.contains("Sources · inactive"));
+        assert!(saved.contains("No Agent or API calls in this mode."));
+        assert!(saved.contains("Existing topics and session names stay unchanged."));
         assert!(saved.contains("saved-model"));
+        app.summary_config.mode = crate::config::SummaryModeConfig::Local;
+        let local = form_text(&app);
+        assert!(local.contains("Sources · inactive"));
+        assert!(local.contains("No Agent or API calls in this mode."));
+        assert!(local.contains("saved-model"));
+        assert!(local.contains("Names use local session text."));
+        assert!(local.contains("Existing topics stay unchanged."));
     }
 
     #[test]
@@ -544,11 +561,10 @@ providers = [
         app.session_setup.set_history_locations(&saved, &active);
         let text = form_text(&app);
         for detail in [
-            "Sessions · read only",
-            "Default Agent: shell",
-            "Start session uses this Agent",
-            "Tabs and splits open a shell",
-            "Resume uses the original Agent",
+            "Default Agent    shell",
+            "Start session    shell",
+            "New tab / split  Shell",
+            "Resume           Original Agent",
             "newly-added-history",
             "restarting HERDUCK",
         ] {
@@ -585,6 +601,64 @@ providers = [
         assert!(screen_text(&render(&app, 110, 32)).contains("keeping current config"));
         app.settings.status = "Cannot open config: editor unavailable".into();
         assert!(screen_text(&render(&app, 110, 32)).contains("Cannot open config"));
+    }
+
+    #[test]
+    fn config_footer_stays_visible_and_long_paths_fall_back_to_scrolling() {
+        let mut app = AppState::test_new();
+        app.settings.section = SettingsSection::Summaries;
+        app.summary_config.providers_explicit = true;
+        app.summary_config.providers = (0..8)
+            .map(|index| {
+                crate::config::SummaryProviderConfig::cli(
+                    &format!("source-{index}"),
+                    &["first", "second"],
+                )
+            })
+            .collect();
+        let inner = Rect::new(8, 2, 94, 28);
+        let layout = settings_layout(&app, inner);
+        assert!(!layout.config.is_empty());
+        assert!(layout.content.bottom() < layout.config.y);
+        assert!(layout.config.bottom() <= layout.status.y);
+        for scroll in [0, u16::MAX] {
+            app.settings.scroll = scroll;
+            let text = screen_text(&render(&app, 110, 32));
+            assert!(text.contains("/tmp/herduck/config.toml"));
+            assert!(text.contains("reopen Settings to load changes."));
+            assert!(text.contains("open config file"));
+        }
+        app.settings.config_path = std::path::PathBuf::from(format!(
+            "/tmp/{}/settings-tail.toml",
+            "很长的配置目录/".repeat(80)
+        ));
+        assert!(settings_layout(&app, inner).config.is_empty());
+        for (width, height) in [(32, 16), (40, 16), (80, 24), (110, 32)] {
+            app.settings.scroll = u16::MAX;
+            let text = screen_text(&render(&app, width, height));
+            assert!(
+                text.contains("changes."),
+                "footer remains reachable at {width}x{height}"
+            );
+            assert!(text.contains("close"));
+        }
+        let terminal = render(&app, 110, 32);
+        let content = settings_layout(&app, inner).content;
+        // The filename can cross a terminal row. Join only the content cells,
+        // excluding navigation, borders and the indentation of continuation rows.
+        let visible_content = (content.y..content.bottom())
+            .map(|y| {
+                (content.x..content.right())
+                    .map(|x| terminal.backend().buffer()[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim()
+                    .to_owned()
+            })
+            .collect::<String>();
+        assert!(
+            visible_content.contains("settings-tail.toml"),
+            "{visible_content}"
+        );
     }
 
     #[test]

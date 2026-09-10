@@ -9,9 +9,9 @@ const SESSION_KEY_DOMAIN: &[u8] = b"herdr-projects-session-v1\0";
 const PROJECT_KEY_DOMAIN: &[u8] = b"herdr-projects-project-v1\0";
 /// Inputs that decide a session's topic. Chatting further in the same session changes
 /// `last_activity_at` but not this fingerprint, so it is not reclassified.
-const SEMANTIC_FINGERPRINT_DOMAIN: &[u8] = b"ork3-semantic-v1\0";
-const SEMANTIC_TOPIC_DOMAIN: &[u8] = b"ork3-semantic-topic-v1\0";
-const TITLE_FINGERPRINT_DOMAIN: &[u8] = b"ork3-title-v1\0";
+const SEMANTIC_FINGERPRINT_DOMAIN: &[u8] = b"herduck-semantic-v1\0";
+const SEMANTIC_TOPIC_DOMAIN: &[u8] = b"herduck-semantic-topic-v1\0";
+const TITLE_FINGERPRINT_DOMAIN: &[u8] = b"herduck-title-v1\0";
 
 /// Fingerprint of the metadata sent to a classifier.
 ///
@@ -694,20 +694,40 @@ mod tests {
         path
     }
 
-    // These values are persisted identity contracts, independent of the product's name.
+    // These vectors define the first public product's semantic/title cache identity.
     #[test]
-    fn product_rename_preserves_persisted_identity_vectors() {
+    fn product_semantic_and_title_identity_vectors() {
         assert_eq!(
             semantic_fingerprint("Session history", Some("/workspace/app"), "codex"),
-            "43ad965e5886c8318ae4e455ecfa2bf1aad0b942e7760b00d27b0d0362f39e6c"
+            "a947f04214cb5dfaed7d6ace5ea180cab49d0c7344a9eeb45b231aced3a29c74"
         );
         assert_eq!(
             semantic_topic_key("  Coding   Tools  "),
-            "42eb8e888578ac0a375f9c023ff8daecd7117f5a11bdb86d23caf2e9033e14da"
+            "e3ffaba48ee743c988287f6e19dbaf7026635f9fe3c6c29e04995660b29f2682"
         );
         assert_eq!(
             title_input_fingerprint("codex", Some("app"), &["resume work".into()], Some("done")),
-            "02b095d6eef712672bf6c9a2df83d4380fe6abd3b58f7d0ae881771721bca07f"
+            "325b38e6b85d92b987688a65b7f3b1b08464c6853c884dd5d868ced6329b6810"
+        );
+    }
+
+    // Ordinary session and filesystem project identity remains independent of display branding.
+    #[test]
+    fn normal_session_and_project_identity_vectors() {
+        let session = SessionIdentity::id("codex", "session-123").expect("session identity");
+        assert_eq!(
+            session.stable_key,
+            "688f5a709d067ea8c54bfdce0f4e771e1ca0845af3d266a419738c9b18ebe398"
+        );
+        let project = ProjectClassification::new(
+            ProjectKind::Cwd,
+            "/workspace/app".into(),
+            "Application".into(),
+            "cwd".into(),
+        );
+        assert_eq!(
+            project.canonical_key,
+            "33cd3c59b6dccba45ca1650cf9b309078a1c701f55fb3c151f4bfa858293893f"
         );
     }
 

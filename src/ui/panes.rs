@@ -1,7 +1,7 @@
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
@@ -913,42 +913,56 @@ fn color_to_rgb(color: Color) -> Option<Rgb> {
 
 fn render_empty(app: &AppState, frame: &mut Frame, area: Rect) {
     let p = &app.palette;
-    let lines = vec![
-        Line::from(""),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  No workspaces yet",
-            Style::default().fg(p.overlay0),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "  A workspace is one project context.",
-            Style::default().fg(p.overlay1),
-        )),
-        Line::from(Span::styled(
-            "  Its root pane (top-left) sets the default repo or folder name.",
-            Style::default().fg(p.overlay1),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Press ", Style::default().fg(p.overlay0)),
-            Span::styled(
-                app.keybinds
-                    .new_workspace
-                    .label()
-                    .unwrap_or_else(|| "unset".to_string()),
-                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" to create one", Style::default().fg(p.overlay0)),
-        ]),
-    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.surface_dim));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let art_height = if inner.width >= 32 && inner.height >= 20 {
+        11
+    } else if inner.width >= 24 && inner.height >= 13 {
+        4
+    } else {
+        0
+    };
+    let rows = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Min(0),
+        ratatui::layout::Constraint::Length(art_height),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(3),
+        ratatui::layout::Constraint::Min(0),
+    ])
+    .split(inner);
+    if art_height > 0 {
+        super::brand::render_mascot(frame, rows[1], p, art_height == 4);
+    }
+    super::brand::render_wordmark(frame, rows[2], p);
     frame.render_widget(
-        Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(p.surface_dim)),
-        ),
-        area,
+        Paragraph::new(super::brand::TAGLINE)
+            .style(Style::default().fg(p.overlay1))
+            .alignment(ratatui::layout::Alignment::Center),
+        rows[3],
+    );
+    let prefix = crate::config::format_key_combo((app.prefix_code, app.prefix_mods));
+    let shortcut = app
+        .keybinds
+        .new_workspace
+        .label()
+        .map(|label| label.replace("prefix+", &format!("{prefix}, ")))
+        .unwrap_or_else(|| "new in the sidebar".into());
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled("No workspaces yet", Style::default().fg(p.text)),
+            Line::raw(""),
+            Line::styled(
+                format!("Use {shortcut} to start"),
+                Style::default().fg(p.accent),
+            ),
+        ])
+        .alignment(ratatui::layout::Alignment::Center),
+        rows[5],
     );
 }
 

@@ -1049,7 +1049,7 @@ impl ProjectCatalog {
             "DELETE FROM runtime_mappings WHERE session_key = ?1 AND generation = ?2",
             params![stable_key, expected_generation as i64],
         )?;
-        transaction.execute("DELETE FROM sessions WHERE stable_key = ?1 AND ref_value LIKE 'ork3-live:%' AND NOT EXISTS (SELECT 1 FROM runtime_mappings WHERE session_key = ?1)", [stable_key])?;
+        transaction.execute("DELETE FROM sessions WHERE stable_key = ?1 AND ref_value LIKE 'herduck-live:%' AND NOT EXISTS (SELECT 1 FROM runtime_mappings WHERE session_key = ?1)", [stable_key])?;
         let revision = bump_revision(&transaction)?;
         transaction.commit()?;
         Ok(revision)
@@ -1061,7 +1061,7 @@ impl ProjectCatalog {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = transaction.execute("DELETE FROM runtime_mappings", [])?;
         transaction.execute(
-            "DELETE FROM sessions WHERE ref_value LIKE 'ork3-live:%'",
+            "DELETE FROM sessions WHERE ref_value LIKE 'herduck-live:%'",
             [],
         )?;
         let revision = if changed == 0 {
@@ -1289,7 +1289,7 @@ impl ProjectCatalog {
              FROM sessions
              WHERE session_class = 'interactive'
                AND custom_title IS NULL
-               AND ref_value NOT LIKE 'ork3-live:%'
+               AND ref_value NOT LIKE 'herduck-live:%'
                AND NOT (title_status = 'done' AND COALESCE(generated_title, '') != '')
                AND (title_status IN ('pending', 'failed')
                     OR title_input_fingerprint IS NULL
@@ -1350,8 +1350,8 @@ impl ProjectCatalog {
             .as_deref()
             .is_some_and(|value| value != language.as_str())
         {
-            transaction.execute("INSERT OR REPLACE INTO catalog_meta(key, value) SELECT 'title_language_refresh:' || stable_key, 1 FROM sessions WHERE custom_title IS NULL AND ref_value NOT LIKE 'ork3-live:%'", [])?;
-            transaction.execute("UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL WHERE custom_title IS NULL AND ref_value NOT LIKE 'ork3-live:%'", [])?;
+            transaction.execute("INSERT OR REPLACE INTO catalog_meta(key, value) SELECT 'title_language_refresh:' || stable_key, 1 FROM sessions WHERE custom_title IS NULL AND ref_value NOT LIKE 'herduck-live:%'", [])?;
+            transaction.execute("UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL WHERE custom_title IS NULL AND ref_value NOT LIKE 'herduck-live:%'", [])?;
         } else if previous.is_none() {
             // One-time repair of old Grok English/placeholder names; preserve meaningful Chinese names.
             let keys = {
@@ -5559,6 +5559,67 @@ mod tests {
             .iter()
             .all(|project| project.display_name.starts_with("same — ")));
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn product_live_placeholders_are_excluded_from_titles_and_removed_without_losing_native_titles()
+    {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let native = candidate("codex", "native-session", 10);
+        let mut live = candidate("codex", "herduck-live:terminal-test", 11);
+        live.runtime = Some(RuntimeMapping {
+            workspace_id: "w1".into(),
+            pane_id: "p1".into(),
+            generation: 2,
+        });
+        catalog.upsert_candidate(&native).expect("native session");
+        catalog.upsert_candidate(&live).expect("live placeholder");
+        let pending = catalog.pending_title_sessions(50).expect("pending titles");
+        assert!(pending
+            .iter()
+            .any(|session| session.stable_key == native.identity.stable_key));
+        assert!(pending
+            .iter()
+            .all(|session| session.stable_key != live.identity.stable_key));
+        catalog
+            .rename_session(&native.identity.stable_key, "User title")
+            .expect("manual title");
+
+        catalog
+            .clear_runtime_mapping(&live.identity.stable_key, 1)
+            .expect("stale clear");
+        assert!(catalog
+            .snapshot(50)
+            .expect("snapshot")
+            .projects
+            .iter()
+            .flat_map(|project| &project.sessions)
+            .any(|session| session.stable_key == live.identity.stable_key && session.live));
+        catalog
+            .clear_runtime_mapping(&live.identity.stable_key, 2)
+            .expect("current clear");
+        assert!(catalog
+            .snapshot(50)
+            .expect("snapshot")
+            .projects
+            .iter()
+            .flat_map(|project| &project.sessions)
+            .all(|session| session.stable_key != live.identity.stable_key));
+
+        catalog
+            .upsert_candidate(&live)
+            .expect("restored live placeholder");
+        catalog.clear_all_runtime_mappings().expect("startup reset");
+        let snapshot = catalog.snapshot(50).expect("snapshot");
+        let sessions: Vec<_> = snapshot
+            .projects
+            .iter()
+            .flat_map(|project| &project.sessions)
+            .collect();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].stable_key, native.identity.stable_key);
+        assert_eq!(sessions[0].title, "User title");
+        assert!(!sessions[0].live);
     }
 
     #[test]

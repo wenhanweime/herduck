@@ -44,9 +44,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HERDUCK_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=HERDUCK_BUILD_ID");
     println!("cargo:rerun-if-env-changed=HERDUCK_BUILD_COMMIT");
-    println!("cargo:rerun-if-env-changed=ORK3_BUILD_CHANNEL");
-    println!("cargo:rerun-if-env-changed=ORK3_BUILD_ID");
-    println!("cargo:rerun-if-env-changed=ORK3_BUILD_COMMIT");
     // Legacy aliases remain accepted while integrations migrate from the upstream protocol names.
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_ID");

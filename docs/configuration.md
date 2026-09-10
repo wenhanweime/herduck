@@ -7,27 +7,19 @@ when it is missing.
 Keep personal paths, provider choices, and runner filters in that file. You can run the same
 source checkout or binary as other users without carrying a private code branch.
 
-## Paths and compatibility
+## Paths
 
 Fresh macOS and Linux installations use `~/.config/herduck/config.toml` and the
 `~/.local/state/herduck` state directory. Debug builds use `herduck-dev` instead.
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` replace the corresponding base directories.
+The configuration directory also holds `projects/catalog.sqlite3`, saved terminal layouts, and
+runtime logs. Plugin and agent-detection state use the state directory. `herduck --help` displays
+the active log paths; named sessions keep their runtime files under `sessions/<name>/`.
 
-When the Herduck configuration directory is absent and the corresponding `ork3` or `ork3-dev`
-directory already exists, Herduck keeps using that legacy namespace for both configuration and
-runtime state. It does not move or delete the files. If both configuration directories exist,
-Herduck uses its own namespace. This choice is made when the runtime starts; an already running
-server keeps its selected paths. Keep the active path shown in Settings when editing an existing
-installation; creating a new Herduck directory can select a separate namespace on a later start.
-
-`HERDUCK_CONFIG_PATH` selects a specific configuration file; the legacy `ORK3_CONFIG_PATH` is
-accepted when the new variable is unset. `HERDUCK_SOCKET_PATH` and `HERDUCK_CLIENT_SOCKET_PATH`
-likewise take precedence over their `ORK3_*` aliases. Old inherited `HERDR_*` socket values are
-accepted only when they name this product's recognized Herduck or ORK3 sockets; a separate upstream
-Herdr socket is ignored. Upstream `HERDR_CONFIG_PATH` does not select Herduck's configuration.
-
-Existing saved session data and integration identifiers stay compatible. A change of product name
-does not reset your configured summary sources, generation mode, or history paths.
+`HERDUCK_CONFIG_PATH` selects a specific configuration file. `HERDUCK_SOCKET_PATH` and
+`HERDUCK_CLIENT_SOCKET_PATH` override the API and TUI sockets. The default socket names are
+`herduck.sock` and `herduck-client.sock` in the configuration directory; named sessions keep their
+sockets under `sessions/<name>/`. The active configuration path is shown in Settings.
 
 ## Edit the configuration file
 
@@ -44,6 +36,13 @@ Invalid changes keep the previous working configuration and show a diagnostic;
 The path is shown on each page and respects the environment overrides above. macOS uses the default
 text editor and Linux uses the file association provided by `xdg-open`. Windows support is unvalidated.
 On a machine without a desktop application, open the displayed path with your editor and reload.
+On Linux, install a text editor and associate TOML files with it. If the system opens a browser or
+offers a download, edit the displayed path directly (for example with `nano`) and reopen Settings.
+Herduck uses the desktop file association; it does not install an editor.
+
+`herduck config check` validates the file in a separate process. If it is invalid, a new process
+falls back to defaults; a running session instead keeps its last valid settings when reload fails.
+The command does not reset a running session's configuration.
 
 Categories stay visible on the left in wide terminals and wrap across the top in narrow ones.
 Tab / left / right changes category; up/down, Page Up/Down, Home/End, or the mouse wheel scrolls
@@ -180,8 +179,9 @@ roots = ["~/other-codex-home/sessions"]
 
 ## Updates
 
-Automatic version and agent-manifest checks default to `false`. Self-update remains disabled
-until Herduck has its own release pipeline; upgrade by rebuilding or reinstalling from source.
+Automatic version and agent-manifest checks default to `false`. Self-update remains disabled;
+upgrade through npm or repeat your native/source installation. Installing a new client does not
+replace an already running server. See [upgrades and runtime storage](installation.md#upgrade-storage-and-removal).
 
 ## Public-source checks
 

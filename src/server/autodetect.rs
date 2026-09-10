@@ -210,7 +210,6 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
 
 fn build_server_daemon_command(exe: PathBuf) -> Command {
     let mut command = Command::new(&exe);
-    crate::config::apply_runtime_namespace_env(&mut command);
     command
         .arg("server")
         // Redirect stdio to /dev/null

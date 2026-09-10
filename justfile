@@ -25,7 +25,10 @@ check-public:
 test-public:
     python3 -m unittest discover -s tooling -p 'test_check_public.py'
 
-check: fmt-check check-public lint test
+test-npm:
+    node --test npm/test/*.test.cjs
+
+check: fmt-check check-public test-public test-npm lint test
 
 build:
     cargo build --locked
@@ -59,13 +62,11 @@ install-debug-live: install-debug
     # Clear inherited socket overrides: a pane started by the running server exports them, which
     # would point this command back at whichever server spawned the shell.
     running=$(env -u HERDUCK_SOCKET_PATH -u HERDUCK_CLIENT_SOCKET_PATH \
-        -u ORK3_SOCKET_PATH -u ORK3_CLIENT_SOCKET_PATH \
         -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH \
         herduck status --json 2>/dev/null | grep -o '"running":true' || true)
     if [[ -n "$running" ]]; then
         echo "handing live panes to the new binary…"
         env -u HERDUCK_SOCKET_PATH -u HERDUCK_CLIENT_SOCKET_PATH \
-            -u ORK3_SOCKET_PATH -u ORK3_CLIENT_SOCKET_PATH \
             -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH \
             herduck server live-handoff --import-exe ~/.local/bin/herduck
     else

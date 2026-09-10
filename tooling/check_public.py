@@ -11,6 +11,7 @@ from urllib.parse import unquote
 PUBLIC_PATHS = (
     "src", "tests", "docs", "tooling", ".github", "README.md", "Cargo.toml",
     "build.rs", "justfile", "rust-toolchain.toml", "CONTRIBUTING.md", "SECURITY.md",
+    "npm", "README.zh-CN.md",
 )
 # These two files contain the policy and deliberate failing samples, not product configuration.
 POLICY_FILES = {"tooling/check_public.py", "tooling/test_check_public.py"}
@@ -27,7 +28,7 @@ CLAUDE_PROJECT_PATH = re.compile(
 RULES = (
     ("private-runner-or-project", re.compile(r"\b(?:paseo(?:[-_][\w.-]*)?|ork-direct-accept)\b", re.I)),
     ("machine-provider-alias", re.compile(r"\bNewAPIConn\b", re.I)),
-    ("personal-identifier", re.compile(r"\bwenhanwei(?!me/(?:herduck|ork3)\b)[\w-]*\b", re.I)),
+    ("personal-identifier", re.compile(r"\bwenhanwei(?!me/herduck\b)[\w-]*\b", re.I)),
 )
 
 

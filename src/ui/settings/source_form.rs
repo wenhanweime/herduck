@@ -1,11 +1,14 @@
 //! Applied source priorities. All editing happens in config.toml.
 
-use super::forms::{config_location, SettingsForm};
+use super::forms::SettingsForm;
 use crate::{
     app::{state::SettingsSection, AppState},
     config::{SummaryModeConfig, SummaryProviderKind, TitleLanguage},
 };
-use ratatui::style::{Modifier, Style};
+use ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
 
 pub(super) fn source_form(app: &AppState, width: u16) -> SettingsForm {
     let mut form = SettingsForm::new(width);
@@ -16,56 +19,51 @@ pub(super) fn source_form(app: &AppState, width: u16) -> SettingsForm {
     let text = Style::default().fg(app.palette.overlay1);
     let titles = app.settings.section == SettingsSection::Titles;
     let config = &app.summary_config;
-    form.text(
-        if titles {
-            "Session names · read only"
-        } else {
-            "Summary sources · read only"
-        },
-        heading,
+    let inactive = matches!(
+        config.mode,
+        SummaryModeConfig::Pending | SummaryModeConfig::Local
     );
-    form.text(
-        format!(
-            "Generation: {}",
-            match config.mode {
-                SummaryModeConfig::Pending => "Off",
-                SummaryModeConfig::Local => "Offline names only",
-                _ => "Ordered fallback",
-            }
-        ),
-        value,
+    form.field(
+        "Generation",
+        match config.mode {
+            SummaryModeConfig::Pending => "Off",
+            SummaryModeConfig::Local => "Offline names only",
+            _ => "Ordered fallback",
+        },
+        app,
     );
     if titles {
-        form.text(
-            format!(
-                "Language: {}",
-                if config.title_language == TitleLanguage::Chinese {
-                    "中文"
-                } else {
-                    "English"
-                }
-            ),
-            value,
-        );
-        form.text(
-            if config.title_providers.is_none() {
-                "Sources: use Summary priorities (default)"
+        form.field(
+            "Language",
+            if config.title_language == TitleLanguage::Chinese {
+                "中文"
             } else {
-                "Sources: independent naming priorities"
+                "English"
             },
-            text,
+            app,
+        );
+        form.field(
+            "Source order",
+            if config.title_providers.is_none() {
+                "Same as Summaries"
+            } else {
+                "Independent naming priorities"
+            },
+            app,
         );
     }
-    form.text(
-        "Priority: top to bottom; stop at the first usable result.",
-        text,
+    form.section(
+        if inactive {
+            "Sources · inactive"
+        } else {
+            "Sources · tried top to bottom"
+        },
+        app,
     );
-    if config.mode == SummaryModeConfig::Pending {
-        form.text("Generation is off. These sources are not being used.", text);
-    } else if config.mode == SummaryModeConfig::Local {
-        form.text("Offline names only. No model source is being used.", text);
+    if inactive {
+        form.text("No Agent or API calls in this mode.", text);
     }
-    form.text("", text);
+    // An explicit empty naming list is local-only; only None inherits summaries.
     let explicit_names = titles.then_some(config.title_providers.as_ref()).flatten();
     let sources = explicit_names.or_else(|| {
         (config.providers_explicit
@@ -80,68 +78,101 @@ pub(super) fn source_form(app: &AppState, width: u16) -> SettingsForm {
     }
     for (index, provider) in sources.into_iter().flatten().enumerate() {
         let agent = provider.kind == SummaryProviderKind::Cli;
-        form.text(
-            format!(
-                "{}. {} · {}",
-                index + 1,
-                if agent { "Agent" } else { "API" },
-                provider.id
-            ),
-            heading,
+        if index > 0 {
+            form.text("", text);
+        }
+        form.prefixed(
+            Line::from(Span::styled(
+                format!("{}. ", index + 1),
+                Style::default().fg(app.palette.accent),
+            )),
+            Line::from(vec![
+                Span::styled(provider.id.clone(), heading),
+                Span::styled(if agent { "  Agent" } else { "  API" }, text),
+            ]),
         );
-        form.text(
-            format!(
-                "   Models: {}",
-                if provider.models.is_empty() {
-                    if agent {
-                        "Agent default".into()
+        let models = if provider.models.is_empty() {
+            vec![if agent {
+                "Agent default"
+            } else {
+                "not configured"
+            }]
+        } else {
+            provider.models.iter().map(String::as_str).collect()
+        };
+        for (model_index, model) in models.iter().enumerate() {
+            form.prefixed(
+                Line::from(Span::styled(
+                    if model_index + 1 == models.len() {
+                        "   └─ "
                     } else {
-                        "not configured".into()
-                    }
-                } else {
-                    provider.models.join(" → ")
-                }
-            ),
-            value,
-        );
+                        "   ├─ "
+                    },
+                    text,
+                )),
+                Line::from(Span::styled((*model).to_owned(), value)),
+            );
+        }
+        let mut detail = |label: &str, detail: String| {
+            form.prefixed(
+                Line::from(Span::styled(format!("   {label:<9}"), text)),
+                Line::from(Span::styled(detail, text)),
+            );
+        };
         if agent {
-            form.text(
-                format!(
-                    "   Command: {}",
-                    provider.command.as_deref().unwrap_or(&provider.id)
-                ),
-                text,
+            detail(
+                "Command",
+                provider
+                    .command
+                    .as_deref()
+                    .unwrap_or(&provider.id)
+                    .to_owned(),
             );
         } else {
-            form.text(
-                format!(
-                    "   URL: {}",
-                    provider.endpoint.as_deref().unwrap_or("not configured")
-                ),
-                text,
+            detail(
+                "Endpoint",
+                provider
+                    .endpoint
+                    .as_deref()
+                    .unwrap_or("not configured")
+                    .to_owned(),
             );
+            detail(
+                "Key env",
+                provider
+                    .api_key_env
+                    .as_ref()
+                    .map(|key| format!("${key}"))
+                    .unwrap_or_else(|| "not required".into()),
+            );
+        }
+    }
+    if !inactive {
+        form.text("First usable result wins.", text);
+    }
+    form.section(if inactive { "Result" } else { "Fallback" }, app);
+    match config.mode {
+        SummaryModeConfig::Pending => {
+            form.text("Existing topics and session names stay unchanged.", text)
+        }
+        SummaryModeConfig::Local => {
+            form.text("Names use local session text.", value);
+            form.text("Existing topics stay unchanged.", text);
+        }
+        _ => {
+            form.text("If every source fails", value);
             form.text(
-                format!(
-                    "   API key: {}",
-                    provider
-                        .api_key_env
-                        .as_ref()
-                        .map(|key| format!("from ${key}"))
-                        .unwrap_or_else(|| "not required".into())
-                ),
+                if titles {
+                    "Use local session text for names."
+                } else {
+                    "Keep topics · use local text for names."
+                },
                 text,
             );
         }
-        form.text("", text);
     }
-    form.text(
-        if titles {
-            "Final fallback: a name from local session text. Manual names are kept."
-        } else {
-            "If all sources fail: keep existing topics; names use local session text."
-        },
-        text,
-    );
-    config_location(&mut form, app);
+    if titles {
+        form.text("Manual names are always kept.", text);
+    }
     form
 }

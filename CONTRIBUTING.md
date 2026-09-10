@@ -22,8 +22,8 @@ private paths, and conversation content. Report security vulnerabilities private
 
 ## Development
 
-Follow the pinned Rust and Zig setup in [README.md](README.md#requirements). Install `just`,
-`zsh`, and Python 3 to run the repository recipes. The initial platform scope is macOS and Linux;
+Follow the pinned Rust and Zig setup in [installation](docs/installation.md#build-from-source). Install `just`,
+`zsh`, Python 3, and Node.js 20+ to run the repository recipes. The initial platform scope is macOS and Linux;
 Windows support requires separate validation.
 
 ```bash
@@ -33,15 +33,14 @@ just test-public
 just check
 ```
 
-`just check` runs formatting, public-source portability checks, Clippy, and Rust tests. Do not
+`just check` runs formatting, public-source portability checks, npm installer tests, Clippy, and Rust tests. Do not
 bypass failures. Include the checks actually run and any unresolved limitations in the PR.
-Debug builds use a separate `herduck-dev` namespace, or reuse existing `ork3-dev` data in place.
+Debug builds use a separate `herduck-dev` namespace.
 When running inside Herduck, clear inherited socket overrides to keep the development client
 attached to the development runtime:
 
 ```bash
 env -u HERDUCK_SOCKET_PATH -u HERDUCK_CLIENT_SOCKET_PATH \
-    -u ORK3_SOCKET_PATH -u ORK3_CLIENT_SOCKET_PATH \
     -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH cargo run --locked
 ```
 
@@ -61,7 +60,7 @@ Use lowercase conventional commit subjects, without emojis or AI co-author lines
 commit message before committing. For related issues, use `refs #<number>` in the body; do not
 use automatic closing keywords for unreleased work.
 
-Herduck currently installs from source. Do not invoke upstream release automation, publish upstream
+Herduck supports source and native/npm installations. Do not invoke upstream release automation, publish upstream
 assets, or enable self-update as part of an ordinary contribution. A Herduck release must identify
 the exact reviewed commit and the platforms actually validated. Registry packages and prebuilt
 binaries need their own packaging and installation validation.

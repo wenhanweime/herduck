@@ -14,15 +14,12 @@ pub const PRODUCT_NAME: &str = "herduck";
 
 pub fn channel() -> &'static str {
     non_empty(option_env!("HERDUCK_BUILD_CHANNEL"))
-        .or_else(|| non_empty(option_env!("ORK3_BUILD_CHANNEL")))
         .or_else(|| non_empty(option_env!("HERDR_BUILD_CHANNEL")))
         .unwrap_or("stable")
 }
 
 pub fn build_id() -> Option<&'static str> {
-    non_empty(option_env!("HERDUCK_BUILD_ID"))
-        .or_else(|| non_empty(option_env!("ORK3_BUILD_ID")))
-        .or_else(|| non_empty(option_env!("HERDR_BUILD_ID")))
+    non_empty(option_env!("HERDUCK_BUILD_ID")).or_else(|| non_empty(option_env!("HERDR_BUILD_ID")))
 }
 
 pub fn version() -> String {

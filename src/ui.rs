@@ -5,6 +5,7 @@ use ratatui::{
     Frame,
 };
 
+mod brand;
 mod dialogs;
 mod keybind_help;
 mod markdown;
@@ -40,7 +41,9 @@ use self::mobile::{
 };
 use self::navigator::render_navigator_overlay;
 use self::onboarding::render_onboarding_overlay;
-pub(crate) use self::onboarding::{onboarding_welcome_continue_rect, onboarding_welcome_skip_rect};
+pub(crate) use self::onboarding::{
+    onboarding_layout, onboarding_welcome_continue_rect, onboarding_welcome_skip_rect,
+};
 pub(crate) use self::panes::popup_pane_rects;
 use self::panes::{
     compute_pane_infos, render_panes, render_popup_pane, resize_popup_pane, resize_tab_panes,

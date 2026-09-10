@@ -22,7 +22,6 @@ pub(crate) fn init_file_logging(file_name: &str) {
     // The default filter must name the running binary's crate target. Renaming the binary to
     // herduck changed that target, and a stale `herdr=info` default silently dropped every log line.
     let filter = std::env::var("HERDUCK_LOG")
-        .or_else(|_| std::env::var("ORK3_LOG"))
         .or_else(|_| std::env::var("HERDR_LOG"))
         .ok()
         .and_then(|value| EnvFilter::try_new(value).ok())

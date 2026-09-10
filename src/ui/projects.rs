@@ -1512,7 +1512,7 @@ mod tests {
             let text = (menu.x..menu.right())
                 .map(|x| buffer[(x, menu.y)].symbol())
                 .collect::<String>();
-            assert!(text.contains("settings / menu"), "{view:?}: {text}");
+            assert!(text.contains("herduck · menu"), "{view:?}: {text}");
             if view == SidebarView::SpacesAgents {
                 let y = state.view.project_sidebar_tabs[0].bottom();
                 let text = (0..state.view.sidebar_rect.width)

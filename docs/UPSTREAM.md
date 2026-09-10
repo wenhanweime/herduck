@@ -2,9 +2,8 @@
 
 Herduck is an independent product and repository. Its terminal runtime was originally derived from
 Herdr v0.7.4 and has since been modified to provide project and semantic-cluster navigation,
-configuration, sockets, commands, and product identity. The project was previously named ORK3
-and was renamed Herduck in September 2026. It is independently maintained and is not an official
-Herdr release.
+configuration, sockets, commands, and product identity. It is independently maintained and is not
+an official Herdr release.
 
 | Field | Value |
 |---|---|

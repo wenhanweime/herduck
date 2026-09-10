@@ -32,14 +32,8 @@ pub fn isolate_project_history_for_pty(
     command.env("USERPROFILE", &home);
     command.env("XDG_DATA_HOME", &data);
     command.env("LOCALAPPDATA", &data);
-    // The suite may run inside an HERDUCK pane, which exports HERDUCK_ENV=1. A child that inherits it
-    // treats the socket override these tests set as foreign and ignores it.
+    // A test subprocess must start independently even when the suite runs inside a Herduck pane.
     command.env_remove(HERDUCK_ENV_VAR);
-    command.env_remove("ORK3_ENV");
-    command.env_remove("ORK3_CONFIG_PATH");
-    command.env_remove("ORK3_SOCKET_PATH");
-    command.env_remove("ORK3_CLIENT_SOCKET_PATH");
-    command.env_remove("HERDUCK_RUNTIME_NAMESPACE");
 }
 
 pub fn isolate_project_history_for_process(
@@ -55,11 +49,6 @@ pub fn isolate_project_history_for_process(
     command.env("XDG_DATA_HOME", &data);
     command.env("LOCALAPPDATA", &data);
     command.env_remove(HERDUCK_ENV_VAR);
-    command.env_remove("ORK3_ENV");
-    command.env_remove("ORK3_CONFIG_PATH");
-    command.env_remove("ORK3_SOCKET_PATH");
-    command.env_remove("ORK3_CLIENT_SOCKET_PATH");
-    command.env_remove("HERDUCK_RUNTIME_NAMESPACE");
 }
 
 pub fn register_spawned_herdr_pid(pid: Option<u32>) {

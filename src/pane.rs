@@ -145,7 +145,6 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         cmd.env(key, value);
     }
     cmd.env(crate::HERDUCK_ENV_VAR, crate::HERDUCK_ENV_VALUE);
-    cmd.env(crate::ORK3_ENV_VAR, crate::HERDUCK_ENV_VALUE);
     // Keep the upstream marker during the integration compatibility window.
     cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
@@ -3259,14 +3258,10 @@ mod tests {
     }
 
     #[test]
-    fn pane_launch_exports_new_and_legacy_runtime_identity() {
+    fn pane_launch_exports_product_and_upstream_integration_identity() {
         let mut cmd = CommandBuilder::new("/bin/sh");
         apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
-        for variable in [
-            crate::HERDUCK_ENV_VAR,
-            crate::ORK3_ENV_VAR,
-            crate::HERDR_ENV_VAR,
-        ] {
+        for variable in [crate::HERDUCK_ENV_VAR, crate::HERDR_ENV_VAR] {
             assert_eq!(
                 cmd.get_env(variable).and_then(std::ffi::OsStr::to_str),
                 Some("1")
@@ -3275,10 +3270,6 @@ mod tests {
         let socket = cmd
             .get_env(crate::api::SOCKET_PATH_ENV_VAR)
             .expect("canonical socket");
-        assert_eq!(
-            cmd.get_env(crate::api::ORK3_SOCKET_PATH_ENV_VAR),
-            Some(socket)
-        );
         assert_eq!(
             cmd.get_env(crate::api::LEGACY_SOCKET_PATH_ENV_VAR),
             Some(socket)

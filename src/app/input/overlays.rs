@@ -591,12 +591,10 @@ impl AppState {
             return;
         }
 
-        let Some(inner) = self.onboarding_modal_inner(64, 16) else {
+        let Some(layout) = crate::ui::onboarding_layout(self.onboarding_full_area()) else {
             return;
         };
-        let actions = crate::ui::modal_stack_areas(inner, 2, 0, 1, 1)
-            .actions
-            .unwrap_or_default();
+        let actions = layout.actions;
         let button = crate::ui::onboarding_welcome_continue_rect(actions);
         let skip = crate::ui::onboarding_welcome_skip_rect(actions);
         if skip.contains((mouse.column, mouse.row).into()) {
@@ -744,8 +742,9 @@ mod tests {
         let mut app = app_for_mouse_test();
         app.state.mode = Mode::Onboarding;
 
-        let inner = app.state.onboarding_modal_inner(64, 16).unwrap();
-        let content = crate::ui::modal_stack_areas(inner, 2, 0, 1, 1).content;
+        let content = crate::ui::onboarding_layout(app.state.onboarding_full_area())
+            .unwrap()
+            .content;
         app.handle_mouse(mouse(MouseEventKind::Moved, content.x + 2, content.y));
 
         assert!(!app.state.request_complete_onboarding);
@@ -756,10 +755,9 @@ mod tests {
         let mut app = app_for_mouse_test();
         app.state.mode = Mode::Onboarding;
 
-        let inner = app.state.onboarding_modal_inner(64, 16).unwrap();
-        let actions = crate::ui::modal_stack_areas(inner, 2, 0, 1, 1)
-            .actions
-            .unwrap();
+        let actions = crate::ui::onboarding_layout(app.state.onboarding_full_area())
+            .unwrap()
+            .actions;
         let continue_rect = crate::ui::onboarding_welcome_continue_rect(actions);
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),

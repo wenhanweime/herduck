@@ -10,7 +10,6 @@ use crossterm::execute;
 
 pub(crate) const HERDUCK_ENV_VAR: &str = "HERDUCK_ENV";
 pub(crate) const HERDUCK_ENV_VALUE: &str = "1";
-pub(crate) const ORK3_ENV_VAR: &str = "ORK3_ENV";
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 const NESTED_HERDUCK_MESSAGES: [&str; 6] = [
@@ -480,20 +479,11 @@ pane_history = false
 "##;
 
 fn should_block_nested(config: &config::Config) -> bool {
-    should_block_nested_for_env(
-        config,
-        std::env::var(HERDUCK_ENV_VAR).ok().as_deref(),
-        std::env::var(ORK3_ENV_VAR).ok().as_deref(),
-    )
+    should_block_nested_for_env(config, std::env::var(HERDUCK_ENV_VAR).ok().as_deref())
 }
 
-fn should_block_nested_for_env(
-    config: &config::Config,
-    herduck_env: Option<&str>,
-    ork3_env: Option<&str>,
-) -> bool {
-    !config.experimental.allow_nested
-        && (herduck_env == Some(HERDUCK_ENV_VALUE) || ork3_env == Some(HERDUCK_ENV_VALUE))
+fn should_block_nested_for_env(config: &config::Config, herduck_env: Option<&str>) -> bool {
+    !config.experimental.allow_nested && herduck_env == Some(HERDUCK_ENV_VALUE)
 }
 
 fn random_nested_message() -> &'static str {
@@ -925,41 +915,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nested_herdr_blocks_when_env_is_set() {
+    fn nested_herduck_blocks_when_env_is_set() {
         let config = config::Config::default();
         assert!(should_block_nested_for_env(
             &config,
-            Some(HERDUCK_ENV_VALUE),
-            None
+            Some(HERDUCK_ENV_VALUE)
         ));
     }
 
     #[test]
-    fn nested_herdr_does_not_block_when_allowed() {
+    fn nested_herduck_does_not_block_when_allowed() {
         let config: config::Config =
             toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
         assert!(!should_block_nested_for_env(
             &config,
-            Some(HERDUCK_ENV_VALUE),
-            None
+            Some(HERDUCK_ENV_VALUE)
         ));
     }
 
     #[test]
-    fn nested_herdr_does_not_block_without_env() {
+    fn nested_herduck_does_not_block_without_env() {
         let config = config::Config::default();
-        assert!(!should_block_nested_for_env(&config, None, None));
+        assert!(!should_block_nested_for_env(&config, None));
     }
 
     #[test]
-    fn legacy_ork3_marker_prevents_nesting() {
+    fn inactive_product_marker_does_not_block_nesting() {
         let config = config::Config::default();
-        assert!(should_block_nested_for_env(&config, None, Some("1")));
-        assert!(should_block_nested_for_env(&config, Some("0"), Some("1")));
-        assert!(!should_block_nested_for_env(&config, Some("0"), Some("0")));
-        let allowed: config::Config =
-            toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
-        assert!(!should_block_nested_for_env(&allowed, None, Some("1")));
+        assert!(!should_block_nested_for_env(&config, Some("0")));
+        assert!(!should_block_nested_for_env(&config, Some("")));
     }
 
     #[test]

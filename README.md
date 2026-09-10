@@ -1,195 +1,102 @@
-# Herduck
+<p align="center">
+  <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. A duck in a white hood, working at a laptop." width="880">
+</p>
 
-Herduck is an independent terminal workspace manager for AI coding-agent sessions. It combines a
-persistent terminal runtime with four navigation tabs:
+<h1 align="center">Your AI coding agents. One terminal.</h1>
 
-- **Agents** for live workspaces, tabs, and panes.
-- **Sessions** for conversations ordered by recent activity.
-- **Projects** grouped by working directory.
-- **Topics** grouped by semantic meaning across projects.
+<p align="center">
+  Run agents side by side. Find past conversations. Pick up where you left off.
+</p>
 
-Herduck builds and installs its own `herduck` executable. It is derived from Herdr and runs
-independently; no separate Herdr installation is required.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#see-all-your-work">See it in action</a> ·
+  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## Requirements
+Herduck brings your coding-agent terminals and conversation history into one workspace.
+Keep using the CLIs you know, including Claude Code, Codex, OpenCode, and Pi.
+Herduck helps you see what is running, find the right conversation, and continue it.
 
-- macOS or Linux for the initial source release (Windows is not yet validated)
-- Rust (the repository pins the supported toolchain in `rust-toolchain.toml`)
-- Zig 0.15.2 for the vendored terminal parser build
+## Install
 
-On macOS, install the build tools with Homebrew:
+With **Node.js 20+** on macOS or Linux:
 
-```bash
-xcode-select --install # if Apple command-line tools are not installed
-brew install rustup zig@0.15
-rustup-init
-export ZIG="$(brew --prefix zig@0.15)/bin/zig"
-"$ZIG" version # must report 0.15.2
-```
-
-On Linux, install Rust through [rustup](https://rustup.rs/), your distribution's C/C++ build
-tools (for example `build-essential` on Debian/Ubuntu), and [Zig 0.15.2](https://ziglang.org/download/).
-Place that Zig version on `PATH`, or set `ZIG` to its executable. An unversioned package-manager
-install may select an incompatible newer Zig.
-
-## Install from source
-
-```bash
-git clone https://github.com/wenhanweime/herduck.git
-cd herduck
-cargo install --path . --locked
-```
-
-On macOS, re-sign the locally built executable after installation or replacement:
-
-```bash
-codesign --force --sign - "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/herduck"
-```
-
-Then run `herduck`. This signing step also applies when upgrading a local macOS build.
-
-`cargo install` places the binary in Cargo's bin directory, normally `~/.cargo/bin`. Ensure that
-directory is on `PATH`. This release installs from the complete Git checkout, including its
-vendored dependencies. It is not published to crates.io; `cargo install herduck` is not supported.
-To upgrade, check out a newer reviewed release and repeat `cargo install --path . --locked`.
-
-For development without installing:
-
-```bash
-cargo run --locked -- --help
-cargo run --locked
-```
-
-## Usage
-
-Run `herduck` to open or attach to the persistent TUI. A server is started automatically; normally
-you do not need to run `herduck server` yourself.
-
-The welcome offers **View configuration** or **Skip**. Settings is available from every navigation
-tab (Ctrl+B, then S). **Sessions**, **Summaries**, and **Session names** show the loaded configuration
-and priorities. Click **Open config file** to edit `config.toml`, save, then reopen Settings to reload.
-**Start session** in Sessions uses the configured default Agent; the default is a plain shell.
-New tabs and splits open shells, while Resume uses the original Agent.
-```bash
+```sh
+npm install -g herduck@alpha
 herduck
-herduck --help
-herduck status
-herduck server stop
 ```
 
-Fresh installations use `~/.config/herduck` for configuration and `~/.local/state/herduck` for
-runtime state. Debug builds use the `herduck-dev` namespace. Standard XDG directory overrides apply.
+Or try it without a global install:
 
-Existing ORK3 installations keep their data in place: if the corresponding Herduck configuration
-directory does not exist, Herduck reuses `ork3` or `ork3-dev` and the matching state namespace.
-The rename does not move or delete configuration, the session catalog, or saved runtime state.
-The path shown in Settings is the active configuration file.
-
-The primary environment overrides are:
-
-```text
-HERDUCK_CONFIG_PATH
-HERDUCK_SOCKET_PATH
-HERDUCK_CLIENT_SOCKET_PATH
+```sh
+npx --yes herduck@alpha
 ```
 
-The corresponding `ORK3_*` variables remain accepted for compatibility; an explicit `HERDUCK_*`
-value takes precedence. Herduck stays separate from an upstream Herdr installation. See
-[Configuration](docs/configuration.md#paths-and-compatibility) for path selection and legacy sockets.
+This is an **alpha release**. The launcher downloads a verified native binary on first use;
+Rust and Zig are not needed. Install and sign in to your Agent CLIs separately.
 
-Run `herduck --default-config` for an annotated configuration template and `herduck config check`
-to validate your settings. See [Configuration](docs/configuration.md) for title language,
-history roots, temporary-runner filters, and personal settings that stay outside the repository.
+Prebuilt downloads support Apple silicon and Intel Macs, and x64/arm64 Linux with glibc 2.39+
+(such as Ubuntu 24.04). Windows and Alpine/musl are not supported by these downloads.
+See [installation](docs/installation.md) for GitHub-only npm installation, direct binaries,
+source builds, upgrades, and troubleshooting.
 
-## Session summaries
+## See all your work
 
-Configure API or local Agent sources in `config.toml`. **Settings → Summaries** displays them as a
-numbered list, including model order, command or endpoint, and key environment-variable reference.
-Herduck tries entries from top to bottom and stops at the first usable result. All changes happen in
-the file through **Open config file**; save and reopen Settings to apply them.
+Keep an Agent building while another reviews. Split panes, resize them with the mouse,
+and switch between projects without losing your place. Closing the client leaves the
+server and its terminals running; open `herduck` to attach again.
 
-**Settings → Session names** uses the Summary order by default, with a local text-based name as the
-final fallback. Configure `title_providers` for a separate naming order, or `title_providers = []`
-for local-only names. Manual names are retained.
+![Two demonstration Agent terminals side by side in Herduck](assets/screenshots/agents.png)
 
-New installations start with generation **Off** (`mode = "pending"`). Set `mode = "auto"` and define
-sources to enable ordered fallback. **Offline names only** (`mode = "local"`) creates basic names
-without model requests and keeps topics. Reloading these settings requires no server restart;
-results from the previous configuration cannot overwrite them. Model-based summaries send selected
-conversation content to the chosen provider, including when using a local Agent CLI.
-See [Configuration](docs/configuration.md) for Agent/API examples and the complete file workflow.
+## Find the conversation you meant
 
-For an explicit offline choice in your configuration:
+**Sessions** brings supported local Agent histories together, with the most recent work first.
+Preview a conversation, then resume it with its original Agent when available. Already running?
+Herduck focuses that terminal.
 
-```toml
-[projects.summary]
-mode = "local"
-```
+![Herduck Sessions showing recent demonstration conversations](assets/screenshots/sessions.png)
 
-To use your own OpenAI-compatible gateway, keep the key in the environment and only reference
-its name from `config.toml`:
+## Come back to the right context
 
-```toml
-[projects.summary]
-mode = "auto"
+**Projects** groups sessions by working directory. **Topics** groups related work across projects
+when you enable model-based organization. Your names and existing groups remain available when
+generation is off.
 
-[[projects.summary.providers]]
-id = "openrouter"
-kind = "openai_compatible"
-endpoint = "https://openrouter.ai/api/v1/chat/completions"
-api_key_env = "OPENROUTER_API_KEY"
-models = ["openrouter/free"]
-```
+![Herduck Projects grouping demonstration conversations by folder](assets/screenshots/projects.png)
 
-The same provider shape works with LiteLLM, LM Studio, and Ollama (for example,
-`http://localhost:11434/v1/chat/completions`). Configure local Agent fallback order under `[[projects.summary.providers]]`. Store API keys
-in environment variables and reference them through `api_key_env`; do not commit credentials.
+*These are captures of the running terminal UI with demonstration conversations and Agent output.*
 
-OpenCode Zen paid models are opt-in. Add a provider explicitly and export its key; do not use a
-placeholder value such as `public`:
+## Start with your own tools
 
-```toml
-[[projects.summary.providers]]
-id = "opencode_zen"
-kind = "openai_compatible"
-endpoint = "https://opencode.ai/zen/v1/chat/completions"
-api_key_env = "OPENCODE_ZEN_API_KEY"
-models = ["your-zen-model"]
-```
+The welcome opens configuration or lets you skip straight to a shell. Choose **herduck · menu → settings**,
+or press **Ctrl+B, then S** from a terminal. The **Sessions**, **Summaries**, and **Session names**
+pages show the loaded configuration and source order.
 
-An optional `opencode_free` provider uses a keyless remote service and sends no `Authorization`
-header. It still sends conversation content over the network. Free access is best-effort and
-subject to the provider's availability and rate limits.
+Use **Open config file** to edit, save, then close and reopen Settings to reload.
+Run `herduck config check` to check the file. Your Agent authentication stays with each Agent.
 
-The complete executable scope, fallback rules, privacy boundaries, and acceptance criteria are in
-[docs/PRD-public-summary-providers.md](docs/PRD-public-summary-providers.md).
+Model-based summaries, names, and topics are **off by default**. To enable them, choose your
+Agent or API sources in the configuration file. Selected conversation content is sent to those
+sources when generation runs. Local-only naming is also available. See
+[configuration and privacy](docs/configuration.md) for examples and data locations.
 
-## Build and test
+## Development
 
-```bash
-just release
-just test
-```
+Follow the pinned [Rust and Zig setup](docs/installation.md#build-from-source), then run:
 
-Install `just`, `zsh`, and Python 3 for the repository recipes. Check public-source portability
-and run the full repository gate:
-
-```bash
-just check-public
-just test-public
+```sh
+just build
 just check
 ```
 
-For a focused local test run, use `just test --bin herduck <test-name-filter>`.
-
-## Contributing and security
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development and review, and
-[SECURITY.md](SECURITY.md) for private vulnerability reporting and data boundaries.
+`just check` runs formatting, public-source checks, npm installer tests, Clippy, and Rust tests.
+Repository recipes require `just`, `zsh`, Python 3, and Node.js 20+.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for review and [SECURITY.md](SECURITY.md) for private reports.
 
 ## License and origin
 
-Herduck is licensed under AGPL-3.0-or-later. It includes modified source originally imported from
-Herdr v0.7.4; the original copyright notices and license are preserved. Exact upstream commit and
-checksum information is recorded in [docs/UPSTREAM.md](docs/UPSTREAM.md). Herduck is independently
-maintained and is not an official Herdr release.
+Herduck is an independent project derived from **Herdr v0.7.4**, distributed under
+**AGPL-3.0-or-later**. It installs its own executable and needs no separate Herdr installation.
+Original notices are preserved. See [LICENSE](LICENSE) and [upstream provenance](docs/UPSTREAM.md).

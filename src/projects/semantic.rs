@@ -1311,6 +1311,9 @@ mod tests {
                     result => panic!("HTTP fixture did not receive a request: {result:?}"),
                 }
             };
+            // macOS accepted sockets inherit the listener's nonblocking mode.
+            // Wait for request bytes under the read timeout instead of racing their arrival.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();

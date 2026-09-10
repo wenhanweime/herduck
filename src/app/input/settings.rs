@@ -285,7 +285,9 @@ fn update_config_details_key(state: &mut AppState, key: KeyEvent) -> Option<Sett
         | KeyCode::Home
         | KeyCode::End => {
             let area = state.settings_content_rect();
-            if let Some(form) = crate::ui::settings_form(state, area.width) {
+            if let Some(form) =
+                crate::ui::settings_form(state, area.width, state.settings_inline_config())
+            {
                 let max = form.max_scroll(area.height);
                 let scroll = state.settings.scroll.min(max);
                 state.settings.scroll = match key.code {
@@ -345,7 +347,13 @@ impl AppState {
 
     pub(crate) fn settings_content_rect(&self) -> Rect {
         let inner = self.settings_inner_rect();
-        crate::ui::settings_layout(inner).content
+        crate::ui::settings_layout(self, inner).content
+    }
+
+    fn settings_inline_config(&self) -> bool {
+        crate::ui::settings_layout(self, self.settings_inner_rect())
+            .config
+            .is_empty()
     }
 
     fn settings_list_index_at(&self, col: u16, row: u16) -> Option<usize> {
@@ -411,7 +419,9 @@ impl AppState {
                 let area = self.settings_content_rect();
                 if area.contains((mouse.column, mouse.row).into()) {
                     let down = mouse.kind == MouseEventKind::ScrollDown;
-                    if let Some(form) = crate::ui::settings_form(self, area.width) {
+                    if let Some(form) =
+                        crate::ui::settings_form(self, area.width, self.settings_inline_config())
+                    {
                         let scroll = form.scroll_offset(area.height, self.settings.scroll);
                         self.settings.scroll = if down {
                             scroll.saturating_add(1).min(form.max_scroll(area.height))
@@ -428,7 +438,8 @@ impl AppState {
                     return None;
                 }
                 let area = self.settings_content_rect();
-                if crate::ui::settings_form(self, area.width).is_some()
+                if crate::ui::settings_form(self, area.width, self.settings_inline_config())
+                    .is_some()
                     && area.contains((mouse.column, mouse.row).into())
                 {
                     return None;
@@ -626,7 +637,7 @@ mod tests {
             open_settings_at(&mut state, SettingsSection::Summaries);
             crate::ui::compute_view(&mut state, Rect::new(0, 0, width, height));
             let area = state.settings_content_rect();
-            let max = crate::ui::settings_form(&state, area.width)
+            let max = crate::ui::settings_form(&state, area.width, state.settings_inline_config())
                 .unwrap()
                 .max_scroll(area.height);
             assert!(max > 0);

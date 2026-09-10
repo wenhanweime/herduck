@@ -1,0 +1,15 @@
+{
+  "name": "herduck",
+  "version": "0.1.0-alpha.2",
+  "description": "Your AI coding agents. One terminal.",
+  "license": "AGPL-3.0-or-later",
+  "repository": { "type": "git", "url": "git+https://github.com/wenhanweime/herduck.git" },
+  "homepage": "https://github.com/wenhanweime/herduck",
+  "publishConfig": { "access": "public", "tag": "alpha" },
+  "bin": { "herduck": "bin/herduck.cjs" },
+  "files": ["bin/", "lib/", "manifest.json", "LICENSE", "README.md"],
+  "engines": { "node": ">=20" },
+  "os": ["darwin", "linux"],
+  "cpu": ["x64", "arm64"],
+  "scripts": { "test": "node --test test/*.test.cjs" }
+}

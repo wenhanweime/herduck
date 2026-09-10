@@ -28,7 +28,6 @@ class PublicPolicyTests(unittest.TestCase):
             "/Users/example <INSTRUCTIONS>", r"C:\Users\herdr\project",
             "/home/linuxbrew/.linuxbrew/bin/herdr", "arrows/home/end",
             "https://github.com/wenhanweime/herduck", "HERDR_ENV", "herdr-agent-state.ts",
-            "https://github.com/wenhanweime/ork3",
         ))
         self.assertEqual(inspect_text("src/sample.rs", text), [])
 

@@ -59,7 +59,7 @@ fn default_update_channel() -> UpdateChannelConfig {
 pub enum ToastDelivery {
     #[default]
     Off,
-    #[serde(alias = "herdr", alias = "ork3")]
+    #[serde(alias = "herdr")]
     Herduck,
     Terminal,
     System,
@@ -1262,12 +1262,7 @@ impl Default for KeysConfig {
 impl Default for WorktreesConfig {
     fn default() -> Self {
         Self {
-            directory: if crate::config::uses_legacy_namespace() {
-                "~/.ork3/worktrees"
-            } else {
-                "~/.herduck/worktrees"
-            }
-            .into(),
+            directory: "~/.herduck/worktrees".into(),
         }
     }
 }
@@ -1352,7 +1347,7 @@ impl<'de> Deserialize<'de> for ToastConfig {
             delivery: Option<ToastDelivery>,
             enabled: Option<bool>,
             delay_seconds: Option<u64>,
-            #[serde(alias = "herdr", alias = "ork3")]
+            #[serde(alias = "herdr")]
             herduck: HerduckToastConfig,
             clipboard: ClipboardToastConfig,
         }
@@ -1392,8 +1387,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_product_toast_settings_load_without_rewriting_configuration() {
-        for name in ["herdr", "ork3", "herduck"] {
+    fn product_and_upstream_toast_settings_load_without_rewriting_configuration() {
+        for name in ["herdr", "herduck"] {
             let source = format!(
                 "[ui.toast]\ndelivery = \"{name}\"\n[ui.toast.{name}]\nposition = \"top-left\"\n"
             );
@@ -1610,14 +1605,7 @@ hide_tab_bar_when_single_tab = true
     #[test]
     fn worktrees_directory_defaults_and_parses() {
         let default_config = Config::default();
-        assert_eq!(
-            default_config.worktrees.directory,
-            if crate::config::uses_legacy_namespace() {
-                "~/.ork3/worktrees"
-            } else {
-                "~/.herduck/worktrees"
-            }
-        );
+        assert_eq!(default_config.worktrees.directory, "~/.herduck/worktrees");
 
         let toml = r#"
 [worktrees]

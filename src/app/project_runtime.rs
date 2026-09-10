@@ -85,7 +85,7 @@ impl App {
                     job.and_then(|_| {
                         crate::projects::SessionIdentity::id(
                             agent,
-                            &format!("ork3-live:{terminal_id:?}"),
+                            &format!("herduck-live:{terminal_id:?}"),
                         )
                         .ok()
                     })

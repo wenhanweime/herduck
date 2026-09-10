@@ -27,9 +27,7 @@ API sends selected conversation content to the configured endpoint. Offline nami
 Agent and makes no network request. Keep API credentials in environment variables referenced by
 `api_key_env`, and review the provider's data policy before use.
 
-Herduck reuses existing ORK3 configuration and state without moving the files. That preserves the
-previously configured generation mode and providers; renaming the application does not reset consent
-or make an existing remote provider local. Review the active paths and sources in Settings.
+Review the active paths, generation mode, and provider sources in Settings before enabling summaries.
 
 The public-source checker catches selected private paths and machine-specific defaults. It does
 not replace credential scanning, dependency review, or inspection of Git history before publication.

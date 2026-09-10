@@ -11,10 +11,11 @@ pub(crate) struct SettingsLayout {
     pub navigation: Vec<(SettingsSection, Rect)>,
     pub compact_navigation: bool,
     pub content: Rect,
+    pub config: Rect,
     pub status: Rect,
 }
 
-pub(crate) fn settings_layout(inner: Rect) -> SettingsLayout {
+pub(crate) fn settings_layout(app: &AppState, inner: Rect) -> SettingsLayout {
     let status_height = 2.min(inner.height.saturating_sub(1));
     let status = Rect::new(
         inner.x,
@@ -24,10 +25,31 @@ pub(crate) fn settings_layout(inner: Rect) -> SettingsLayout {
     );
     let title = Rect::new(inner.x, inner.y, inner.width, inner.height.min(1));
     let vertical = inner.width >= 70 && inner.height >= 18;
+    let mut config = Rect::default();
+    if vertical
+        && matches!(
+            app.settings.section,
+            SettingsSection::Sessions | SettingsSection::Summaries | SettingsSection::Titles
+        )
+    {
+        let width = inner.width.saturating_sub(2);
+        let height = super::forms::config_footer(app, width).height();
+        let available = status.y.saturating_sub(inner.y + 2);
+        // Keep all categories and at least twelve body rows visible. A long footer
+        // falls back to the scrolled form, preserving the complete config path.
+        if available >= height.saturating_add(13) {
+            config = Rect::new(inner.x + 1, status.y - height, width, height);
+        }
+    }
+    let content_bottom = if config.is_empty() {
+        status.y
+    } else {
+        config.y
+    };
     let mut navigation = Vec::new();
     let (divider, content) = if vertical {
         let top = inner.y + 2;
-        let height = status.y.saturating_sub(top + 1);
+        let height = content_bottom.saturating_sub(top + 1);
         for (index, section) in SettingsSection::ALL.iter().copied().enumerate() {
             let gap = usize::from(index >= 2) + usize::from(index >= 5) + usize::from(index >= 7);
             navigation.push((
@@ -66,12 +88,13 @@ pub(crate) fn settings_layout(inner: Rect) -> SettingsLayout {
         navigation,
         compact_navigation: !vertical,
         content,
+        config,
         status,
     }
 }
 
-pub(crate) fn settings_tab_rects(_app: &AppState, inner: Rect) -> Vec<(SettingsSection, Rect)> {
-    settings_layout(inner).navigation
+pub(crate) fn settings_tab_rects(app: &AppState, inner: Rect) -> Vec<(SettingsSection, Rect)> {
+    settings_layout(app, inner).navigation
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,7 +166,14 @@ pub(crate) fn settings_buttons(app: &AppState, inner: Rect) -> Vec<SettingsButto
         .iter()
         .map(|(_, hint, label)| ActionButtonSpec { hint: *hint, label })
         .collect::<Vec<_>>();
-    let rects = action_button_row_rects(inner, &specs, 1, inner.height.saturating_sub(1));
+    let mut rects = action_button_row_rects(inner, &specs, 1, inner.height.saturating_sub(1));
+    if details && !compact {
+        let right = rects.last().map_or(inner.right(), |rect| rect.right());
+        let shift = inner.right().saturating_sub(right + 1);
+        for rect in &mut rects {
+            rect.x += shift;
+        }
+    }
     actions
         .into_iter()
         .zip(rects)

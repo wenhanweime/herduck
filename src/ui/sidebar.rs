@@ -1402,13 +1402,16 @@ pub(super) fn render_sidebar_menu(app: &AppState, frame: &mut Frame) {
                 "● ",
                 Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("settings / menu", Style::default().fg(p.overlay0)),
+            Span::styled("her", Style::default().fg(p.text)),
+            Span::styled("duck", Style::default().fg(p.yellow)),
+            Span::styled(" · menu", Style::default().fg(p.overlay0)),
         ])
     } else {
-        Line::from(vec![Span::styled(
-            "settings / menu",
-            Style::default().fg(p.overlay0),
-        )])
+        Line::from(vec![
+            Span::styled("her", Style::default().fg(p.text)),
+            Span::styled("duck", Style::default().fg(p.yellow)),
+            Span::styled(" · menu", Style::default().fg(p.overlay0)),
+        ])
     };
     frame.render_widget(
         Paragraph::new(menu_line).alignment(Alignment::Right),

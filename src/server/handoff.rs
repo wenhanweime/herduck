@@ -72,7 +72,6 @@ pub(crate) fn spawn_handoff_import(
         &fallback_exe
     };
     let mut command = Command::new(exe);
-    crate::config::apply_runtime_namespace_env(&mut command);
     command
         .arg("server")
         .arg("--handoff-import")

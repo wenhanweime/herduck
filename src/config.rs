@@ -34,14 +34,10 @@ pub use self::{
     theme::{parse_color, CustomThemeColors, ThemeConfig},
 };
 
-pub(crate) use self::io::{
-    apply_runtime_namespace_env, resolve_config_relative_path, runtime_product_name,
-    upsert_top_level_bool, uses_legacy_namespace,
-};
+pub(crate) use self::io::{resolve_config_relative_path, upsert_top_level_bool};
 pub(crate) use self::keybinds::parse_key_combo;
 
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDUCK_CONFIG_PATH";
-pub const LEGACY_CONFIG_PATH_ENV_VAR: &str = "ORK3_CONFIG_PATH";
 pub const DEFAULT_SCROLLBACK_LIMIT_BYTES: usize = 10_000_000;
 pub const DEFAULT_MOUSE_SCROLL_LINES: usize = 3;
 pub const DEFAULT_MOBILE_WIDTH_THRESHOLD: u16 = 64;

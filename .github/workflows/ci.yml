@@ -14,11 +14,24 @@ jobs:
         run: python3 tooling/check_public.py
       - name: Test public-source rules
         run: python3 -m unittest discover -s tooling -p 'test_check_public.py'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: node --test npm/test/*.test.cjs
 
   rust:
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        include:
+          - os: macos-15
+            asset: herduck-macos-aarch64
+          - os: macos-15-intel
+            asset: herduck-macos-x86_64
+          - os: ubuntu-24.04
+            asset: herduck-linux-x86_64
+          - os: ubuntu-24.04-arm
+            asset: herduck-linux-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -54,3 +67,54 @@ jobs:
           mkdir -p "$RUNNER_TEMP/herduck-config-smoke"
           "$RUNNER_TEMP/herduck-install/bin/herduck" --default-config > "$HERDUCK_CONFIG_PATH"
           "$RUNNER_TEMP/herduck-install/bin/herduck" config check
+      - name: Stage verified native binary
+        run: |
+          mkdir -p release-assets
+          cp "$RUNNER_TEMP/herduck-install/bin/herduck" "release-assets/${{ matrix.asset }}"
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            codesign --verify --verbose "release-assets/${{ matrix.asset }}"
+          fi
+          "release-assets/${{ matrix.asset }}" --version
+          file "release-assets/${{ matrix.asset }}"
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            readelf --version-info "release-assets/${{ matrix.asset }}" | sed -n 's/.*Name: \(GLIBC_[0-9.]*\).*/\1/p' | sort -Vu
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: release-assets/${{ matrix.asset }}
+
+  npm-package:
+    needs: [public-source, rust]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: herduck-*
+          merge-multiple: true
+          path: release-assets
+      - name: Pack launcher with exact binary hashes
+        run: python3 tooling/package_release.py --assets release-assets --output release-assets
+      - name: Verify archive installation and native launch offline
+        run: |
+          npm install --global --ignore-scripts --prefix "$RUNNER_TEMP/npm-install" ./release-assets/herduck-*.tgz
+          export XDG_DATA_HOME="$RUNNER_TEMP/herduck-package-data"
+          node - <<'JS'
+          const fs = require('node:fs/promises');
+          const path = require('node:path');
+          const pkg = path.join(process.env.RUNNER_TEMP, 'npm-install/lib/node_modules/herduck');
+          const { ensureBinary } = require(path.join(pkg, 'lib/install.cjs'));
+          ensureBinary(require(path.join(pkg, 'manifest.json')), {
+            fetchBinary: (_, destination) => fs.copyFile('release-assets/herduck-linux-x86_64', destination),
+          }).catch(error => { console.error(error); process.exitCode = 1; });
+          JS
+          "$RUNNER_TEMP/npm-install/bin/herduck" --version
+          "$RUNNER_TEMP/npm-install/bin/herduck" config check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: herduck-release
+          path: release-assets/*
