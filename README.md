@@ -24,16 +24,17 @@ Herduck helps you see what is running, find the right conversation, and continue
 With **Node.js 20+** on macOS or Linux:
 
 ```sh
-npm install -g herduck@alpha
+npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
 herduck
 ```
 
 Or try it without a global install:
 
 ```sh
-npx --yes herduck@alpha
+npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
 ```
 
+Install this release directly from GitHub; the npm registry package is not published yet.
 This is an **alpha release**. The launcher downloads a verified native binary on first use;
 Rust and Zig are not needed. Install and sign in to your Agent CLIs separately.
 

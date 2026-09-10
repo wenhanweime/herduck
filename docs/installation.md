@@ -6,34 +6,24 @@ login separately; Herduck does not supply an Agent subscription or credentials.
 ## npm and npx
 
 Node.js 20 or later is required for the launcher. Rust and Zig are not required for prebuilt binaries.
-
-```sh
-npm install -g herduck@alpha
-herduck
-```
-
-To try the same release without a global npm installation:
-
-```sh
-npx --yes herduck@alpha
-```
-
-Use `herduck@0.1.0-alpha.2` instead of `herduck@alpha` to pin this version. The first launch downloads
-the matching binary from the exact GitHub release and checks its SHA-256 against the package's
-embedded manifest. Subsequent launches reuse the verified binary and can work offline. Agent
-services may still need a network connection. There are no npm lifecycle install scripts or
-runtime dependencies.
-
-The same package is also available directly from GitHub, independently of the npm registry:
+The npm registry package is not published yet. npm and npx can install the published GitHub archive directly:
 
 ```sh
 npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
 herduck
 ```
 
+To try the same release without a global npm installation:
+
 ```sh
 npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
 ```
+
+The archive URL pins version `0.1.0-alpha.2`. The first launch downloads
+the matching binary from the exact GitHub release and checks its SHA-256 against the package's
+embedded manifest. Subsequent launches reuse the verified binary and can work offline. Agent
+services may still need a network connection. There are no npm lifecycle install scripts or
+runtime dependencies.
 
 If npm reports a permission error on global installation, use npx or a Node installation owned by
 your user. Do not run Herduck with `sudo`.
@@ -141,7 +131,7 @@ install the raw `npm/` directory. CI generates the distributable manifest from t
 
 ## Upgrade, storage, and removal
 
-Repeat the npm install command to update the launcher to the current alpha. A different release
+Use the GitHub package URL from a newer release to update the launcher. A different release
 gets a different native runtime directory; npm does not overwrite the executable of a running server.
 `herduck --version` reports the installed client. An already running server keeps its current
 version until handed off or stopped. Finish active work before stopping a server; stopping it ends

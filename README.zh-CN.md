@@ -20,16 +20,17 @@ OpenCode、Pi 等 CLI，同时看清哪些任务在运行、之前的对话在�
 macOS 或 Linux，安装 **Node.js 20+** 后运行：
 
 ```sh
-npm install -g herduck@alpha
+npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
 herduck
 ```
 
 不想全局安装，可以直接体验：
 
 ```sh
-npx --yes herduck@alpha
+npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
 ```
 
+目前通过 GitHub 发布包安装，npm registry 上的包尚未发布。
 当前是 **alpha 预览版**。首次启动会下载对应系统的原生程序并校验 SHA-256，无需安装 Rust 或 Zig。
 各个 Agent CLI 需要自行安装和登录。
 

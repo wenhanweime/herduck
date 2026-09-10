@@ -7,17 +7,17 @@ Run agents side by side, find past conversations, and organize work by project a
 This package launches the native Herduck application on macOS and Linux (x64 and arm64).
 Node.js 20+ is required; Rust and Zig are not. Your agent CLIs are installed separately.
 
-Install the release package:
+Install the published GitHub package (npm registry publication is pending):
 
 ```sh
-npm install -g herduck@alpha
+npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
 herduck
 ```
 
 Or run without a global npm install:
 
 ```sh
-npx --yes herduck@alpha
+npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
 ```
 
 On first run, the launcher downloads the matching binary from that exact GitHub release and
@@ -31,10 +31,8 @@ stop your Herduck servers before manually deleting old runtime versions. Your co
 conversations are not removed. On Linux, prebuilt binaries require glibc 2.39+; Alpine/musl is not
 supported by these downloads.
 
-This is an alpha preview. Pin `herduck@0.1.0-alpha.2` for this exact release. A direct
-[GitHub package](https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz)
-is available too; pass its URL to `npm install -g`, or use
-`npx --yes --package=<package-url> herduck`.
+This is an alpha preview. The GitHub URL pins version `0.1.0-alpha.2` and does not require
+the package to be published to the npm registry. Use a newer release's URL to upgrade.
 
 Herduck is an independent project derived from Herdr v0.7.4 and distributed under
 AGPL-3.0-or-later. The commercial-license offer in the preserved LICENSE applies to upstream
