@@ -71,6 +71,10 @@ Agent 面板把不同工作区的运行情况放到一起，区分正在工作�
 
 主题生成默认关闭。关闭生成或模型来源暂时不可用时，已有分组仍可查看；新会话可在来源恢复后继续整理。
 
+**0.1.0-alpha.3 源码预览**新增 **Topic 封面**：点开主题，在对话列表上方填写这周目标、最多三条下一步、
+以及卡住说明。人可以在界面编辑保存，Agent 可以通过 `herduck topic` 命令或 socket API 读写同一份封面；
+重启后仍然保留。[使用说明](docs/topic-covers.md)。
+
 ![Herduck 原生 Topics 截图：跨目录、跨 Agent 汇集相关会话](assets/screenshots/topics-zh.png)
 
 ## Projects：按目录组织，保留独立项目视图

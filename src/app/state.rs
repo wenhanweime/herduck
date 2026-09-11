@@ -839,6 +839,23 @@ pub struct ProjectsViewState {
     /// pane exits, so the Esc fallback can still find the tab after its pane is gone.
     pub history_return_tab: Option<(String, crate::layout::PaneId)>,
     pub expanded_thin_keys: HashSet<String>,
+    pub topic_detail_key: Option<String>,
+    pub topic_detail_selected: usize,
+    pub topic_detail_scroll: usize,
+    pub cover_editor: Option<TopicCoverEditor>,
+}
+
+/// An unsaved cover is client presentation state, never part of runtime persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicCoverEditor {
+    pub topic_key: String,
+    pub topic_name: String,
+    /// Goal, three next-step slots, and blocker text.
+    pub fields: [String; 5],
+    pub focused_field: usize,
+    pub cursor: usize,
+    pub expected_updated_at: i64,
+    pub error: String,
 }
 
 impl Default for ProjectsViewState {
@@ -859,6 +876,10 @@ impl Default for ProjectsViewState {
             history_fallback_reason: None,
             history_return_tab: None,
             expanded_thin_keys: HashSet::new(),
+            topic_detail_key: None,
+            topic_detail_selected: 0,
+            topic_detail_scroll: 0,
+            cover_editor: None,
         }
     }
 }
@@ -923,6 +944,19 @@ pub struct ViewState {
     pub project_search_rect: Rect,
     pub project_tree_rect: Rect,
     pub project_row_hit_areas: Vec<ProjectRowHitArea>,
+    pub topic_detail: TopicDetailGeometry,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TopicDetailGeometry {
+    pub title: Rect,
+    pub edit: Rect,
+    pub cover: Rect,
+    pub heading: Rect,
+    pub sessions: Rect,
+    pub footer: Rect,
+    pub row_hits: Vec<ProjectRowHitArea>,
+    pub normalized_scroll: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -949,6 +983,8 @@ pub enum Mode {
     KeybindHelp,
     Navigator,
     ProjectHistory,
+    TopicDetail,
+    EditTopicCover,
 }
 
 impl Mode {
@@ -1981,6 +2017,7 @@ impl AppState {
                 project_filter_tabs: [Rect::default(); 2],
                 project_search_rect: Rect::default(),
                 project_tree_rect: Rect::default(),
+                topic_detail: TopicDetailGeometry::default(),
                 project_row_hit_areas: Vec::new(),
             },
             drag: None,

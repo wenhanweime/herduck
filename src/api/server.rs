@@ -345,6 +345,8 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
         Method::SessionSnapshot(_) => "session.snapshot",
         Method::ProjectSnapshot(_) => "project.snapshot",
+        Method::TopicCoverGet(_) => "topic.cover.get",
+        Method::TopicCoverUpdate(_) => "topic.cover.update",
         Method::ProjectSessionsPage(_) => "project.sessions.page",
         Method::ProjectSessionAssign(_) => "project.session.assign",
         Method::ProjectSessionUnlock(_) => "project.session.unlock",

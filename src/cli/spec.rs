@@ -30,6 +30,7 @@ pub(super) fn command() -> Command {
         .subcommand(channel_command())
         .subcommand(server_command())
         .subcommand(api_command())
+        .subcommand(topic_command())
         .subcommand(workspace_command())
         .subcommand(worktree_command())
         .subcommand(tab_command())
@@ -136,6 +137,29 @@ fn api_command() -> Command {
                 .about("Print or write the bundled API schema")
                 .arg(json_flag())
                 .arg(path_option("output", "PATH")),
+        )
+}
+
+fn topic_command() -> Command {
+    Command::new("topic")
+        .about("Read and edit Topic covers over the socket API")
+        .subcommand(
+            Command::new("list").about("List Topic keys, covers, and conversations as JSON"),
+        )
+        .subcommand(
+            Command::new("cover")
+                .about("Read or update a Topic cover")
+                .subcommand(id_command("get", "topic_key", "Read a Topic cover"))
+                .subcommand(
+                    Command::new("update")
+                        .about("Update only the supplied cover fields")
+                        .arg(required("topic_key", "TOPIC_KEY"))
+                        .arg(option("goal", "TEXT"))
+                        .arg(repeatable_option("next-step", "TEXT"))
+                        .arg(flag("clear-next-steps").conflicts_with("next-step"))
+                        .arg(option("blocked-note", "TEXT"))
+                        .arg(option("expected-updated-at", "N")),
+                ),
         )
 }
 

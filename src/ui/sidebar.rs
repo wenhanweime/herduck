@@ -2057,6 +2057,7 @@ mod tests {
         });
 
         app.projects.snapshot.projects = vec![crate::projects::ProjectSummary {
+            cover: None,
             canonical_key: "repo".into(),
             kind: crate::projects::ProjectKind::Cwd,
             display_name: "repo".into(),

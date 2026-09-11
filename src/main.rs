@@ -605,6 +605,7 @@ fn main() -> io::Result<()> {
         println!("       herduck workspace <subcommand> ...");
         println!("       herduck worktree <subcommand> ...");
         println!("       herduck tab <subcommand> ...");
+        println!("       herduck topic <subcommand> ...");
         println!("       herduck notification <subcommand> ...");
         println!("       herduck agent <subcommand> ...");
         println!("       herduck pane <subcommand> ...");
@@ -659,6 +660,10 @@ fn main() -> io::Result<()> {
             (
                 "herduck tab <subcommand>",
                 "Tab helpers over the socket API",
+            ),
+            (
+                "herduck topic <subcommand>",
+                "List Topics and read or edit their covers",
             ),
             (
                 "herduck notification <subcommand>",

@@ -316,7 +316,11 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             })
             .cloned()
             .collect::<Vec<_>>();
-        if sessions.is_empty() && automation.is_empty() {
+        let authored_topic = project.kind == ProjectKind::Semantic
+            && project.cover.is_some()
+            && app.projects.filter == ProjectFilter::All
+            && project_matches;
+        if sessions.is_empty() && automation.is_empty() && !authored_topic {
             continue;
         }
 
@@ -1066,7 +1070,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
 /// A live session reports its status (`working` / `done` / `idle` / `inactive` / `blocked`) using the same
 /// vocabulary as the Sessions sidebar. A historical session has no pane, so it says so rather than
 /// borrowing a state it does not have.
-fn session_status_line<'a>(app: &AppState, session: &IndexedSessionSummary) -> Line<'a> {
+pub(super) fn session_status_line<'a>(app: &AppState, session: &IndexedSessionSummary) -> Line<'a> {
     let mut spans = vec![Span::raw("    ")];
     match session_agent_state(app, session) {
         Some((_, _, true)) => spans.push(Span::styled(
@@ -1378,6 +1382,7 @@ mod tests {
             projects_schema_version: 1,
             revision: 1,
             projects: vec![ProjectSummary {
+                cover: None,
                 canonical_key: "p1".into(),
                 kind: ProjectKind::Cwd,
                 display_name: "ait".into(),

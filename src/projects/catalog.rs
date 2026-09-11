@@ -14,7 +14,9 @@ use super::domain::{
     PROJECTS_SCHEMA_VERSION,
 };
 
-const CATALOG_SCHEMA_VERSION: u32 = 6;
+mod topic_cover;
+
+const CATALOG_SCHEMA_VERSION: u32 = 7;
 
 /// Columns added by the v6 migration and present in a freshly created schema.
 ///
@@ -92,6 +94,8 @@ pub(crate) enum CatalogError {
     AliasConflict,
     CrossBackendAlias,
     InvalidTopicMerge,
+    InvalidTopicCover(&'static str),
+    TopicCoverConflict,
     NotFound,
 }
 
@@ -109,6 +113,8 @@ impl std::fmt::Display for CatalogError {
                 f.write_str("session alias backend differs from primary backend")
             }
             Self::InvalidTopicMerge => f.write_str("invalid semantic topic merge"),
+            Self::InvalidTopicCover(message) => f.write_str(message),
+            Self::TopicCoverConflict => f.write_str("Topic cover changed; reopen it before saving"),
             Self::NotFound => f.write_str("catalog record not found"),
         }
     }
@@ -273,6 +279,10 @@ impl ProjectCatalog {
             self.migrate_v5_to_v6()?;
             version = 6;
         }
+        if version == 6 {
+            self.migrate_v6_to_v7()?;
+            version = 7;
+        }
         if version == CATALOG_SCHEMA_VERSION {
             return Ok(());
         }
@@ -432,9 +442,10 @@ impl ProjectCatalog {
             CREATE INDEX semantic_fingerprint
                 ON semantic_assignments(fingerprint);
 
-            PRAGMA user_version = 6;
+            PRAGMA user_version = 7;
             "#,
         )?;
+        transaction.execute_batch(topic_cover::CREATE_TOPIC_COVERS_SQL)?;
         transaction.commit()?;
         Ok(())
     }
@@ -1908,6 +1919,7 @@ impl ProjectCatalog {
             let automation = self.automation_templates_for_project(project_id)?;
             let thin_count = self.thin_count_for_project(project_id)?;
             projects.push(ProjectSummary {
+                cover: None,
                 canonical_key,
                 kind: parse_project_kind(&kind),
                 display_name,
@@ -1935,12 +1947,13 @@ impl ProjectCatalog {
              GROUP BY sa.topic_key
              ORDER BY latest DESC, sa.topic_key ASC",
         )?;
-        let raw_topics = topics_statement
+        let mut raw_topics = topics_statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(topics_statement);
+        raw_topics.extend(self.topics_with_only_a_cover()?);
 
         let mut topics = Vec::with_capacity(raw_topics.len());
         for (topic_key, topic_label) in raw_topics {
@@ -1951,6 +1964,7 @@ impl ProjectCatalog {
                 "semantic".to_string(),
             );
             let (sessions, next_cursor) = self.topic_sessions_page(&topic_key, None, page_size)?;
+            let cover = self.saved_topic_cover(&classification.canonical_key)?;
             topics.push(ProjectSummary {
                 canonical_key: classification.canonical_key,
                 kind: ProjectKind::Semantic,
@@ -1960,6 +1974,7 @@ impl ProjectCatalog {
                 automation: Vec::new(),
                 thin_count: 0,
                 next_cursor,
+                cover,
             });
         }
 
@@ -2817,7 +2832,7 @@ mod tests {
         CandidateField, RuntimeMapping, SessionAliasCandidate, SessionIdentity, SourcePriority,
     };
 
-    fn temp_dir(label: &str) -> std::path::PathBuf {
+    pub(super) fn temp_dir(label: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
             "herduck-catalog-{label}-{}-{}",
             std::process::id(),
@@ -2830,7 +2845,7 @@ mod tests {
         path
     }
 
-    fn candidate(backend: &str, id: &str, last: i64) -> SessionCandidate {
+    pub(super) fn candidate(backend: &str, id: &str, last: i64) -> SessionCandidate {
         let identity = SessionIdentity::id(backend, id).expect("identity");
         SessionCandidate {
             identity,

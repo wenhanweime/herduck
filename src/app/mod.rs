@@ -617,6 +617,7 @@ impl App {
                 project_search_rect: Rect::default(),
                 project_tree_rect: Rect::default(),
                 project_row_hit_areas: Vec::new(),
+                topic_detail: state::TopicDetailGeometry::default(),
             },
             drag: None,
             workspace_press: None,
@@ -1718,12 +1719,32 @@ impl App {
 
 impl App {
     fn replace_projects_snapshot(&mut self, latest: crate::projects::ProjectsSnapshot) {
+        let topic_selection = crate::ui::topic_detail_rows(&self.state)
+            .get(self.state.projects.topic_detail_selected)
+            .and_then(crate::ui::ProjectTreeRow::identity);
         let selected_identity = crate::ui::project_tree_rows(&self.state)
             .get(self.state.projects.selected_row)
             .and_then(crate::ui::ProjectTreeRow::identity);
         let previous_row = self.state.projects.selected_row;
 
         self.state.projects.snapshot = latest;
+
+        let detail_rows = crate::ui::topic_detail_rows(&self.state);
+        let detail_selected = topic_selection
+            .and_then(|identity| {
+                detail_rows
+                    .iter()
+                    .position(|row| row.identity().as_ref() == Some(&identity))
+            })
+            .unwrap_or(self.state.projects.topic_detail_selected)
+            .min(detail_rows.len().saturating_sub(1));
+        self.state.projects.topic_detail_selected = detail_selected;
+        let visible = usize::from(self.state.view.topic_detail.sessions.height.div_ceil(2)).max(1);
+        self.state.projects.topic_detail_scroll = self
+            .state
+            .projects
+            .topic_detail_scroll
+            .clamp(detail_selected.saturating_sub(visible - 1), detail_selected);
 
         self.state.projects.selected_row = selected_identity
             .and_then(|identity| {
@@ -1979,6 +2000,8 @@ impl App {
                 input::handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event);
             }
             Mode::ProjectHistory => self.handle_project_history_key(key_event),
+            Mode::TopicDetail => self.handle_topic_detail_key(key_event),
+            Mode::EditTopicCover => self.handle_topic_cover_key(key_event),
             Mode::Terminal => {
                 // Should not be called in terminal mode.
             }
@@ -2067,6 +2090,7 @@ mod tests {
         last_activity_at: i64,
     ) -> crate::projects::ProjectSummary {
         crate::projects::ProjectSummary {
+            cover: None,
             canonical_key: canonical_key.into(),
             kind,
             display_name: canonical_key.into(),
@@ -2264,6 +2288,41 @@ mod tests {
     }
 
     #[test]
+    fn topic_cover_refresh_preserves_visible_session_selection_and_clamps_removed_rows() {
+        let mut app = test_app();
+        let mut topic = catalog_test_group(
+            "topic-cover",
+            crate::projects::ProjectKind::Semantic,
+            "session-new",
+            20,
+        );
+        topic
+            .sessions
+            .push(catalog_test_session("session-selected", 10));
+        app.state.projects.snapshot = catalog_test_snapshot(1, Vec::new(), vec![topic.clone()]);
+        assert!(app.state.open_topic_detail("topic-cover"));
+        app.state.projects.topic_detail_selected = 1;
+        app.state.view.topic_detail.sessions.height = 2;
+
+        topic
+            .sessions
+            .insert(0, catalog_test_session("session-newest", 30));
+        app.replace_projects_snapshot(catalog_test_snapshot(2, Vec::new(), vec![topic.clone()]));
+        assert_eq!(app.state.projects.topic_detail_selected, 2);
+        assert_eq!(app.state.projects.topic_detail_scroll, 2);
+        assert!(matches!(
+            crate::ui::topic_detail_rows(&app.state).get(app.state.projects.topic_detail_selected),
+            Some(crate::ui::ProjectTreeRow::Session(session))
+                if session.stable_key == "session-selected"
+        ));
+
+        topic.sessions.truncate(1);
+        app.replace_projects_snapshot(catalog_test_snapshot(3, Vec::new(), vec![topic]));
+        assert_eq!(app.state.projects.topic_detail_selected, 0);
+        assert_eq!(app.state.projects.topic_detail_scroll, 0);
+    }
+
+    #[test]
     fn catalog_refresh_keeps_selected_topic_when_a_newer_topic_is_inserted_above_it() {
         let mut app = test_app();
         app.state.sidebar_view = state::SidebarView::Clusters;
@@ -2325,6 +2384,7 @@ mod tests {
         let mut app = test_app();
         app.state.sidebar_view = state::SidebarView::Sessions;
         let initial_project = crate::projects::ProjectSummary {
+            cover: None,
             canonical_key: "project".into(),
             kind: crate::projects::ProjectKind::Cwd,
             display_name: "project".into(),

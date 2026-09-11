@@ -156,6 +156,43 @@ fn request_round_trips_for_server_reload_agent_manifests() {
 }
 
 #[test]
+fn topic_cover_api_contract_accepts_partial_patches_and_old_snapshots() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "cover-update", "method": "topic.cover.update",
+        "params": {"topic_key": "topic-1", "patch": {"goal": "本周目标", "expected_updated_at": 0}}
+    }))
+    .unwrap();
+    let Method::TopicCoverUpdate(params) = &request.method else {
+        panic!("cover update")
+    };
+    assert_eq!(params.patch.goal.as_deref(), Some("本周目标"));
+    assert_eq!(params.patch.next_steps, None);
+    assert_eq!(params.patch.blocked_note, None);
+    assert_eq!(
+        serde_json::from_value::<Request>(serde_json::to_value(&request).unwrap()).unwrap(),
+        request
+    );
+    assert!(crate::api::request_changes_ui(&request));
+    let get: Request = serde_json::from_value(serde_json::json!({
+        "id": "cover-get", "method": "topic.cover.get", "params": {"topic_key": "topic-1"}
+    }))
+    .unwrap();
+    assert!(!crate::api::request_changes_ui(&get));
+    let old: crate::projects::ProjectSummary = serde_json::from_value(serde_json::json!({
+        "canonical_key": "topic-1", "kind": "semantic", "display_name": "First users",
+        "canonical_path": "topic-hash", "sessions": [], "next_cursor": null
+    }))
+    .unwrap();
+    assert_eq!(old.cover, None);
+    assert!(serde_json::from_value::<Request>(serde_json::json!({
+        "id": "invalid", "method": "topic.cover.update", "params": {
+            "topic_key": "topic-1", "patch": {"goall": "typo"}
+        }
+    }))
+    .is_err());
+}
+
+#[test]
 fn project_api_contract_round_trips_with_dot_names() {
     let snapshot_request = Request {
         id: "project_snapshot".into(),

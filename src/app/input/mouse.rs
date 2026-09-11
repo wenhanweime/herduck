@@ -507,6 +507,7 @@ impl AppState {
                                 project_key,
                                 collapsed,
                             } => {
+                                self.open_topic_detail(&project_key);
                                 if collapsed {
                                     self.collapsed_project_keys.remove(&project_key);
                                     self.expanded_project_keys.insert(project_key);
@@ -3992,6 +3993,7 @@ mod tests {
             projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
             revision: 1,
             projects: vec![crate::projects::ProjectSummary {
+                cover: None,
                 canonical_key: "p1".into(),
                 kind: crate::projects::ProjectKind::Cwd,
                 display_name: "ait".into(),
@@ -4053,6 +4055,7 @@ mod tests {
             projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
             revision: 1,
             projects: vec![crate::projects::ProjectSummary {
+                cover: None,
                 canonical_key: "p1".into(),
                 kind: crate::projects::ProjectKind::Cwd,
                 display_name: "ait".into(),

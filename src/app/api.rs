@@ -1031,6 +1031,30 @@ impl App {
                 );
             }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
+            Method::TopicCoverGet(params) => {
+                return match self.project_service.topic_cover(params.topic_key.clone()) {
+                    Ok(cover) => responses::encode_success(
+                        request.id,
+                        ResponseResult::TopicCover {
+                            topic_key: params.topic_key,
+                            cover,
+                        },
+                    ),
+                    Err(error) => responses::encode_error(request.id, error.code, &error.message),
+                };
+            }
+            Method::TopicCoverUpdate(params) => {
+                return match self
+                    .project_service
+                    .update_topic_cover(params.topic_key, params.patch)
+                {
+                    Ok(revision) => responses::encode_success(
+                        request.id,
+                        ResponseResult::TopicCoverUpdated { revision },
+                    ),
+                    Err(error) => responses::encode_error(request.id, error.code, &error.message),
+                };
+            }
             Method::ProjectSnapshot(params) => {
                 if params.projects_schema_version
                     != crate::projects::domain::PROJECTS_SCHEMA_VERSION

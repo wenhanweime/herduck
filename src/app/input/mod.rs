@@ -45,6 +45,7 @@ mod selection;
 mod settings;
 mod sidebar;
 mod terminal;
+mod topic_cover;
 
 pub(crate) use self::{
     modal::{
@@ -115,6 +116,8 @@ impl App {
                     handle_navigator_key(&mut self.state, &self.terminal_runtimes, key_event)
                 }
                 Mode::ProjectHistory => self.handle_project_history_key(key_event),
+                Mode::TopicDetail => self.handle_topic_detail_key(key_event),
+                Mode::EditTopicCover => self.handle_topic_cover_key(key_event),
                 Mode::Terminal => unreachable!(),
             },
         }
@@ -147,6 +150,12 @@ impl App {
     pub(crate) fn paste_into_active_text_input(&mut self, text: &str) -> bool {
         match self.state.mode {
             Mode::Settings => false,
+            Mode::EditTopicCover => {
+                if let Some(editor) = self.state.projects.cover_editor.as_mut() {
+                    editor.insert(text);
+                }
+                true
+            }
             Mode::RenameWorkspace | Mode::RenameTab | Mode::RenamePane | Mode::RenameSession => {
                 insert_rename_input_text(&mut self.state, text);
                 true
@@ -480,6 +489,7 @@ impl App {
                 project_key,
                 collapsed,
             } => {
+                self.state.open_topic_detail(&project_key);
                 if collapsed {
                     self.state.collapsed_project_keys.remove(&project_key);
                     self.state.expanded_project_keys.insert(project_key);
@@ -958,6 +968,9 @@ impl App {
             self.handle_popup_mouse(mouse);
             return;
         }
+        if self.handle_topic_cover_mouse(mouse) {
+            return;
+        }
         if self.handle_overlay_mouse(mouse) {
             return;
         }
@@ -1312,6 +1325,7 @@ pub(crate) fn modal_paste_target_active(state: &AppState) -> bool {
         | Mode::RenameTab
         | Mode::RenamePane
         | Mode::RenameSession
+        | Mode::EditTopicCover
         | Mode::NewLinkedWorktree => true,
         Mode::OpenExistingWorktree => state
             .worktree_open
@@ -1543,6 +1557,7 @@ mod tests {
             projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
             revision: 7,
             projects: vec![crate::projects::ProjectSummary {
+                cover: None,
                 canonical_key: "project-live".into(),
                 kind: crate::projects::ProjectKind::Cwd,
                 display_name: "project-live".into(),

@@ -28,6 +28,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::ProjectSessionAssign(_)
             | Method::ProjectSessionUnlock(_)
             | Method::ProjectSessionRename(_)
+            | Method::TopicCoverUpdate(_)
             | Method::NotificationShow(_)
             | Method::WorkspaceCreate(_)
             | Method::WorkspaceFocus(_)

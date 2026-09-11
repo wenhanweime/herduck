@@ -3886,6 +3886,75 @@
           ],
           "type": "string"
         },
+        "TopicCoverGetParams": {
+          "additionalProperties": false,
+          "properties": {
+            "topic_key": {
+              "description": "canonical_key of an entry in project.snapshot.topics.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic_key"
+          ],
+          "type": "object"
+        },
+        "TopicCoverPatch": {
+          "additionalProperties": false,
+          "properties": {
+            "blocked_note": {
+              "maxLength": 2000,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "expected_updated_at": {
+              "description": "Optional optimistic concurrency guard, including zero for an unsaved cover.",
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "goal": {
+              "description": "Omitted fields remain unchanged. An empty string clears a text field.",
+              "maxLength": 2000,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "next_steps": {
+              "description": "Replaces the list; an empty list clears it. At most three entries.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 3,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "TopicCoverUpdateParams": {
+          "additionalProperties": false,
+          "properties": {
+            "patch": {
+              "$ref": "#/schemas/request/$defs/TopicCoverPatch"
+            },
+            "topic_key": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic_key",
+            "patch"
+          ],
+          "type": "object"
+        },
         "WorkspaceCreateParams": {
           "properties": {
             "cwd": {
@@ -4316,6 +4385,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/ProjectSnapshotParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "topic.cover.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TopicCoverGetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "topic.cover.update",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TopicCoverUpdateParams"
             }
           },
           "required": [
@@ -8468,6 +8569,17 @@
             "canonical_path": {
               "type": "string"
             },
+            "cover": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/TopicCover"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Authored metadata on Topics only. Older snapshots have no cover."
+            },
             "display_name": {
               "type": "string"
             },
@@ -8635,6 +8747,44 @@
               "required": [
                 "type",
                 "snapshot"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "cover": {
+                  "$ref": "#/schemas/success_response/$defs/TopicCover"
+                },
+                "topic_key": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "topic_cover",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "topic_key",
+                "cover"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "topic_cover_updated",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "revision"
               ],
               "type": "object"
             },
@@ -9856,6 +10006,43 @@
             "pane_count",
             "agent_status"
           ],
+          "type": "object"
+        },
+        "TopicCover": {
+          "properties": {
+            "blocked_note": {
+              "default": "",
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "blocked_session_ref": {
+              "default": null,
+              "description": "Reserved for a future validated history/runtime link; currently always absent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "goal": {
+              "default": "",
+              "maxLength": 2000,
+              "type": "string"
+            },
+            "next_steps": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 3,
+              "type": "array"
+            },
+            "updated_at": {
+              "default": 0,
+              "description": "Unix milliseconds; zero means this Topic has no saved cover yet.",
+              "format": "int64",
+              "type": "integer"
+            }
+          },
           "type": "object"
         },
         "WorkspaceInfo": {

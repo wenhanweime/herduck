@@ -1,5 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+pub use crate::projects::cover::{TopicCover, TopicCoverPatch};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TopicCoverGetParams {
+    /// canonical_key of an entry in project.snapshot.topics.
+    pub topic_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TopicCoverUpdateParams {
+    pub topic_key: String,
+    pub patch: TopicCoverPatch,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectSessionRenameParams {
     pub session_key: String,

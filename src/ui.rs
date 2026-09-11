@@ -23,7 +23,13 @@ mod sidebar;
 mod status;
 mod tabs;
 mod text;
+mod topic_cover;
 mod widgets;
+
+use self::topic_cover::{render_topic_cover_editor, render_topic_detail};
+pub(crate) use self::topic_cover::{
+    topic_cover_editor_geometry, topic_detail_geometry, topic_detail_rows,
+};
 
 use self::dialogs::{
     render_confirm_close_overlay, render_new_linked_worktree_overlay,
@@ -318,6 +324,12 @@ fn compute_view_internal(
         .unwrap_or_default();
 
     let project_geometry = project_sidebar_geometry(app, sidebar_area);
+    let topic_detail = topic_detail_geometry(app, terminal_area);
+    app.projects.topic_detail_scroll = topic_detail.normalized_scroll;
+    app.projects.topic_detail_selected = app
+        .projects
+        .topic_detail_selected
+        .min(topic_detail_rows(app).len().saturating_sub(1));
     if app.sidebar_view.is_project_browser() {
         app.projects.scroll = project_geometry.normalized_scroll;
         let row_count = projects::project_tree_rows(app).len();
@@ -342,6 +354,7 @@ fn compute_view_internal(
         project_filter_tabs: project_geometry.filter_tabs,
         project_search_rect: project_geometry.search,
         project_tree_rect: project_geometry.tree,
+        topic_detail,
         project_row_hit_areas: if app.sidebar_view.is_project_browser() {
             project_geometry.row_hits
         } else {
@@ -423,6 +436,7 @@ fn compute_mobile_view(
         project_filter_tabs: [Rect::default(); 2],
         project_search_rect: Rect::default(),
         project_tree_rect: Rect::default(),
+        topic_detail: topic_detail_geometry(app, terminal_area),
         project_row_hit_areas: Vec::new(),
     };
     app.sync_copy_mode_search_geometry();
@@ -496,6 +510,11 @@ pub fn render_with_runtime_registry(
         Mode::KeybindHelp => render_keybind_help_overlay(app, frame),
         Mode::Navigator => render_navigator_overlay(app, terminal_runtimes, frame),
         Mode::ProjectHistory => render_project_history(app, frame, terminal_area),
+        Mode::TopicDetail => render_topic_detail(app, frame, terminal_area),
+        Mode::EditTopicCover => {
+            render_topic_detail(app, frame, terminal_area);
+            render_topic_cover_editor(app, frame, frame.area());
+        }
         Mode::Terminal => {}
     }
 }

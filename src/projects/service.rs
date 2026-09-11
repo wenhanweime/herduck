@@ -11,6 +11,7 @@ use super::domain::{
 };
 use super::{
     ProjectCatalog, ProjectSessionsPage, ProjectsSnapshot, SessionCandidate, SessionCursor,
+    TopicCover, TopicCoverPatch,
 };
 
 const PROJECT_PAGE_SIZE: usize = 50;
@@ -35,6 +36,8 @@ impl ProjectServiceError {
             CatalogError::AliasConflict => "alias_conflict",
             CatalogError::CrossBackendAlias => "cross_backend_alias",
             CatalogError::InvalidTopicMerge => "invalid_topic_merge",
+            CatalogError::InvalidTopicCover(_) => "invalid_topic_cover",
+            CatalogError::TopicCoverConflict => "topic_cover_conflict",
             CatalogError::Corrupt => "catalog_corrupt",
             CatalogError::UnsupportedSchema(_) => "unsupported_schema",
             CatalogError::Sqlite(_) | CatalogError::Io(_) => "catalog_error",
@@ -61,6 +64,15 @@ impl ProjectServiceError {
 }
 
 pub(crate) enum ProjectCommand {
+    TopicCoverGet {
+        topic_key: String,
+        reply: mpsc::Sender<Result<TopicCover, ProjectServiceError>>,
+    },
+    TopicCoverUpdate {
+        topic_key: String,
+        patch: TopicCoverPatch,
+        reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
+    },
     ConfigureSummaries {
         language: crate::config::TitleLanguage,
         reply: mpsc::Sender<Result<u64, ProjectServiceError>>,
@@ -171,6 +183,12 @@ pub(crate) struct ProjectService {
 }
 
 impl ProjectService {
+    #[cfg(test)]
+    pub(crate) fn with_test_topic(event_hub: crate::api::EventHub) -> (Self, String) {
+        let (catalog, key) = super::cover::test_catalog();
+        (Self::from_catalog(catalog, event_hub), key)
+    }
+
     #[cfg(test)]
     pub(crate) fn open(path: &Path, event_hub: crate::api::EventHub) -> Self {
         Self::open_with_config(path, event_hub, &crate::config::ProjectsConfig::default())
@@ -338,6 +356,32 @@ impl ProjectService {
             .read()
             .map(|snapshot| snapshot.clone())
             .unwrap_or_else(|_| ProjectsSnapshot::degraded("catalog_snapshot_lock"))
+    }
+
+    pub(crate) fn topic_cover(&self, topic_key: String) -> Result<TopicCover, ProjectServiceError> {
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(ProjectServiceError::unavailable)?;
+        let (reply, receiver) = mpsc::channel();
+        sender
+            .send(ProjectCommand::TopicCoverGet { topic_key, reply })
+            .map_err(|_| ProjectServiceError::unavailable())?;
+        receiver
+            .recv()
+            .map_err(|_| ProjectServiceError::unavailable())?
+    }
+
+    pub(crate) fn update_topic_cover(
+        &self,
+        topic_key: String,
+        patch: TopicCoverPatch,
+    ) -> Result<u64, ProjectServiceError> {
+        self.request(|reply| ProjectCommand::TopicCoverUpdate {
+            topic_key,
+            patch,
+            reply,
+        })
     }
 
     pub(crate) fn upsert_candidate(
@@ -818,6 +862,21 @@ fn process_command(
         _ => {}
     }
     match command {
+        ProjectCommand::TopicCoverGet { topic_key, reply } => {
+            let result = catalog
+                .topic_cover(&topic_key)
+                .map_err(ProjectServiceError::catalog);
+            let _ = reply.send(result);
+        }
+        ProjectCommand::TopicCoverUpdate {
+            topic_key,
+            patch,
+            reply,
+        } => {
+            finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
+                catalog.update_topic_cover(&topic_key, &patch, super::runtime::unix_time_ms())
+            });
+        }
         ProjectCommand::ConfigureSummaries { language, reply } => {
             finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
                 catalog.reset_running_titles()?;

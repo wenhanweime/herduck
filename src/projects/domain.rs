@@ -559,6 +559,9 @@ pub struct ProjectSummary {
     #[serde(default)]
     pub thin_count: u64,
     pub next_cursor: Option<SessionCursor>,
+    /// Authored metadata on Topics only. Older snapshots have no cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<super::cover::TopicCover>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
