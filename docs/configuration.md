@@ -69,6 +69,26 @@ resuming a history entry uses its original Agent. Detecting an installed Agent d
 the default. The value is a single executable, without shell arguments. Its login and model
 configuration remain with that Agent. Summary and naming models are configured separately below.
 
+## Inactive Agents
+
+Herduck marks an idle Agent **inactive** after a period without terminal input, output, or state
+changes. The default is one hour:
+
+```toml
+[session]
+agent_idle_timeout_secs = 3600 # 0 disables inactivity marking
+```
+
+The Agent remains visible with a muted status. Working Agents and Agents blocked on a response or
+approval are excluded; new activity clears the inactive marker. This setting does not terminate the process,
+close the terminal, or discard its conversation. Automatic idle-process reclamation is not
+implemented in the current alpha.
+
+Saved history can be browsed without launching an Agent. Continuing a supported conversation
+reuses a matching running session or starts its original Agent. If you manually end an Agent,
+the history its CLI has saved remains available to the catalog. Detaching the Herduck client
+leaves the server and its terminals running.
+
 ## Summary sources and fallback order
 
 **Settings → Summaries** displays generation mode and numbered sources, with their model order,

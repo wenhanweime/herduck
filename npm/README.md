@@ -1,23 +1,26 @@
 # Herduck
 
-**Your AI coding agents. One terminal.**
+**An Agent window manager with a project dashboard.**
 
-Run agents side by side, find past conversations, and organize work by project and topic.
+Built on [Herdr](https://github.com/ogulcancelik/herdr), Herduck brings familiar tmux window
+management together with an Agent activity dashboard and a conversation library across your device.
+Arrange terminals, follow Agent progress, and browse the same work through Topics, Projects, and
+Sessions. People use the UI; Agents can inspect and manage the workspace through the CLI and JSON API.
 
 This package launches the native Herduck application on macOS and Linux (x64 and arm64).
 Node.js 20+ is required; Rust and Zig are not. Your agent CLIs are installed separately.
 
-Install the published GitHub package (npm registry publication is pending):
+Install the current alpha from npm:
 
 ```sh
-npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
+npm install -g herduck@alpha
 herduck
 ```
 
 Or run without a global npm install:
 
 ```sh
-npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
+npx --yes herduck@alpha
 ```
 
 On first run, the launcher downloads the matching binary from that exact GitHub release and
@@ -31,8 +34,9 @@ stop your Herduck servers before manually deleting old runtime versions. Your co
 conversations are not removed. On Linux, prebuilt binaries require glibc 2.39+; Alpine/musl is not
 supported by these downloads.
 
-This is an alpha preview. The GitHub URL pins version `0.1.0-alpha.2` and does not require
-the package to be published to the npm registry. Use a newer release's URL to upgrade.
+This is an alpha preview. Use `herduck@0.1.0-alpha.2` to pin this version; repeat
+`npm install -g herduck@alpha` to upgrade to the current alpha. The same version's archive is also
+available from [GitHub Releases](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.2).
 
 Herduck is an independent project derived from Herdr v0.7.4 and distributed under
 AGPL-3.0-or-later. The commercial-license offer in the preserved LICENSE applies to upstream
