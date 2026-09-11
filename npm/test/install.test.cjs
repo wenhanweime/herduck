@@ -11,8 +11,8 @@ const { ensureBinary, platformEntry } = require('../lib/install.cjs');
 
 const bytes = Buffer.from('#!/bin/sh\nprintf "%s\\n" "$@"\n');
 function manifest(content = bytes) {
-  return { version: '0.1.0-alpha.2', platforms: { [`${process.platform}-${process.arch}`]: {
-    url: 'https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-test',
+  return { version: '0.1.0-alpha.3', platforms: { [`${process.platform}-${process.arch}`]: {
+    url: 'https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.3/herduck-test',
     sha256: createHash('sha256').update(content).digest('hex'),
   } } };
 }

@@ -3,6 +3,10 @@
 Herduck is an alpha preview for macOS and Linux. Install your coding-agent CLIs and complete their
 login separately; Herduck does not supply an Agent subscription or credentials.
 
+This source branch targets **0.1.0-alpha.3**. The version-pinned npm packages, release URLs, and
+Git tag below become available when that release is published. Until then, `herduck@alpha` installs
+the latest published alpha; use this checkout's source build to try [Topic covers](topic-covers.md).
+
 ## npm and npx
 
 Node.js 20 or later is required for the launcher. Rust and Zig are not required for prebuilt binaries.
@@ -20,7 +24,7 @@ npx --yes herduck@alpha
 ```
 
 The `alpha` tag follows alpha releases. To pin this release, use
-`npm install -g herduck@0.1.0-alpha.2` or `npx --yes herduck@0.1.0-alpha.2`.
+`npm install -g herduck@0.1.0-alpha.3` or `npx --yes herduck@0.1.0-alpha.3`.
 
 The first launch downloads the matching binary from the exact GitHub release and checks its SHA-256
 against the package's embedded manifest. Subsequent launches reuse the verified binary and can work offline. Agent
@@ -32,17 +36,17 @@ your user. Do not run Herduck with `sudo`.
 
 ### Install from GitHub
 
-The identical npm archive is also attached to the GitHub release. These URLs pin version `0.1.0-alpha.2`:
+The identical npm archive is also attached to the GitHub release. These URLs pin version `0.1.0-alpha.3`:
 
 ```sh
-npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
+npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.3/herduck-0.1.0-alpha.3.tgz
 herduck
 ```
 
 Or use npx:
 
 ```sh
-npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
+npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.3/herduck-0.1.0-alpha.3.tgz herduck
 ```
 
 ## Supported prebuilt platforms
@@ -61,7 +65,7 @@ have not been validated. macOS binaries use ad hoc signing, not Apple notarizati
 ## Direct binaries
 
 Download the asset for your CPU and `SHA256SUMS` from the
-[release](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.2). In the download directory,
+[release](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.3). In the download directory,
 verify that asset before installation. For example, on Apple silicon:
 
 ```sh
@@ -125,7 +129,7 @@ and `xz`. An unversioned package-manager install may select an incompatible newe
 ### Compile and install
 
 ```sh
-git clone --branch v0.1.0-alpha.2 https://github.com/wenhanweime/herduck.git
+git clone --branch v0.1.0-alpha.3 https://github.com/wenhanweime/herduck.git
 cd herduck
 cargo install --path . --locked
 ```
