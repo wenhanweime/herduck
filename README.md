@@ -2,72 +2,86 @@
   <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. A duck in a white hood, working at a laptop." width="880">
 </p>
 
-<h1 align="center">Your AI coding agents. One terminal.</h1>
+<h1 align="center">Coding. Marketing. Office work. One AI workspace.</h1>
 
 <p align="center">
-  Run agents side by side. Find past conversations. Pick up where you left off.
+  Build the product. Plan the launch. Pick up any conversation where you left off.
 </p>
 
 <p align="center">
   <a href="#install">Install</a> ·
-  <a href="#see-all-your-work">See it in action</a> ·
+  <a href="#one-launch-many-conversations">See it in action</a> ·
   <a href="docs/configuration.md">Configuration</a> ·
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-Herduck brings your coding-agent terminals and conversation history into one workspace.
-Keep using the CLIs you know, including Claude Code, Codex, OpenCode, and Pi.
-Herduck helps you see what is running, find the right conversation, and continue it.
+Use Codex to fix checkout, Claude Code to draft a launch story, and an Agent to turn
+meeting notes into next actions. Herduck brings those terminals and conversations together.
+Keep using your own Claude Code, Codex, OpenCode, and Pi CLIs.
 
 ## Install
 
 With **Node.js 20+** on macOS or Linux:
 
 ```sh
-npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
+npm install -g herduck@alpha
 herduck
 ```
 
 Or try it without a global install:
 
 ```sh
-npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
+npx --yes herduck@alpha
 ```
 
-Install this release directly from GitHub; the npm registry package is not published yet.
 This is an **alpha release**. The launcher downloads a verified native binary on first use;
 Rust and Zig are not needed. Install and sign in to your Agent CLIs separately.
 
 Prebuilt downloads support Apple silicon and Intel Macs, and x64/arm64 Linux with glibc 2.39+
 (such as Ubuntu 24.04). Windows and Alpine/musl are not supported by these downloads.
-See [installation](docs/installation.md) for GitHub-only npm installation, direct binaries,
+See [installation](docs/installation.md) for version pinning, GitHub archives, direct binaries,
 source builds, upgrades, and troubleshooting.
 
-## See all your work
+## One launch, many conversations
 
-Keep an Agent building while another reviews. Split panes, resize them with the mouse,
-and switch between projects without losing your place. Closing the client leaves the
-server and its terminals running; open `herduck` to attach again.
+Your first-100-users plan touches product, marketing, and operations. **Topics** brings the
+related conversations together across folders and Agents: the landing page, Product Hunt
+story, launch checklist, and beta invitations are all part of **AI product launch**.
 
-![Two demonstration Agent terminals side by side in Herduck](assets/screenshots/agents.png)
+Other example Topics include **Vibe coding to a paid MVP**, **One idea, five channels**,
+and **Meetings to next actions**. Open a conversation to see the context and continue it.
+Enable model-based organization to generate Topics; existing groups remain available when generation is off.
 
-## Find the conversation you meant
+![Native Herduck Topics view: an AI product launch connects coding, marketing, and office conversations](assets/screenshots/topics.png)
 
-**Sessions** brings supported local Agent histories together, with the most recent work first.
-Preview a conversation, then resume it with its original Agent when available. Already running?
-Herduck focuses that terminal.
+## Ship the MVP and prepare the launch
 
-![Herduck Sessions showing recent demonstration conversations](assets/screenshots/sessions.png)
+In **Agents**, review the paid MVP in Codex, keep its local tests visible, and open launch-copy
+context in Claude Code. Switch focus and resize panes with the mouse.
+Closing the client leaves the server and terminals running; open `herduck` to attach again.
 
-## Come back to the right context
+![Native Herduck Agents view with billing context in Codex and launch materials in Claude Code](assets/screenshots/agents.png)
 
-**Projects** groups sessions by working directory. **Topics** groups related work across projects
-when you enable model-based organization. Your names and existing groups remain available when
-generation is off.
+## Keep each workstream in its own project
 
-![Herduck Projects grouping demonstration conversations by folder](assets/screenshots/projects.png)
+**Projects** groups conversations by working directory. Return to LaunchDesk for billing and
+onboarding, Growth Studio for marketing, or Founder Office for proposals and weekly priorities.
+Expand a project and preview the conversation before resuming it.
 
-*These are captures of the running terminal UI with demonstration conversations and Agent output.*
+![Native Herduck Projects view with separate product, marketing, content, and office projects](assets/screenshots/projects.png)
+
+## Find the meeting that had the answer
+
+**Sessions** puts recent conversations from supported local Agents in one list. Find the meeting
+follow-up, check its owners and deadlines, then continue with the original Agent when available.
+If that session is already running, Herduck focuses its terminal.
+
+![Native Herduck Sessions view showing meeting decisions, owners, and next actions](assets/screenshots/sessions.png)
+
+*Native Ghostty window captures of Herduck v0.1.0-alpha.2. LaunchDesk is a demonstration project;
+history and Topic labels are prepared examples. Agent panes show native CLIs, a prepared conversation,
+and local test output.
+“First 100 users” is a launch target. [Capture notes](assets/screenshots/README.md).*
 
 ## Start with your own tools
 

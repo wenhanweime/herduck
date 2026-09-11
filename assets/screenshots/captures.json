@@ -1,0 +1,79 @@
+{
+  "application": "Herduck",
+  "version": "0.1.0-alpha.2",
+  "native_binary_sha256": "c8058970ffce427e69dbddb167a4bf716377b6594c9cdd58ceba087b4f5fac93",
+  "terminal": "Ghostty",
+  "capture": "macOS screencapture of the owned terminal window",
+  "post_processing": "none",
+  "data": "prepared example projects, histories, and topics",
+  "agent_view": {
+    "codex": "native CLI with a drafted review prompt",
+    "claude_code": "native CLI with a prepared launch conversation",
+    "billing_tests": "actual local npm test output; 5 passed, 0 failed"
+  },
+  "images": [
+    {
+      "file": "topics.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "c42ecbec2f9a074f5a517af8362c606f4cd660aee011d965f49735b00e690f77",
+      "captured_at": "2026-09-11T04:36:16.814943+00:00"
+    },
+    {
+      "file": "topics-zh.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "7144600d50e76af993e6623bab607e98eb28f90cd48940742d7bc62df69305cb",
+      "captured_at": "2026-09-11T04:12:16.247389+00:00"
+    },
+    {
+      "file": "projects.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "b77ab57e5ad931129b1a99a45383ff5e4f0b1021db5aa3be84c6767929bd4c1b",
+      "captured_at": "2026-09-11T04:36:18.085675+00:00"
+    },
+    {
+      "file": "projects-zh.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "f464bc85548b0da4e8d0cadfed7058a67e407c7cb9908ead843bcdad3d047edc",
+      "captured_at": "2026-09-11T04:18:34.175009+00:00"
+    },
+    {
+      "file": "sessions.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "56abb7de8ba9210be82f47d895ad510322f9cb61ec3cdd7a25850fc20f0713a9",
+      "captured_at": "2026-09-11T04:36:18.973973+00:00"
+    },
+    {
+      "file": "sessions-zh.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "ef42daf76df632ad90bd0a8c1da7dd7d2a2d68cc418482c4cbc1f90d045ffcd5",
+      "captured_at": "2026-09-11T04:32:07.234384+00:00"
+    },
+    {
+      "file": "agents.png",
+      "pixels": [
+        1272,
+        756
+      ],
+      "sha256": "cbc28d1b411254115e29c70946e5379e5d9053e2dd31eae8ed6d34a34fd6b930",
+      "captured_at": "2026-09-11T05:23:00.857620+00:00"
+    }
+  ]
+}
