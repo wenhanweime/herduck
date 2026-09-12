@@ -3262,6 +3262,51 @@
             }
           ]
         },
+        "ProjectFollowupGetParams": {
+          "additionalProperties": false,
+          "properties": {
+            "followup_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "followup_id"
+          ],
+          "type": "object"
+        },
+        "ProjectFollowupStartParams": {
+          "additionalProperties": false,
+          "properties": {
+            "project_key": {
+              "type": "string"
+            },
+            "suggestion_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "project_key",
+            "suggestion_id"
+          ],
+          "type": "object"
+        },
+        "ProjectOverviewGetParams": {
+          "additionalProperties": false,
+          "properties": {
+            "project_key": {
+              "description": "canonical_key of a Topic or directory Project in project.snapshot.",
+              "type": "string"
+            },
+            "refresh": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "project_key"
+          ],
+          "type": "object"
+        },
         "ProjectSessionAssignParams": {
           "properties": {
             "locked": {
@@ -4385,6 +4430,70 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/ProjectSnapshotParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.overview.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ProjectOverviewGetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.followup.start",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ProjectFollowupStartParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.followup.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ProjectFollowupGetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "project.followup.cancel",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ProjectFollowupGetParams"
             }
           },
           "required": [
@@ -5916,6 +6025,13 @@
     },
     "success_response": {
       "$defs": {
+        "ActivityOrigin": {
+          "enum": [
+            "user_request",
+            "agent_response"
+          ],
+          "type": "string"
+        },
         "AdapterScanStatus": {
           "properties": {
             "adapter": {
@@ -5934,6 +6050,58 @@
           "required": [
             "adapter",
             "state"
+          ],
+          "type": "object"
+        },
+        "AdvanceSuggestion": {
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "followup": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ProjectFollowup"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "description": "Identifies this exact suggestion and its evidence, so a stale click cannot run a new one.",
+              "type": "string"
+            },
+            "prompt": {
+              "description": "A user must explicitly choose Continue before this instruction is sent to the Agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "type": "string"
+            },
+            "session_key": {
+              "description": "Stable Catalog identity. None means an authored, unlinked plan item.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/SuggestionSource"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "description",
+            "reason",
+            "source"
           ],
           "type": "object"
         },
@@ -6873,6 +7041,14 @@
             "pane_agent_status_changed",
             "layout_updated",
             "project_snapshot_updated"
+          ],
+          "type": "string"
+        },
+        "FollowupState": {
+          "enum": [
+            "queued",
+            "sent",
+            "cancelled"
           ],
           "type": "string"
         },
@@ -8496,6 +8672,89 @@
             }
           ]
         },
+        "ProgressCounts": {
+          "properties": {
+            "history": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "needs_input": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "open": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "paused": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ready": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "working": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "working",
+            "needs_input",
+            "ready",
+            "paused",
+            "open",
+            "history"
+          ],
+          "type": "object"
+        },
+        "ProjectFollowup": {
+          "properties": {
+            "created_at": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "id": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "project_key": {
+              "type": "string"
+            },
+            "session_key": {
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/schemas/success_response/$defs/FollowupState"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "project_key",
+            "session_key",
+            "pane_id",
+            "title",
+            "state",
+            "message",
+            "created_at"
+          ],
+          "type": "object"
+        },
         "ProjectKind": {
           "oneOf": [
             {
@@ -8512,6 +8771,64 @@
               "type": "string"
             }
           ]
+        },
+        "ProjectOverview": {
+          "properties": {
+            "activity_loading": {
+              "type": "boolean"
+            },
+            "counts": {
+              "$ref": "#/schemas/success_response/$defs/ProgressCounts"
+            },
+            "display_name": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/schemas/success_response/$defs/ProjectKind"
+            },
+            "latest_activity_at": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "more_history_available": {
+              "type": "boolean"
+            },
+            "observed_sessions": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "project_key": {
+              "type": "string"
+            },
+            "suggestions": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AdvanceSuggestion"
+              },
+              "type": "array"
+            },
+            "work": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/ProjectWorkItem"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "project_key",
+            "display_name",
+            "kind",
+            "counts",
+            "observed_sessions",
+            "more_history_available",
+            "activity_loading",
+            "work",
+            "suggestions"
+          ],
+          "type": "object"
         },
         "ProjectSessionsPage": {
           "properties": {
@@ -8616,6 +8933,62 @@
             "display_name",
             "canonical_path",
             "sessions"
+          ],
+          "type": "object"
+        },
+        "ProjectWorkItem": {
+          "properties": {
+            "backend": {
+              "type": "string"
+            },
+            "description": {
+              "description": "Human-readable account of the current request or latest result, not the session title.",
+              "type": "string"
+            },
+            "evidence_read_at": {
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "last_activity_at": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "latest_update": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phase": {
+              "$ref": "#/schemas/success_response/$defs/WorkPhase"
+            },
+            "session_key": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "update_origin": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ActivityOrigin"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "session_key",
+            "title",
+            "backend",
+            "phase",
+            "description",
+            "last_activity_at"
           ],
           "type": "object"
         },
@@ -8747,6 +9120,38 @@
               "required": [
                 "type",
                 "snapshot"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "overview": {
+                  "$ref": "#/schemas/success_response/$defs/ProjectOverview"
+                },
+                "type": {
+                  "const": "project_overview",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "overview"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "followup": {
+                  "$ref": "#/schemas/success_response/$defs/ProjectFollowup"
+                },
+                "type": {
+                  "const": "project_followup",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "followup"
               ],
               "type": "object"
             },
@@ -9969,6 +10374,15 @@
           ],
           "type": "string"
         },
+        "SuggestionSource": {
+          "enum": [
+            "live_state",
+            "saved_plan",
+            "conversation",
+            "recent_activity"
+          ],
+          "type": "string"
+        },
         "TabInfo": {
           "properties": {
             "agent_status": {
@@ -10044,6 +10458,17 @@
             }
           },
           "type": "object"
+        },
+        "WorkPhase": {
+          "enum": [
+            "working",
+            "needs_input",
+            "ready",
+            "paused",
+            "open",
+            "history"
+          ],
+          "type": "string"
         },
         "WorkspaceInfo": {
           "properties": {

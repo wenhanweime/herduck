@@ -14,6 +14,7 @@ mod mobile;
 mod navigator;
 mod onboarding;
 mod panes;
+mod project_overview;
 mod projects;
 mod release_notes;
 mod scrollbar;

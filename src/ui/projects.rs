@@ -174,6 +174,18 @@ fn session_tree_activity(app: &AppState, session: &IndexedSessionSummary) -> Pro
 }
 
 fn project_tree_activity(app: &AppState, project: &ProjectSummary) -> ProjectTreeActivity {
+    if matches!(
+        app.mode,
+        crate::app::Mode::TopicDetail | crate::app::Mode::EditTopicCover
+    ) {
+        return if app.projects.topic_detail_key.as_deref() == Some(&project.canonical_key) {
+            ProjectTreeActivity::Current
+        } else if project.sessions.iter().any(|session| session.live) {
+            ProjectTreeActivity::Live
+        } else {
+            ProjectTreeActivity::Inactive
+        };
+    }
     project
         .sessions
         .iter()
@@ -744,6 +756,12 @@ pub(crate) fn is_open_session(app: &AppState, session: &IndexedSessionSummary) -
 /// "clicking a session shows no highlight" kept reporting. Herdr's Sessions sidebar derives
 /// `is_active` from `app.active` for the same reason: the active row stays marked in every mode.
 fn is_current_session(app: &AppState, session: &IndexedSessionSummary) -> bool {
+    if matches!(
+        app.mode,
+        crate::app::Mode::TopicDetail | crate::app::Mode::EditTopicCover
+    ) {
+        return false;
+    }
     if app
         .projects
         .history_session_key
@@ -909,7 +927,14 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         //
         // The background has to travel with the text: painting it first and then rendering an
         // unstyled `Paragraph` over the same rect resets every cell the glyphs occupy.
-        let row_style = match (highlighted_session, project_activity, cursor) {
+        let selected_project = matches!(row, ProjectTreeRow::Project { project_key, .. }
+            if matches!(app.mode, crate::app::Mode::TopicDetail | crate::app::Mode::EditTopicCover)
+                && app.projects.topic_detail_key.as_deref() == Some(project_key));
+        let row_style = match (
+            highlighted_session || selected_project,
+            project_activity,
+            cursor,
+        ) {
             (true, _, _) => Style::default().bg(app.palette.surface1),
             (false, ProjectTreeActivity::Current | ProjectTreeActivity::Live, _)
             | (false, ProjectTreeActivity::Inactive, true) => {
@@ -945,7 +970,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                     project_name_color(app, *kind)
                 };
                 let mut spans = vec![
-                    Span::styled(format!("{marker} "), Style::default().fg(activity_color)),
+                    Span::styled(format!(" {marker} "), Style::default().fg(activity_color)),
                     Span::styled(
                         display_name.clone(),
                         Style::default().fg(name_color).add_modifier(Modifier::BOLD),
@@ -1049,6 +1074,13 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         if current && rect.width > 0 {
             frame.buffer_mut()[(rect.x, rect.y)]
                 .set_symbol("▎")
+                .set_fg(app.palette.accent);
+        }
+        // A parent keeps its own marker when its detail or one of its children is open.
+        // Use a different glyph from the session marker so hierarchy and cursor stay legible.
+        if project_activity == ProjectTreeActivity::Current && rect.width > 0 {
+            frame.buffer_mut()[(rect.x, rect.y)]
+                .set_symbol("▌")
                 .set_fg(app.palette.accent);
         }
 
@@ -2402,6 +2434,56 @@ mod tests {
             cursor_bg, open_bg,
             "cursor and open rows must be visually distinguishable"
         );
+    }
+
+    #[test]
+    fn opened_project_and_topic_keep_their_parent_highlight_in_detail_and_editor() {
+        for topics in [false, true] {
+            let mut state = AppState::test_new();
+            let mut selected = snapshot().projects.remove(0);
+            selected.canonical_key = "selected-parent".into();
+            selected.display_name = "Selected parent".into();
+            selected.sessions[0].live = false;
+            if topics {
+                selected.kind = ProjectKind::Semantic;
+            }
+            let mut other = selected.clone();
+            other.canonical_key = "another-parent".into();
+            other.display_name = "Another parent".into();
+            if topics {
+                state.projects.snapshot.topics = vec![other, selected];
+                state.sidebar_view = crate::app::state::SidebarView::Clusters;
+            } else {
+                state.projects.snapshot.projects = vec![other, selected];
+                state.sidebar_view = crate::app::state::SidebarView::Projects;
+            }
+            assert!(state.open_topic_detail("selected-parent"));
+            // The key, not an old cursor row, owns the current content selection.
+            state.projects.selected_row = 0;
+            for mode in [
+                crate::app::Mode::TopicDetail,
+                crate::app::Mode::EditTopicCover,
+            ] {
+                state.mode = mode;
+                let rows = row_cells(&state, Rect::new(0, 0, 40, 16));
+                let marked = rows
+                    .iter()
+                    .find(|row| row[0].symbol == "▌")
+                    .expect("parent remains marked");
+                let text: String = marked.iter().map(|cell| cell.symbol.as_str()).collect();
+                assert!(text.contains("Selected parent"), "{text}");
+                assert_eq!(text_cell_background(marked), Some(state.palette.surface1));
+            }
+        }
+    }
+
+    #[test]
+    fn open_child_marks_its_parent_without_losing_the_child_marker() {
+        let mut state = state_with_open_session();
+        state.mode = crate::app::Mode::Terminal;
+        let rows = row_cells(&state, Rect::new(0, 0, 40, 16));
+        assert!(rows.iter().any(|row| row[0].symbol == "▌"), "parent marker");
+        assert!(rows.iter().any(|row| row[0].symbol == "▎"), "child marker");
     }
 
     /// A topic groups dozens of sessions — the three largest on this machine cover 63, 54 and 51 —

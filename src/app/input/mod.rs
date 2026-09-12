@@ -606,7 +606,7 @@ impl App {
         )
     }
 
-    fn pane_for_catalog_session(
+    pub(super) fn pane_for_catalog_session(
         &self,
         session: &crate::projects::IndexedSessionSummary,
     ) -> Option<(usize, crate::layout::PaneId)> {
@@ -658,7 +658,7 @@ impl App {
         Some("Read-only preview. This session is not running.".into())
     }
 
-    fn spawn_catalog_session_resume(
+    pub(super) fn spawn_catalog_session_resume(
         &mut self,
         session: &crate::projects::IndexedSessionSummary,
     ) -> Result<(usize, crate::layout::PaneId), String> {

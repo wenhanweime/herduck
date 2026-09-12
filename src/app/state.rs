@@ -843,6 +843,8 @@ pub struct ProjectsViewState {
     pub topic_detail_selected: usize,
     pub topic_detail_scroll: usize,
     pub cover_editor: Option<TopicCoverEditor>,
+    /// A server-derived projection prepared before rendering the selected group.
+    pub overview: Option<crate::projects::overview::ProjectOverview>,
 }
 
 /// An unsaved cover is client presentation state, never part of runtime persistence.
@@ -880,6 +882,7 @@ impl Default for ProjectsViewState {
             topic_detail_selected: 0,
             topic_detail_scroll: 0,
             cover_editor: None,
+            overview: None,
         }
     }
 }
@@ -952,11 +955,33 @@ pub struct TopicDetailGeometry {
     pub title: Rect,
     pub edit: Rect,
     pub cover: Rect,
+    pub overview: Rect,
+    pub refresh: Rect,
+    pub overview_hits: Vec<ProjectOverviewHit>,
     pub heading: Rect,
     pub sessions: Rect,
     pub footer: Rect,
     pub row_hits: Vec<ProjectRowHitArea>,
     pub normalized_scroll: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectOverviewHit {
+    pub rect: Rect,
+    /// Context for an ordinary conversation link; actions never use row offsets as identity.
+    pub session_key: Option<String>,
+    pub action: ProjectOverviewAction,
+    pub shortcut: Option<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProjectOverviewAction {
+    OpenConversation,
+    Continue {
+        project_key: String,
+        suggestion_id: String,
+    },
+    CancelFollowup(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

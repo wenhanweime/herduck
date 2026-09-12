@@ -1,42 +1,56 @@
 use crate::api::schema::{
-    Method, ProjectSnapshotParams, Request, ResponseResult, SuccessResponse, TopicCoverGetParams,
+    Method, ProjectFollowupGetParams, ProjectFollowupStartParams, ProjectOverviewGetParams,
+    ProjectSnapshotParams, Request, ResponseResult, SuccessResponse, TopicCoverGetParams,
     TopicCoverPatch, TopicCoverUpdateParams,
 };
 
 pub(super) fn run_topic_command(args: &[String]) -> std::io::Result<i32> {
+    run_group_command(args, true)
+}
+
+pub(super) fn run_project_command(args: &[String]) -> std::io::Result<i32> {
+    run_group_command(args, false)
+}
+
+fn run_group_command(args: &[String], topics: bool) -> std::io::Result<i32> {
     if args.is_empty()
         || args
             .iter()
             .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
         || args == ["help"]
     {
-        print_help();
+        print_help(topics);
         return Ok(if args.is_empty() { 2 } else { 0 });
     }
-    let method = match parse_method(args) {
+    let parsed = if !topics && args.first().is_some_and(|arg| arg == "cover") {
+        Err("Authored covers belong to Topics; use herduck topic cover".into())
+    } else {
+        parse_method(args)
+    };
+    let method = match parsed {
         Ok(method) => method,
         Err(message) => {
             eprintln!("{message}");
-            print_help();
+            print_help(topics);
             return Ok(2);
         }
     };
     let list = matches!(method, Method::ProjectSnapshot(_));
     let response = super::send_request(&Request {
-        id: "cli:topic".into(),
+        id: if topics { "cli:topic" } else { "cli:project" }.into(),
         method,
     })?;
     if list && response.get("error").is_none() {
         let response: SuccessResponse = serde_json::from_value(response)?;
         let ResponseResult::ProjectSnapshot { snapshot } = response.result else {
-            return Err(std::io::Error::other("Unexpected response to topic list"));
+            return Err(std::io::Error::other("Unexpected response to group list"));
         };
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::json!({
-                "topics": snapshot.topics, "revision": snapshot.revision,
-            }))?
-        );
+        let groups = if topics {
+            serde_json::json!({"topics": snapshot.topics, "revision": snapshot.revision})
+        } else {
+            serde_json::json!({"projects": snapshot.projects, "revision": snapshot.revision})
+        };
+        println!("{}", serde_json::to_string(&groups)?);
         Ok(0)
     } else {
         super::print_response(&response)
@@ -48,9 +62,39 @@ fn parse_method(args: &[String]) -> Result<Method, String> {
         [list] if list == "list" => Ok(Method::ProjectSnapshot(ProjectSnapshotParams {
             projects_schema_version: crate::projects::domain::PROJECTS_SCHEMA_VERSION,
         })),
+        [overview, get, key] if overview == "overview" && get == "get" => {
+            Ok(Method::ProjectOverviewGet(ProjectOverviewGetParams {
+                project_key: key.clone(),
+                refresh: false,
+            }))
+        }
+        [overview, get, key, refresh]
+            if overview == "overview" && get == "get" && refresh == "--refresh" =>
+        {
+            Ok(Method::ProjectOverviewGet(ProjectOverviewGetParams {
+                project_key: key.clone(),
+                refresh: true,
+            }))
+        }
         [cover, get, key] if cover == "cover" && get == "get" => {
             Ok(Method::TopicCoverGet(TopicCoverGetParams {
                 topic_key: key.clone(),
+            }))
+        }
+        [followup, start, key, suggestion_id] if followup == "followup" && start == "start" => {
+            Ok(Method::ProjectFollowupStart(ProjectFollowupStartParams {
+                project_key: key.clone(),
+                suggestion_id: suggestion_id.clone(),
+            }))
+        }
+        [followup, get, id] if followup == "followup" && get == "get" => {
+            Ok(Method::ProjectFollowupGet(ProjectFollowupGetParams {
+                followup_id: id.clone(),
+            }))
+        }
+        [followup, cancel, id] if followup == "followup" && cancel == "cancel" => {
+            Ok(Method::ProjectFollowupCancel(ProjectFollowupGetParams {
+                followup_id: id.clone(),
             }))
         }
         [cover, update, key, flags @ ..] if cover == "cover" && update == "update" => {
@@ -59,7 +103,7 @@ fn parse_method(args: &[String]) -> Result<Method, String> {
                 patch: parse_patch(flags)?,
             }))
         }
-        _ => Err("Unknown or incomplete topic command".into()),
+        _ => Err("Unknown or incomplete Topic/Project command".into()),
     }
 }
 
@@ -108,9 +152,17 @@ fn parse_patch(args: &[String]) -> Result<TopicCoverPatch, String> {
     Ok(patch)
 }
 
-fn print_help() {
+fn print_help(topics: bool) {
+    if !topics {
+        eprintln!("herduck project commands (JSON output):\n  herduck project list\n  herduck project overview get <project-key> [--refresh]\n  herduck project followup start <project-key> <suggestion-id>\n  herduck project followup get <followup-id>\n  herduck project followup cancel <followup-id>");
+        return;
+    }
     eprintln!("herduck topic commands (JSON output):");
     eprintln!("  herduck topic list");
+    eprintln!("  herduck topic overview get <topic-key> [--refresh]");
+    eprintln!("  herduck topic followup start <topic-key> <suggestion-id>");
+    eprintln!("  herduck topic followup get <followup-id>");
+    eprintln!("  herduck topic followup cancel <followup-id>");
     eprintln!("  herduck topic cover get <topic-key>");
     eprintln!("  herduck topic cover update <topic-key> [--goal TEXT] [--next-step TEXT ... | --clear-next-steps] [--blocked-note TEXT] [--expected-updated-at N]");
     eprintln!(
@@ -124,6 +176,35 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn overview_cli_preserves_the_key_and_refresh_is_opt_in() {
+        for refresh in [false, true] {
+            let mut values = args(&["overview", "get", "folder with spaces"]);
+            if refresh {
+                values.push("--refresh".into());
+            }
+            let Method::ProjectOverviewGet(params) = parse_method(&values).unwrap() else {
+                panic!("overview method");
+            };
+            assert_eq!(params.project_key, "folder with spaces");
+            assert_eq!(params.refresh, refresh);
+            for group in ["topic", "project"] {
+                let mut command = vec!["herduck".to_string(), group.to_string()];
+                command.extend(values.clone());
+                assert!(super::super::spec::command()
+                    .try_get_matches_from(command)
+                    .is_ok());
+            }
+        }
+        for invalid in [
+            vec!["overview"],
+            vec!["overview", "get"],
+            vec!["overview", "get", "key", "--unknown"],
+        ] {
+            assert!(parse_method(&args(&invalid)).is_err());
+        }
     }
 
     #[test]

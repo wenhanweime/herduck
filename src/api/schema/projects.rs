@@ -1,6 +1,30 @@
 use serde::{Deserialize, Serialize};
 
 pub use crate::projects::cover::{TopicCover, TopicCoverPatch};
+pub use crate::projects::followup::ProjectFollowup;
+pub use crate::projects::overview::ProjectOverview;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectFollowupStartParams {
+    pub project_key: String,
+    pub suggestion_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectFollowupGetParams {
+    pub followup_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectOverviewGetParams {
+    /// canonical_key of a Topic or directory Project in project.snapshot.
+    pub project_key: String,
+    #[serde(default)]
+    pub refresh: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

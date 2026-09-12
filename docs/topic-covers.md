@@ -1,10 +1,12 @@
 # Topic covers
 
-Available in the **0.1.0-alpha.3 source preview**. Open a Topic to see its cover above the
-conversation list: this week's goal, up to three next steps, and what's blocked. An empty cover
-shows a short prompt and leaves more room for conversations.
+Introduced in the **0.1.0-alpha.3 source preview**. A Topic's saved plan contains this week's goal,
+up to three next steps, and what's blocked. In **0.1.0-alpha.4**, the [project overview](project-overview.md)
+appears first, with readable work updates and explicit follow-up actions. The saved plan stays below
+it. Empty plans leave room for progress and conversations. Unlinked saved steps open the plan editor;
+follow-ups from an Agent conversation have a separate **Continue with this** action.
 
-Click **edit cover** or press **e** in the Topic detail view. Use Tab / Shift-Tab to move between
+Click **edit plan** or press **e** in the Topic detail view. Use Tab / Shift-Tab to move between
 fields, Shift-Enter for a new line, and Enter or the **save** button to save. Esc cancels the
 draft. Ctrl-U clears the current field. The editor supports Chinese input and pasted text.
 On smaller terminals, it scrolls the form to the focused field while keeping the action buttons visible.
@@ -92,6 +94,6 @@ Classification and model-based Topic merging never rewrite or merge authored cov
 Topic's last conversation moves to another Topic, its saved cover remains accessible under its
 original name. A cover is not inferred from chat content.
 
-Blockers are text in this iteration. `blocked_session_ref` is reserved and remains `null`;
-one-click navigation to a blocked pane is a follow-up. Artifact lists, task stages, approval flows,
-and multi-user permissions are outside this iteration.
+Authored blockers remain text; `blocked_session_ref` is reserved and remains `null` through the
+cover editor/API. The automatic overview separately links an Agent waiting for input to its
+existing pane. Artifact lists, task stages, approval flows, and multi-user permissions remain out of scope.

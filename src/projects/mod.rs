@@ -1,8 +1,11 @@
+pub(crate) mod activity;
 pub(crate) mod adapters;
 pub(crate) mod catalog;
 pub(crate) mod classifier;
 pub(crate) mod cover;
 pub(crate) mod domain;
+pub(crate) mod followup;
+pub(crate) mod overview;
 pub(crate) mod runtime;
 pub(crate) mod semantic;
 pub(crate) mod service;

@@ -80,10 +80,13 @@ group, and inspect the conversations behind it. Recent activity keeps active top
 Generation is opt-in. Existing Topics remain available when generation is off or a model source
 is unavailable; new conversations can be organized when a source becomes available.
 
-In the **0.1.0-alpha.3 source preview**, open a Topic to see its **cover** above the conversation list:
-this week's goal, up to three next steps, and what's blocked. Edit and save it in the UI; Agents
-can read and update the same cover through `herduck topic` commands or the socket API. Saved covers
-survive restart. [Topic covers](docs/topic-covers.md).
+In the **0.1.0-alpha.4 source preview**, a Topic or folder Project explains **what Agents are doing
+and what to do next**, using recent requests, Agent replies, and your saved plan. A follow-up can
+say “submit for review, then redeploy after approval”; choose **Continue with this** to give that
+instruction to the original Agent. Busy Agents receive it when ready. **View conversation** opens
+the context. The selected group stays highlighted, including when a child session is open.
+Topics also keep an editable goal, up to three next steps, and a blocker note. People and Agents
+share the overview and follow-ups through the UI, CLI, and socket API. [Project overview](docs/project-overview.md).
 
 ![Native Herduck Topics view grouping related conversations across directories and Agents](assets/screenshots/topics.png)
 

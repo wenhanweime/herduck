@@ -15,7 +15,9 @@ use super::plugins::{
     InstalledPluginInfo, PluginActionInfo, PluginCommandLogInfo, PluginInvocationContext,
     PluginPaneInfo,
 };
-use super::projects::{ProjectSessionsPage, ProjectsSnapshot, TopicCover};
+use super::projects::{
+    ProjectFollowup, ProjectOverview, ProjectSessionsPage, ProjectsSnapshot, TopicCover,
+};
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
@@ -54,6 +56,12 @@ pub enum ResponseResult {
     },
     ProjectSnapshot {
         snapshot: Box<ProjectsSnapshot>,
+    },
+    ProjectOverview {
+        overview: Box<ProjectOverview>,
+    },
+    ProjectFollowup {
+        followup: ProjectFollowup,
     },
     TopicCover {
         topic_key: String,

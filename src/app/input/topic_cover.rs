@@ -3,7 +3,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::api::schema::{
     ErrorResponse, Method, ResponseResult, SuccessResponse, TopicCoverUpdateParams,
 };
-use crate::app::state::{AppState, Mode, TopicCoverEditor};
+use crate::app::state::{
+    AppState, Mode, ProjectOverviewAction, ProjectOverviewHit, TopicCoverEditor,
+};
 use crate::app::App;
 use crate::projects::{cover::MAX_COVER_TEXT_CHARS, TopicCoverPatch};
 
@@ -14,6 +16,7 @@ impl AppState {
             .snapshot
             .topics
             .iter()
+            .chain(self.projects.snapshot.projects.iter())
             .any(|topic| topic.canonical_key == topic_key)
         {
             return false;
@@ -21,6 +24,7 @@ impl AppState {
         if self.projects.topic_detail_key.as_deref() != Some(topic_key) {
             self.projects.topic_detail_selected = 0;
             self.projects.topic_detail_scroll = 0;
+            self.projects.overview = None;
         }
         self.projects.topic_detail_key = Some(topic_key.to_string());
         self.projects.search_focused = false;
@@ -98,6 +102,23 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Tab => self.state.mode = Mode::Navigate,
             KeyCode::Char('e') if key.modifiers.is_empty() => self.state.open_topic_cover_editor(),
+            KeyCode::Char('r') if key.modifiers.is_empty() => {
+                self.refresh_project_overview(true);
+            }
+            KeyCode::Char(number @ '1'..='3') if key.modifiers.is_empty() => {
+                let shortcut = number as u8 - b'0';
+                let hit = self
+                    .state
+                    .view
+                    .topic_detail
+                    .overview_hits
+                    .iter()
+                    .find(|hit| hit.shortcut == Some(shortcut))
+                    .cloned();
+                if let Some(hit) = hit {
+                    self.activate_project_overview_hit(hit);
+                }
+            }
             KeyCode::Up | KeyCode::Char('k') => self.move_topic_detail_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_topic_detail_selection(1),
             KeyCode::PageUp => self.move_topic_detail_selection(-5),
@@ -112,6 +133,74 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn activate_project_overview_item(&mut self, session_key: Option<String>) {
+        let Some(key) = session_key else {
+            self.state.open_topic_cover_editor();
+            return;
+        };
+        let action = self.state.selected_project_summary().and_then(|project| {
+            project
+                .sessions
+                .iter()
+                .find(|session| session.stable_key == key)
+                .and_then(|session| crate::ui::ProjectTreeRow::Session(session.clone()).action())
+        });
+        if let Some(action) = action {
+            self.execute_project_tree_action(action);
+        }
+    }
+
+    fn activate_project_overview_hit(&mut self, hit: ProjectOverviewHit) {
+        match hit.action {
+            ProjectOverviewAction::OpenConversation => {
+                self.activate_project_overview_item(hit.session_key)
+            }
+            ProjectOverviewAction::Continue {
+                project_key,
+                suggestion_id,
+            } => match self.start_project_followup(&project_key, &suggestion_id) {
+                Ok(followup) => {
+                    if followup.state != crate::projects::followup::FollowupState::Cancelled {
+                        if let Some((index, pane_id)) = self.parse_pane_id(&followup.pane_id) {
+                            self.state.projects.history_session_key = None;
+                            self.focus_pane_internal_via_api(index, pane_id);
+                            self.state.mode = Mode::Terminal;
+                        }
+                    }
+                    self.project_followup_feedback(&followup.message, false);
+                }
+                Err((_, message)) => self.project_followup_feedback(&message, true),
+            },
+            ProjectOverviewAction::CancelFollowup(id) => {
+                if let Some(followup) = self.cancel_project_followup(&id) {
+                    self.project_followup_feedback(&followup.message, false);
+                    self.refresh_project_overview(false);
+                }
+            }
+        }
+    }
+
+    fn project_followup_feedback(&mut self, message: &str, failed: bool) {
+        let previous = self.state.toast.clone();
+        self.state.toast = Some(crate::app::state::ToastNotification {
+            kind: if failed {
+                crate::app::ToastKind::NeedsAttention
+            } else {
+                crate::app::ToastKind::Finished
+            },
+            title: if failed {
+                "Follow-up not sent"
+            } else {
+                "Project follow-up"
+            }
+            .into(),
+            context: message.into(),
+            position: None,
+            target: None,
+        });
+        self.sync_toast_deadline(previous);
     }
 
     fn move_topic_detail_selection(&mut self, delta: isize) {
@@ -251,6 +340,15 @@ impl App {
                 let layout = &self.state.view.topic_detail;
                 if layout.edit.contains(position) {
                     self.state.open_topic_cover_editor();
+                } else if layout.refresh.contains(position) {
+                    self.refresh_project_overview(true);
+                } else if let Some(hit) = layout
+                    .overview_hits
+                    .iter()
+                    .find(|hit| hit.rect.contains(position))
+                    .cloned()
+                {
+                    self.activate_project_overview_hit(hit);
                 } else if layout.footer.contains(position) {
                     self.state.mode = Mode::Navigate;
                 } else if let Some(hit) = layout
@@ -324,6 +422,167 @@ mod tests {
             method,
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn project_overview_api_matches_ui_for_topics_and_folder_projects_without_writes() {
+        use crate::api::schema::ProjectOverviewGetParams;
+        let (mut app, topic_key) = fixture();
+        let folder_key = app.state.projects.snapshot.projects[0]
+            .canonical_key
+            .clone();
+        let revision = app.project_service.snapshot().revision;
+        for key in [&topic_key, &folder_key] {
+            assert!(app.state.open_topic_detail(key));
+            app.sync_project_overview();
+            let visible = app.state.visible_project_overview().unwrap();
+            let response = api(
+                &mut app,
+                Method::ProjectOverviewGet(ProjectOverviewGetParams {
+                    project_key: key.to_string(),
+                    refresh: true,
+                }),
+            );
+            assert_eq!(
+                response["result"]["overview"],
+                serde_json::to_value(&visible).unwrap()
+            );
+            assert_eq!(visible.counts.history, 1);
+            assert!(!visible.suggestions.is_empty());
+            assert_eq!(app.project_service.snapshot().revision, revision);
+        }
+        // API reads of another group must not move the person's current selection.
+        api(
+            &mut app,
+            Method::ProjectOverviewGet(ProjectOverviewGetParams {
+                project_key: topic_key,
+                refresh: false,
+            }),
+        );
+        assert_eq!(
+            app.state.projects.topic_detail_key.as_ref(),
+            Some(&folder_key)
+        );
+        let missing = api(
+            &mut app,
+            Method::ProjectOverviewGet(ProjectOverviewGetParams {
+                project_key: "missing".into(),
+                refresh: false,
+            }),
+        );
+        assert_eq!(missing["error"]["code"], "not_found");
+        assert!(app.state.terminals.is_empty());
+    }
+
+    #[tokio::test]
+    async fn overview_conversation_links_stay_read_only_from_keyboard_and_mouse() {
+        for use_mouse in [false, true] {
+            let (mut app, _) = fixture();
+            let session_key = app.state.selected_project_summary().unwrap().sessions[0]
+                .stable_key
+                .clone();
+            app.sync_project_overview();
+            crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 160, 38));
+            let hit = app
+                .state
+                .view
+                .topic_detail
+                .overview_hits
+                .iter()
+                .find(|hit| {
+                    hit.shortcut.is_none() && hit.session_key.as_ref() == Some(&session_key)
+                })
+                .unwrap()
+                .clone();
+            assert_eq!(hit.session_key.as_ref(), Some(&session_key));
+            if use_mouse {
+                app.handle_mouse(super::super::mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    hit.rect.x,
+                    hit.rect.y,
+                ));
+            } else {
+                app.route_client_input(b"\r".to_vec());
+            }
+            assert_eq!(app.state.mode, Mode::ProjectHistory);
+            assert_eq!(
+                app.state.projects.history_session_key.as_ref(),
+                Some(&session_key)
+            );
+            assert!(
+                app.state.terminals.is_empty(),
+                "viewing a conversation must not start an Agent"
+            );
+            assert!(app.state.workspaces.is_empty());
+            app.state.assert_invariants_for_test();
+        }
+    }
+
+    #[tokio::test]
+    async fn overview_live_state_changes_and_actions_keep_the_existing_pane() {
+        use crate::detect::AgentState;
+        use crate::projects::overview::WorkPhase;
+        let (mut app, topic_key) = fixture();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("review")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .clone();
+        let workspace_id = app.public_workspace_id(0);
+        let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+        let snapshot = &mut app.state.projects.snapshot;
+        for group in snapshot
+            .projects
+            .iter_mut()
+            .chain(snapshot.topics.iter_mut())
+        {
+            let session = &mut group.sessions[0];
+            session.live = true;
+            session.workspace_id = Some(workspace_id.clone());
+            session.pane_id = Some(public_pane_id.clone());
+            session.runtime_generation = Some(1);
+        }
+        for (status, expected) in [
+            (AgentState::Working, WorkPhase::Working),
+            (AgentState::Blocked, WorkPhase::NeedsInput),
+            (AgentState::Idle, WorkPhase::Ready),
+        ] {
+            app.state.terminals.get_mut(&terminal_id).unwrap().state = status;
+            assert!(app.sync_project_overview());
+            assert_eq!(
+                app.state.visible_project_overview().unwrap().work[0].phase,
+                expected
+            );
+        }
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_agent_inactive(true);
+        app.sync_project_overview();
+        assert_eq!(
+            app.state.visible_project_overview().unwrap().work[0].phase,
+            WorkPhase::Paused
+        );
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_agent_inactive(false);
+        app.state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Blocked;
+        app.state.open_topic_detail(&topic_key);
+        app.sync_project_overview();
+        crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 160, 38));
+        app.handle_topic_detail_key(key(KeyCode::Char('1')));
+        assert_eq!(app.state.mode, Mode::Terminal);
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(pane_id));
+        assert_eq!(app.state.terminals.len(), 1);
+        app.state.assert_invariants_for_test();
     }
 
     #[tokio::test]

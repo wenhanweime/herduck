@@ -31,7 +31,22 @@ impl App {
         }
         let report = self.find_pane(pane_id).and_then(|(ws_idx, pane)| {
             let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
-            let session = terminal.persisted_agent_session.clone();
+            // Lifecycle hooks (Pi/OMP) hold the current native identity in their
+            // authority while running. The durable fallback is used after release.
+            // Match the identity already exposed by the session API and persistence.
+            let session = terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| {
+                    let session_ref = authority.session_ref.as_ref()?;
+                    crate::agent_resume::session_ref_from_snapshot(
+                        &authority.source,
+                        &authority.agent_label,
+                        session_ref.kind,
+                        &session_ref.value,
+                    )
+                })
+                .or_else(|| terminal.persisted_agent_session.clone());
             Some((
                 session,
                 terminal.cwd.clone(),
@@ -299,6 +314,56 @@ mod tests {
         let snapshot = app.project_service.snapshot();
         assert!(!snapshot.projects[0].sessions[0].live);
         assert!(app.project_runtime_leases.is_empty());
+    }
+
+    #[test]
+    fn lifecycle_hook_identity_links_progress_to_the_original_conversation() {
+        let (mut app, pane_id) = app_with_project_runtime();
+        let native_id = "pi-progress-session";
+        let identity = crate::projects::SessionIdentity::id("pi", native_id).unwrap();
+        app.handle_internal_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:pi".into(),
+            agent_label: "pi".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: Some(1),
+            session_ref: crate::agent_resume::AgentSessionRef::id(native_id),
+        });
+        let snapshot = app.project_service.snapshot();
+        let project = &snapshot.projects[0];
+        assert_eq!(
+            project.sessions.len(),
+            1,
+            "a lifecycle report must not create a synthetic duplicate"
+        );
+        let session = &project.sessions[0];
+        assert_eq!(session.stable_key, identity.stable_key);
+        assert!(session.live);
+        assert_eq!(
+            app.state.project_session_phase(session),
+            Some(crate::projects::overview::WorkPhase::Working)
+        );
+        let generation = session.runtime_generation;
+        app.handle_internal_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:pi".into(),
+            agent_label: "pi".into(),
+            state: AgentState::Blocked,
+            message: None,
+            seq: Some(2),
+            session_ref: crate::agent_resume::AgentSessionRef::id(native_id),
+        });
+        let snapshot = app.project_service.snapshot();
+        let session = &snapshot.projects[0].sessions[0];
+        assert_eq!(session.stable_key, identity.stable_key);
+        assert_eq!(session.runtime_generation, generation);
+        assert_eq!(
+            app.state.project_session_phase(session),
+            Some(crate::projects::overview::WorkPhase::NeedsInput)
+        );
+        app.handle_internal_event(AppEvent::PaneDied { pane_id });
+        assert!(!app.project_service.snapshot().projects[0].sessions[0].live);
     }
 
     #[tokio::test]

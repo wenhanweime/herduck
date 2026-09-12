@@ -171,6 +171,7 @@ pub(crate) enum ProjectCommand {
 }
 
 pub(crate) struct ProjectService {
+    activity_reader: super::activity::ActivityReader,
     sender: Option<mpsc::Sender<ProjectCommand>>,
     snapshot: Arc<RwLock<ProjectsSnapshot>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -213,6 +214,7 @@ impl ProjectService {
 
     pub(crate) fn disabled() -> Self {
         Self {
+            activity_reader: super::activity::ActivityReader::default(),
             sender: None,
             snapshot: Arc::new(RwLock::new(ProjectsSnapshot::empty())),
             worker: None,
@@ -235,6 +237,7 @@ impl ProjectService {
 
     fn degraded(category: &str) -> Self {
         Self {
+            activity_reader: super::activity::ActivityReader::default(),
             sender: None,
             snapshot: Arc::new(RwLock::new(ProjectsSnapshot::degraded(category))),
             worker: None,
@@ -287,6 +290,7 @@ impl ProjectService {
             return Self::degraded("catalog_worker_start");
         }
         Self {
+            activity_reader: super::activity::ActivityReader::default(),
             sender: Some(sender),
             snapshot,
             worker,
@@ -303,6 +307,31 @@ impl ProjectService {
 
     pub(crate) fn is_available(&self) -> bool {
         self.sender.is_some()
+    }
+
+    pub(crate) fn project_summary(
+        &self,
+        key: &str,
+    ) -> Result<super::ProjectSummary, ProjectServiceError> {
+        let snapshot = self
+            .snapshot
+            .read()
+            .map_err(|_| ProjectServiceError::unavailable())?;
+        snapshot
+            .topics
+            .iter()
+            .chain(snapshot.projects.iter())
+            .find(|project| project.canonical_key == key)
+            .cloned()
+            .ok_or_else(|| ProjectServiceError::catalog(CatalogError::NotFound))
+    }
+
+    pub(crate) fn recent_activity(
+        &self,
+        project: &super::ProjectSummary,
+        refresh: bool,
+    ) -> super::activity::ActivityBatch {
+        self.activity_reader.for_project(project, refresh)
     }
 
     pub(crate) fn start_background_scan(&mut self, roots: &[super::adapters::AdapterRoot]) {

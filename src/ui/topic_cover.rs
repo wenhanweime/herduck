@@ -26,9 +26,7 @@ const FIELD_LABELS: [&str; 5] = [
 ];
 
 fn selected_topic(app: &AppState) -> Option<&ProjectSummary> {
-    app.projects.snapshot.topics.iter().find(|topic| {
-        Some(topic.canonical_key.as_str()) == app.projects.topic_detail_key.as_deref()
-    })
+    app.selected_project_summary()
 }
 
 pub(crate) fn topic_detail_rows(app: &AppState) -> Vec<ProjectTreeRow> {
@@ -59,20 +57,51 @@ pub(crate) fn topic_detail_geometry(app: &AppState, area: Rect) -> TopicDetailGe
         return TopicDetailGeometry::default();
     }
     let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
-    let edit_width = inner.width.min(18);
+    let is_topic = selected_topic(app)
+        .is_some_and(|topic| topic.kind == crate::projects::ProjectKind::Semantic);
+    let edit_width = if is_topic { inner.width.min(15) } else { 0 };
     let edit = Rect::new(inner.right() - edit_width, inner.y, edit_width, 1);
+    let refresh_width = inner.width.saturating_sub(edit_width).min(12);
+    let refresh = Rect::new(
+        edit.x.saturating_sub(refresh_width),
+        inner.y,
+        refresh_width,
+        1,
+    );
     let title = Rect::new(
         inner.x,
         inner.y,
-        inner.width.saturating_sub(edit_width + 1),
+        inner.width.saturating_sub(edit_width + refresh_width + 1),
         1,
     );
     let filled = selected_topic(app)
         .and_then(|topic| topic.cover.as_ref())
         .is_some_and(|cover| !cover_is_empty(cover));
-    // Even a filled cover leaves room for the conversation heading, a row, and navigation.
-    let cover_height = if filled { 8 } else { 3 }.min(inner.height.saturating_sub(6));
-    let cover = Rect::new(inner.x, inner.y + 2, inner.width, cover_height);
+    // Automatic progress is useful before a plan is written. The authored plan is
+    // a compact supplement, with at least one conversation and navigation kept visible.
+    let cover_height = if filled {
+        if inner.height >= 24 {
+            if inner.width >= 82 {
+                6
+            } else {
+                7
+            }
+        } else if inner.width < 80 && inner.height >= 13 {
+            5
+        } else {
+            3
+        }
+    } else {
+        0
+    }
+    .min(inner.height.saturating_sub(6));
+    let preferred = 24;
+    // An empty plan gives the conversation list extra space, rather than growing
+    // the overview until only one conversation remains visible.
+    let reserved = if filled { cover_height + 6 } else { 8 };
+    let overview_height = preferred.min(inner.height.saturating_sub(reserved));
+    let overview = Rect::new(inner.x, inner.y + 2, inner.width, overview_height);
+    let cover = Rect::new(inner.x, overview.bottom(), inner.width, cover_height);
     let heading = Rect::new(
         inner.x,
         cover.bottom(),
@@ -113,6 +142,12 @@ pub(crate) fn topic_detail_geometry(app: &AppState, area: Rect) -> TopicDetailGe
         title,
         edit,
         cover,
+        overview,
+        refresh,
+        overview_hits: app
+            .visible_project_overview()
+            .map(|value| super::project_overview::overview_hit_areas(&value, overview))
+            .unwrap_or_default(),
         heading,
         sessions,
         footer,
@@ -126,7 +161,7 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
     let geometry = topic_detail_geometry(app, area);
     let Some(topic) = selected_topic(app) else {
         frame.render_widget(
-            Paragraph::new("Topic is no longer available. Esc returns to the list.")
+            Paragraph::new("Project is no longer available. Esc returns to the list.")
                 .style(Style::default().fg(app.palette.subtext0))
                 .wrap(Wrap { trim: false }),
             area,
@@ -134,7 +169,16 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         return;
     };
     frame.render_widget(
-        Paragraph::new(format!("Topic · {}", topic.display_name)).style(
+        Paragraph::new(format!(
+            "{} · {}",
+            if topic.kind == crate::projects::ProjectKind::Semantic {
+                "Topic"
+            } else {
+                "Project"
+            },
+            topic.display_name
+        ))
+        .style(
             Style::default()
                 .fg(app.palette.text)
                 .add_modifier(Modifier::BOLD),
@@ -145,12 +189,22 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         frame,
         geometry.edit,
         Some("e"),
-        "edit cover",
+        "edit plan",
         Style::default()
             .fg(panel_contrast_fg(&app.palette))
             .bg(app.palette.accent)
             .add_modifier(Modifier::BOLD),
     );
+    render_action_button(
+        frame,
+        geometry.refresh,
+        Some("r"),
+        "refresh",
+        Style::default().fg(app.palette.subtext0),
+    );
+    if let Some(overview) = app.visible_project_overview() {
+        super::project_overview::render_project_overview(app, frame, geometry.overview, &overview);
+    }
     let empty_cover = TopicCover::default();
     render_cover(
         app,
@@ -159,7 +213,12 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         topic.cover.as_ref().unwrap_or(&empty_cover),
     );
     frame.render_widget(
-        Paragraph::new("Conversations").style(
+        Paragraph::new(if topic.next_cursor.is_some() {
+            "Conversations · older history below"
+        } else {
+            "Conversations"
+        })
+        .style(
             Style::default()
                 .fg(app.palette.subtext0)
                 .add_modifier(Modifier::BOLD),
@@ -169,11 +228,24 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
     let rows = topic_detail_rows(app);
     if rows.is_empty() {
         frame.render_widget(
-            Paragraph::new(if app.projects.filter == ProjectFilter::Open {
-                "No open conversations in this Topic."
-            } else {
-                "No conversations in this Topic yet."
-            })
+            Paragraph::new(format!(
+                "No {}conversations in this {}{}.",
+                if app.projects.filter == ProjectFilter::Open {
+                    "open "
+                } else {
+                    ""
+                },
+                if topic.kind == crate::projects::ProjectKind::Semantic {
+                    "Topic"
+                } else {
+                    "Project"
+                },
+                if app.projects.filter == ProjectFilter::Open {
+                    ""
+                } else {
+                    " yet"
+                },
+            ))
             .style(Style::default().fg(app.palette.overlay0)),
             geometry.sessions,
         );
@@ -218,26 +290,55 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         }
     }
     frame.render_widget(
-        Paragraph::new("↑↓ choose · enter open · e edit cover · esc back")
-            .style(Style::default().fg(app.palette.overlay0)),
+        Paragraph::new(if topic.kind == crate::projects::ProjectKind::Semantic {
+            "1–3 follow-up · ↑↓ conversations · enter open · e plan · esc back"
+        } else {
+            "1–3 follow-up · ↑↓ conversations · enter open · r refresh · esc back"
+        })
+        .style(Style::default().fg(app.palette.overlay0)),
         geometry.footer,
     );
 }
 
 fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCover) {
+    if cover_is_empty(cover) || area.height == 0 {
+        return;
+    }
+    if area.height <= 5 {
+        let next = cover
+            .next_steps
+            .iter()
+            .enumerate()
+            .map(|(i, step)| format!("{}. {step}", i + 1))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut lines = vec![cover_line(app, "Goal", &cover.goal, "Not set", area.width)];
+        if area.height >= 5 && !cover.next_steps.is_empty() {
+            lines.extend(
+                cover.next_steps.iter().enumerate().map(|(index, step)| {
+                    Line::from(format!("{}. {}", index + 1, single_line(step)))
+                }),
+            );
+        } else {
+            lines.push(cover_line(app, "Next", &next, "Not set", area.width));
+        }
+        lines.push(cover_line(
+            app,
+            "Blocked",
+            &cover.blocked_note,
+            "None recorded",
+            area.width,
+        ));
+        frame.render_widget(
+            Paragraph::new(lines).style(Style::default().fg(app.palette.text)),
+            area,
+        );
+        return;
+    }
     let Some(inner) = render_panel_shell(frame, area, app.palette.overlay0, app.palette.panel_bg)
     else {
         return;
     };
-    if cover_is_empty(cover) {
-        frame.render_widget(
-            Paragraph::new("Write this week's goal, next steps, and what's blocked.")
-                .style(Style::default().fg(app.palette.subtext0))
-                .wrap(Wrap { trim: false }),
-            inner,
-        );
-        return;
-    }
     if inner.width >= 80 && inner.height >= 4 {
         let columns = Layout::horizontal([
             Constraint::Ratio(1, 3),
@@ -484,7 +585,7 @@ pub(super) fn render_topic_cover_editor(app: &AppState, frame: &mut Frame, area:
     render_modal_header(
         frame,
         Rect::new(inner.x, inner.y, inner.width, 1),
-        &format!("Topic cover · {}", editor.topic_name),
+        &format!("Topic plan · {}", editor.topic_name),
         &app.palette,
     );
     frame.render_widget(
@@ -675,6 +776,35 @@ mod tests {
     }
 
     #[test]
+    fn empty_topic_and_folder_project_open_with_progress_instead_of_a_blank_cover() {
+        let mut state = fixture(false);
+        let topic_key = state.projects.snapshot.topics[0].canonical_key.clone();
+        let folder_key = state.projects.snapshot.projects[0].canonical_key.clone();
+        for (key, label, editable) in [
+            (&topic_key, "Topic ·", true),
+            (&folder_key, "Project ·", false),
+        ] {
+            assert!(state.open_topic_detail(key));
+            let text = render_text(&state, 124, 32);
+            for expected in [
+                label,
+                "What's happening",
+                "Suggested follow-ups",
+                "Plan first user interviews",
+                "recorded conversation",
+            ] {
+                assert!(text.contains(expected), "missing {expected}:\n{text}");
+            }
+            assert!(!text.contains("Write this week's goal"));
+            let geometry = topic_detail_geometry(&state, Rect::new(0, 0, 124, 32));
+            assert_eq!(geometry.cover.height, 0);
+            assert_eq!(geometry.edit.width > 0, editable);
+            assert!(!geometry.overview_hits.is_empty());
+            assert!(!geometry.row_hits.is_empty());
+        }
+    }
+
+    #[test]
     fn topic_cover_is_fixed_while_sessions_scroll_and_empty_cover_leaves_more_room() {
         let mut state = fixture(true);
         let session = state.projects.snapshot.topics[0].sessions[0].clone();
@@ -695,7 +825,8 @@ mod tests {
         state.projects.snapshot.topics[0].cover = None;
         assert!(topic_detail_geometry(&state, area).sessions.height > after.sessions.height);
         let text = render_text(&state, 90, 20);
-        assert!(text.contains("Write this week's goal"));
+        assert!(!text.contains("Write this week's goal"));
+        assert!(text.contains("Suggested follow-ups"));
     }
 
     #[test]

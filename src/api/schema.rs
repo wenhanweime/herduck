@@ -67,6 +67,14 @@ pub enum Method {
     SessionSnapshot(EmptyParams),
     #[serde(rename = "project.snapshot")]
     ProjectSnapshot(ProjectSnapshotParams),
+    #[serde(rename = "project.overview.get")]
+    ProjectOverviewGet(ProjectOverviewGetParams),
+    #[serde(rename = "project.followup.start")]
+    ProjectFollowupStart(ProjectFollowupStartParams),
+    #[serde(rename = "project.followup.get")]
+    ProjectFollowupGet(ProjectFollowupGetParams),
+    #[serde(rename = "project.followup.cancel")]
+    ProjectFollowupCancel(ProjectFollowupGetParams),
     #[serde(rename = "topic.cover.get")]
     TopicCoverGet(TopicCoverGetParams),
     #[serde(rename = "topic.cover.update")]

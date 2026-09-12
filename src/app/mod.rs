@@ -14,6 +14,8 @@ mod creation;
 mod ids;
 mod input;
 mod popup;
+mod project_followup;
+mod project_overview;
 mod project_runtime;
 mod runtime;
 mod runtime_mutations;
@@ -109,6 +111,7 @@ pub struct App {
     /// A historical-session submission waiting for the resumed agent to expose an idle prompt.
     /// Merely previewing or entering history never adds an entry here and never starts a runtime.
     pub(crate) pending_catalog_submissions: HashMap<crate::layout::PaneId, String>,
+    pub(crate) project_followups: project_followup::ProjectFollowupQueue,
     pub(crate) next_project_runtime_generation: u64,
     pub(crate) next_project_identity_check: Option<Instant>,
     pub(crate) loaded_projects_config: crate::config::ProjectsConfig,
@@ -817,6 +820,7 @@ impl App {
             project_roots,
             project_runtime_leases: HashMap::new(),
             pending_catalog_submissions: HashMap::new(),
+            project_followups: project_followup::ProjectFollowupQueue::default(),
             next_project_runtime_generation: 1,
             next_project_identity_check: None,
             loaded_projects_config: config.projects.clone(),
@@ -1802,6 +1806,7 @@ impl App {
     }
 
     pub(crate) fn sync_projects_snapshot(&mut self) -> bool {
+        self.flush_project_followups();
         let now = Instant::now();
         let mut mappings_changed = false;
         if self
@@ -1822,7 +1827,7 @@ impl App {
             && latest.diagnostic_category == current.diagnostic_category
             && latest.scan_status == current.scan_status
         {
-            return mappings_changed;
+            return self.sync_project_overview() || mappings_changed;
         }
         if latest.revision < self.state.projects.snapshot.revision
             && latest.diagnostic_category.is_none()
@@ -1830,6 +1835,7 @@ impl App {
             return false;
         }
         self.replace_projects_snapshot(latest);
+        self.sync_project_overview();
         true
     }
 

@@ -31,6 +31,7 @@ pub(super) fn command() -> Command {
         .subcommand(server_command())
         .subcommand(api_command())
         .subcommand(topic_command())
+        .subcommand(project_command())
         .subcommand(workspace_command())
         .subcommand(worktree_command())
         .subcommand(tab_command())
@@ -142,10 +143,12 @@ fn api_command() -> Command {
 
 fn topic_command() -> Command {
     Command::new("topic")
-        .about("Read and edit Topic covers over the socket API")
+        .about("Read Topic progress and edit saved plans over the socket API")
         .subcommand(
             Command::new("list").about("List Topic keys, covers, and conversations as JSON"),
         )
+        .subcommand(overview_command())
+        .subcommand(followup_command())
         .subcommand(
             Command::new("cover")
                 .about("Read or update a Topic cover")
@@ -161,6 +164,46 @@ fn topic_command() -> Command {
                         .arg(option("expected-updated-at", "N")),
                 ),
         )
+}
+
+fn overview_command() -> Command {
+    Command::new("overview")
+        .about("Read current work, recent progress, and suggested next moves as JSON")
+        .subcommand(
+            id_command("get", "project_key", "Read a Topic or Project overview")
+                .arg(flag("refresh").help("Refresh recent local conversation evidence")),
+        )
+}
+
+fn followup_command() -> Command {
+    Command::new("followup")
+        .about("Continue a suggested action in its original Agent conversation")
+        .subcommand(
+            Command::new("start")
+                .about("Send a chosen follow-up to its original Agent when ready")
+                .arg(required("project_key", "PROJECT_KEY"))
+                .arg(required("suggestion_id", "SUGGESTION_ID")),
+        )
+        .subcommand(id_command(
+            "get",
+            "followup_id",
+            "Read follow-up delivery status",
+        ))
+        .subcommand(id_command(
+            "cancel",
+            "followup_id",
+            "Cancel a queued follow-up before delivery",
+        ))
+}
+
+fn project_command() -> Command {
+    Command::new("project")
+        .about("Read folder Projects and their progress over the socket API")
+        .subcommand(
+            Command::new("list").about("List folder Project keys and conversations as JSON"),
+        )
+        .subcommand(overview_command())
+        .subcommand(followup_command())
 }
 
 fn workspace_command() -> Command {

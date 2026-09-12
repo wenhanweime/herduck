@@ -75,6 +75,7 @@ impl App {
         if let AppEvent::PaneDied { pane_id } = &ev {
             self.clear_project_runtime_for_pane(*pane_id);
             self.pending_catalog_submissions.remove(pane_id);
+            self.cancel_project_followups(*pane_id);
         }
 
         if let AppEvent::ClipboardWrite { content } = ev {
@@ -310,6 +311,7 @@ impl App {
             self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
         }
+        self.flush_project_followups();
         self.refresh_agent_inactivity(Instant::now());
         self.sync_agent_metadata_deadline();
         if let Some((
@@ -1031,6 +1033,61 @@ impl App {
                 );
             }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
+            Method::ProjectFollowupStart(params) => {
+                return match self.start_project_followup(&params.project_key, &params.suggestion_id)
+                {
+                    Ok(followup) => responses::encode_success(
+                        request.id,
+                        ResponseResult::ProjectFollowup { followup },
+                    ),
+                    Err((code, message)) => responses::encode_error(request.id, code, &message),
+                };
+            }
+            Method::ProjectFollowupGet(params) => {
+                return match self.project_followup(&params.followup_id) {
+                    Some(followup) => responses::encode_success(
+                        request.id,
+                        ResponseResult::ProjectFollowup { followup },
+                    ),
+                    None => responses::encode_error(
+                        request.id,
+                        "not_found",
+                        "This follow-up is no longer available.",
+                    ),
+                };
+            }
+            Method::ProjectFollowupCancel(params) => {
+                return match self.cancel_project_followup(&params.followup_id) {
+                    Some(followup) => responses::encode_success(
+                        request.id,
+                        ResponseResult::ProjectFollowup { followup },
+                    ),
+                    None => responses::encode_error(
+                        request.id,
+                        "not_found",
+                        "This follow-up is no longer available.",
+                    ),
+                };
+            }
+            Method::ProjectOverviewGet(params) => {
+                let project = match self.project_service.project_summary(&params.project_key) {
+                    Ok(project) => project,
+                    Err(error) => {
+                        return responses::encode_error(request.id, error.code, &error.message)
+                    }
+                };
+                let activity = self
+                    .project_service
+                    .recent_activity(&project, params.refresh);
+                let mut overview = self.state.project_overview(&project, &activity);
+                self.annotate_project_followups(&mut overview);
+                return responses::encode_success(
+                    request.id,
+                    ResponseResult::ProjectOverview {
+                        overview: Box::new(overview),
+                    },
+                );
+            }
             Method::TopicCoverGet(params) => {
                 return match self.project_service.topic_cover(params.topic_key.clone()) {
                     Ok(cover) => responses::encode_success(

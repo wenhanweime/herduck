@@ -8,6 +8,7 @@
 //! messages in a SQLite database rather than a transcript file and has no `transcript_ref`, so it
 //! reports `Unsupported` instead of silently rendering an empty conversation.
 
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use serde_json::Value;
@@ -27,6 +28,7 @@ const MAX_MESSAGE_CHARS: usize = 4_000;
 /// Full-context history is still bounded by the JSONL reader's 8 MiB scan ceiling, so retaining
 /// every readable character it encounters cannot grow without limit.
 const MAX_FULL_MESSAGE_CHARS: usize = 8 * 1024 * 1024;
+const RECENT_SCAN_BYTES: u64 = 512 * 1024;
 
 /// Lines of prose kept per turn in the preview.
 ///
@@ -145,6 +147,15 @@ pub fn read_full_transcript(
     read_transcript_with_collector(backend, transcript_ref, Collector::full())
 }
 
+/// Recent project activity must come from the tail, even when a conversation is
+/// longer than the opening-context preview. Retain bounded, readable turns only.
+pub(crate) fn read_recent_transcript(
+    backend: &str,
+    transcript_ref: Option<&str>,
+) -> Result<Transcript, TranscriptError> {
+    read_transcript_with_collector(backend, transcript_ref, Collector::recent())
+}
+
 fn read_transcript_with_collector(
     backend: &str,
     transcript_ref: Option<&str>,
@@ -157,6 +168,17 @@ fn read_transcript_with_collector(
         });
     };
     let path = Path::new(reference);
+    let tail_truncated = collector.keep_recent && {
+        let source = if backend == "grok" {
+            path.parent()
+                .map(|parent| parent.join("chat_history.jsonl"))
+        } else {
+            Some(path.to_path_buf())
+        };
+        source
+            .and_then(|source| std::fs::metadata(source).ok())
+            .is_some_and(|metadata| metadata.len() > RECENT_SCAN_BYTES)
+    };
 
     let parsed = match backend {
         "codex" => read_codex(path, &mut collector),
@@ -174,7 +196,7 @@ fn read_transcript_with_collector(
     }
     Ok(Transcript {
         messages: collector.messages,
-        truncated: collector.truncated,
+        truncated: collector.truncated || tail_truncated,
     })
 }
 
@@ -183,6 +205,7 @@ struct Collector {
     truncated: bool,
     max_messages: usize,
     max_message_chars: usize,
+    keep_recent: bool,
 }
 
 impl Collector {
@@ -192,6 +215,7 @@ impl Collector {
             truncated: false,
             max_messages: MAX_MESSAGES,
             max_message_chars: MAX_MESSAGE_CHARS,
+            keep_recent: false,
         }
     }
 
@@ -201,6 +225,17 @@ impl Collector {
             truncated: false,
             max_messages: usize::MAX,
             max_message_chars: MAX_FULL_MESSAGE_CHARS,
+            keep_recent: false,
+        }
+    }
+
+    fn recent() -> Self {
+        Self {
+            messages: Vec::new(),
+            truncated: false,
+            max_messages: 12,
+            max_message_chars: MAX_MESSAGE_CHARS,
+            keep_recent: true,
         }
     }
 
@@ -225,7 +260,9 @@ impl Collector {
             return None;
         }
 
-        if role == TranscriptRole::Assistant {
+        // Overview evidence needs the latest response, not the narration that
+        // preceded it. Preview/full modes still merge segments into whole turns.
+        if role == TranscriptRole::Assistant && !self.keep_recent {
             if let Some(open) = self
                 .messages
                 .last_mut()
@@ -243,13 +280,73 @@ impl Collector {
 
         if self.messages.len() >= self.max_messages {
             self.truncated = true;
-            return Some(());
+            if self.keep_recent {
+                self.messages.remove(0);
+            } else {
+                return Some(());
+            }
         }
         self.messages.push(TranscriptMessage {
             role,
-            text: clip_chars(text, self.max_message_chars),
+            text: if self.keep_recent {
+                clip_recent_chars(text, self.max_message_chars)
+            } else {
+                clip_chars(text, self.max_message_chars)
+            },
         });
         None
+    }
+}
+
+fn clip_recent_chars(text: &str, max_chars: usize) -> String {
+    let skip = text.chars().count().saturating_sub(max_chars);
+    text.chars().skip(skip).collect()
+}
+
+fn visit_transcript_lines(
+    path: &Path,
+    recent: bool,
+    mut visitor: impl FnMut(&Value) -> Option<()>,
+) -> Result<(), ()> {
+    if !recent {
+        return visit_json_lines(path, visitor);
+    }
+    if !std::fs::metadata(path).map_err(|_| ())?.is_file() {
+        return Err(());
+    }
+    let mut file = std::fs::File::open(path).map_err(|_| ())?;
+    let start = file
+        .metadata()
+        .map_err(|_| ())?
+        .len()
+        .saturating_sub(RECENT_SCAN_BYTES);
+    file.seek(SeekFrom::Start(start.saturating_sub(1)))
+        .map_err(|_| ())?;
+    let at_line_boundary = if start > 0 {
+        let mut previous = [0u8; 1];
+        file.read_exact(&mut previous).map_err(|_| ())?;
+        previous[0] == b'\n'
+    } else {
+        true
+    };
+    let mut reader = BufReader::new(file.take(RECENT_SCAN_BYTES));
+    let mut line = Vec::new();
+    if !at_line_boundary {
+        // The seek can land inside a UTF-8 codepoint or a large tool record.
+        reader.read_until(b'\n', &mut line).map_err(|_| ())?;
+    }
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line).map_err(|_| ())? == 0 {
+            return Ok(());
+        }
+        // A live writer may still be appending the final JSON record. A partial
+        // record must not hide the complete recent turns before it.
+        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+            if visitor(&value).is_some() {
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -362,7 +459,7 @@ fn unwrap_user_query(value: &str) -> String {
 }
 
 fn read_codex(path: &Path, collector: &mut Collector) -> Result<(), ()> {
-    visit_json_lines(path, |value| {
+    visit_transcript_lines(path, collector.keep_recent, |value| {
         // `response_item` carries the durable turn record. `event_msg/user_message` repeats the
         // same user text as a live event, so reading only response items avoids duplicates.
         if value.get("type").and_then(Value::as_str) != Some("response_item") {
@@ -380,7 +477,7 @@ fn read_codex(path: &Path, collector: &mut Collector) -> Result<(), ()> {
 }
 
 fn read_claude(path: &Path, collector: &mut Collector) -> Result<(), ()> {
-    visit_json_lines(path, |value| {
+    visit_transcript_lines(path, collector.keep_recent, |value| {
         let role = match value.get("type").and_then(Value::as_str) {
             Some("user") => TranscriptRole::User,
             Some("assistant") => TranscriptRole::Assistant,
@@ -395,7 +492,7 @@ fn read_claude(path: &Path, collector: &mut Collector) -> Result<(), ()> {
 }
 
 fn read_pi(path: &Path, collector: &mut Collector) -> Result<(), ()> {
-    visit_json_lines(path, |value| {
+    visit_transcript_lines(path, collector.keep_recent, |value| {
         if value.get("type").and_then(Value::as_str) != Some("message") {
             return None;
         }
@@ -412,7 +509,7 @@ fn read_pi(path: &Path, collector: &mut Collector) -> Result<(), ()> {
 /// Grok indexes `summary.json`; the turns live in `chat_history.jsonl` in the same directory.
 fn read_grok(summary_path: &Path, collector: &mut Collector) -> Result<(), ()> {
     let history = summary_path.parent().ok_or(())?.join("chat_history.jsonl");
-    visit_json_lines(&history, |value| {
+    visit_transcript_lines(&history, collector.keep_recent, |value| {
         let role = match value.get("type").and_then(Value::as_str) {
             Some("user") => TranscriptRole::User,
             Some("assistant") => TranscriptRole::Assistant,
@@ -435,6 +532,85 @@ fn read_grok(summary_path: &Path, collector: &mut Collector) -> Result<(), ()> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn recent_activity_reads_the_tail_after_large_tool_records_and_partial_writes() {
+        let path = write_jsonl(
+            "recent-tail",
+            &[
+                r#"{"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"Old next step: launch yesterday"}]}}"#,
+            ],
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for _ in 0..300 {
+            writeln!(
+                file,
+                "{}",
+                serde_json::json!({"type":"tool_result","data":"padding".repeat(500)})
+            )
+            .unwrap();
+        }
+        writeln!(file, "{}", serde_json::json!({"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"现在先检查价格"}]}})).unwrap();
+        for text in [
+            "正在检查。".repeat(1200),
+            "检查结果：价格需要确认。\n下一步：联系负责人。".into(),
+        ] {
+            writeln!(file, "{}", serde_json::json!({"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":text}]}})).unwrap();
+        }
+        write!(file, "{{\"type\":").unwrap();
+        drop(file);
+        let transcript = read_recent_transcript("codex", path.to_str()).unwrap();
+        assert!(transcript.truncated);
+        let last = transcript.messages.last().unwrap();
+        assert!(last.text.ends_with("下一步：联系负责人。"));
+        assert!(
+            last.text.starts_with("检查结果："),
+            "the final response must not be hidden by earlier commentary"
+        );
+        assert!(last.text.chars().count() <= MAX_MESSAGE_CHARS);
+        assert!(!transcript
+            .messages
+            .iter()
+            .any(|message| message.text.contains("launch yesterday")));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn recent_activity_keeps_new_turns_beyond_the_preview_message_limit() {
+        let path = write_jsonl("recent-turns", &[]);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for turn in 0..600 {
+            writeln!(file, "{}", serde_json::json!({"type":"message","message":{"role":if turn % 2 == 0 {"user"} else {"assistant"},"content":[{"type":"text","text":format!("turn-{turn}")}]}})).unwrap();
+        }
+        drop(file);
+        let transcript = read_recent_transcript("pi", path.to_str()).unwrap();
+        assert_eq!(transcript.messages.len(), 12);
+        assert_eq!(transcript.messages.last().unwrap().text, "turn-599");
+        let preview = read_transcript("pi", path.to_str()).unwrap();
+        assert_eq!(preview.messages.len(), MAX_MESSAGES);
+        assert_eq!(preview.messages[0].text, "turn-0");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn recent_activity_does_not_skip_a_complete_record_at_the_tail_boundary() {
+        let path = write_jsonl("recent-boundary", &[]);
+        let latest = serde_json::json!({"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"Current conclusion"}]}}).to_string();
+        let padding = RECENT_SCAN_BYTES as usize - latest.len() - 1;
+        std::fs::write(&path, format!("earlier\n{latest}\n{}", " ".repeat(padding))).unwrap();
+        let transcript = read_recent_transcript("codex", path.to_str()).unwrap();
+        assert_eq!(
+            transcript.messages.last().unwrap().text,
+            "Current conclusion"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
 
     fn write_jsonl(name: &str, lines: &[&str]) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("herduck-transcript-{name}"));
