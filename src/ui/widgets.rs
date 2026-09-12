@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::state::Palette;
+use unicode_width::UnicodeWidthStr;
 
 pub(super) fn render_panel_shell(
     frame: &mut Frame,
@@ -140,7 +141,9 @@ pub(crate) fn action_button_text(hint: Option<&str>, label: &str) -> String {
 }
 
 pub(crate) fn action_button_width(hint: Option<&str>, label: &str) -> u16 {
-    action_button_text(hint, label).chars().count() as u16
+    action_button_text(hint, label)
+        .width()
+        .min(u16::MAX as usize) as u16
 }
 
 pub(crate) struct ActionButtonSpec<'a> {

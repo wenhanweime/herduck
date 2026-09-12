@@ -197,7 +197,9 @@ fn project_tree_activity(app: &AppState, project: &ProjectSummary) -> ProjectTre
 pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     if let Some(category) = app.projects.snapshot.diagnostic_category.as_ref() {
         return vec![ProjectTreeRow::Diagnostic(format!(
-            "Catalog unavailable · {category}"
+            "{} · {category}",
+            app.title_language
+                .text("Catalog unavailable", "会话目录暂不可用")
         ))];
     }
 
@@ -219,9 +221,13 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
         rows.extend(sessions.into_iter().map(ProjectTreeRow::Session));
         if rows.is_empty() {
             rows.push(ProjectTreeRow::Empty(if query.is_empty() {
-                "No sessions yet".to_string()
+                app.title_language
+                    .text("No sessions yet", "还没有会话")
+                    .to_string()
             } else {
-                "No matching sessions".to_string()
+                app.title_language
+                    .text("No matching sessions", "没有匹配的会话")
+                    .to_string()
             }));
         }
         return rows;
@@ -400,14 +406,20 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
             crate::app::state::ProjectGrouping::Topics => groups.is_empty(),
         };
         let label = if !app.projects.query.trim().is_empty() {
-            "No matching sessions"
+            app.title_language
+                .text("No matching sessions", "没有匹配的会话")
         } else if catalog_is_empty {
             match grouping {
-                crate::app::state::ProjectGrouping::Directories => "No indexed projects yet",
-                crate::app::state::ProjectGrouping::Topics => "No topics yet",
+                crate::app::state::ProjectGrouping::Directories => app
+                    .title_language
+                    .text("No indexed projects yet", "还没有索引到项目"),
+                crate::app::state::ProjectGrouping::Topics => {
+                    app.title_language.text("No topics yet", "还没有主题")
+                }
             }
         } else {
-            "No sessions in this filter"
+            app.title_language
+                .text("No sessions in this filter", "当前筛选条件下没有会话")
         };
         rows.push(ProjectTreeRow::Empty(label.to_string()));
         if catalog_is_empty {
@@ -430,7 +442,21 @@ fn scan_status_rows(app: &AppState) -> Vec<ProjectTreeRow> {
                 .as_deref()
                 .map(|category| format!(" · {category}"))
                 .unwrap_or_default();
-            ProjectTreeRow::ScanStatus(format!("{}: {}{detail}", status.adapter, status.state))
+            ProjectTreeRow::ScanStatus(format!(
+                "{}: {}{detail}",
+                status.adapter,
+                app.title_language.text(
+                    &status.state,
+                    match status.state.as_str() {
+                        "ready" => "已就绪",
+                        "failed" => "读取失败",
+                        "scanning" => "正在扫描",
+                        "disabled" => "已关闭",
+                        "pending" => "等待扫描",
+                        _ => &status.state,
+                    }
+                )
+            ))
         })
         .collect()
 }
@@ -651,7 +677,12 @@ pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect
         );
     }
 
-    let labels = ["Agents", "Sessions", "Projects", "Topics"];
+    let labels = [
+        "Agents",
+        app.title_language.text("Sessions", "会话"),
+        app.title_language.text("Projects", "项目"),
+        app.title_language.text("Topics", "主题"),
+    ];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 || rect.height == 0 {
             continue;
@@ -828,7 +859,10 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
     }
     render_sidebar_tabs(app, frame, geometry.sidebar_tabs);
 
-    let filters = [(ProjectFilter::All, "all"), (ProjectFilter::Open, "open")];
+    let filters = [
+        (ProjectFilter::All, app.title_language.text("all", "全部")),
+        (ProjectFilter::Open, app.title_language.text("open", "打开")),
+    ];
     for ((filter, label), rect) in filters.into_iter().zip(geometry.filter_tabs) {
         if rect.width == 0 {
             continue;
@@ -848,19 +882,28 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
         let focused = app.projects.search_focused;
         let (prefix, query) = if focused {
             (
-                "▌ SEARCH ",
+                app.title_language.text("▌ SEARCH ", "▌ 搜索 "),
                 if app.projects.query.is_empty() {
-                    "type to filter"
+                    app.title_language.text("type to filter", "输入内容筛选")
                 } else {
                     app.projects.query.as_str()
                 },
             )
         } else if app.projects.query.is_empty() {
             let placeholder = match app.sidebar_view {
-                crate::app::state::SidebarView::Sessions => "search sessions, agents, paths",
-                crate::app::state::SidebarView::Projects => "search projects, sessions, agents",
-                crate::app::state::SidebarView::Clusters => "search topics, sessions, agents",
-                crate::app::state::SidebarView::SpacesAgents => "search sessions",
+                crate::app::state::SidebarView::Sessions => app
+                    .title_language
+                    .text("search sessions, agents, paths", "搜索会话、Agent 或路径"),
+                crate::app::state::SidebarView::Projects => app.title_language.text(
+                    "search projects, sessions, agents",
+                    "搜索项目、会话或 Agent",
+                ),
+                crate::app::state::SidebarView::Clusters => app
+                    .title_language
+                    .text("search topics, sessions, agents", "搜索主题、会话或 Agent"),
+                crate::app::state::SidebarView::SpacesAgents => {
+                    app.title_language.text("search sessions", "搜索会话")
+                }
             };
             (" / ", placeholder)
         } else {
@@ -1041,18 +1084,25 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                     Style::default().fg(app.palette.subtext0),
                 ),
                 Span::styled(
-                    format!(" · {} automation", template.backend),
+                    format!(
+                        " · {} {}",
+                        template.backend,
+                        app.title_language.text("automation", "自动任务")
+                    ),
                     Style::default().fg(app.palette.overlay0),
                 ),
             ]),
             ProjectTreeRow::Thin { count, .. } => Line::from(Span::styled(
-                format!("  +{count} short sessions"),
+                format!(
+                    "  +{count} {}",
+                    app.title_language.text("short sessions", "简短会话")
+                ),
                 Style::default()
                     .fg(app.palette.overlay0)
                     .add_modifier(Modifier::DIM),
             )),
             ProjectTreeRow::LoadOlder { .. } => Line::from(Span::styled(
-                "  Load older…",
+                app.title_language.text("  Load older…", "  加载更早记录…"),
                 Style::default().fg(app.palette.accent),
             )),
             ProjectTreeRow::Empty(message) | ProjectTreeRow::Diagnostic(message) => {
@@ -1106,22 +1156,32 @@ pub(super) fn session_status_line<'a>(app: &AppState, session: &IndexedSessionSu
     let mut spans = vec![Span::raw("    ")];
     match session_agent_state(app, session) {
         Some((_, _, true)) => spans.push(Span::styled(
-            "○ inactive",
+            app.title_language.text("○ inactive", "○ 已暂停"),
             Style::default().fg(app.palette.overlay0),
         )),
         Some((state, seen, false)) => {
             let (glyph, glyph_style) = super::status::state_dot(state, seen, &app.palette);
             spans.push(Span::styled(format!("{glyph} "), glyph_style));
             spans.push(Span::styled(
-                super::status::state_label(state, seen),
+                app.title_language.text(
+                    super::status::state_label(state, seen),
+                    match (state, seen) {
+                        (crate::detect::AgentState::Working, _) => "正在进行",
+                        (crate::detect::AgentState::Blocked, _) => "等待答复",
+                        (crate::detect::AgentState::Idle, false) => "本轮已完成",
+                        _ => "空闲",
+                    },
+                ),
                 Style::default().fg(super::status::state_label_color(state, seen, &app.palette)),
             ));
         }
-        None if session.live => {
-            spans.push(Span::styled("open", Style::default().fg(app.palette.green)))
-        }
+        None if session.live => spans.push(Span::styled(
+            app.title_language.text("open", "已打开"),
+            Style::default().fg(app.palette.green),
+        )),
         None => spans.push(Span::styled(
-            "read-only history",
+            app.title_language
+                .text("read-only history", "历史记录 · 只读"),
             Style::default().fg(app.palette.overlay0),
         )),
     }
@@ -1162,14 +1222,20 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
 
     let Some(session) = session else {
         let block = Block::default()
-            .title(" Historical session ")
+            .title(
+                app.title_language
+                    .text(" Historical session ", " 历史会话 "),
+            )
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.palette.overlay0));
         frame.render_widget(
-            Paragraph::new("This session is no longer available in the current snapshot.")
-                .block(block)
-                .style(Style::default().fg(app.palette.subtext0))
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(app.title_language.text(
+                "This session is no longer available in the current snapshot.",
+                "此会话已不在当前记录中。",
+            ))
+            .block(block)
+            .style(Style::default().fg(app.palette.subtext0))
+            .wrap(Wrap { trim: false }),
             area,
         );
         return;
@@ -1184,7 +1250,11 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
                 Style::default().fg(backend_color(app, &session.backend)),
             ),
             Span::styled(
-                session.cwd.as_deref().unwrap_or("unknown cwd").to_string(),
+                session
+                    .cwd
+                    .as_deref()
+                    .unwrap_or(app.title_language.text("unknown cwd", "工作目录未知"))
+                    .to_string(),
                 Style::default().fg(app.palette.overlay0),
             ),
         ]),
@@ -1210,11 +1280,12 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
                 // coloured glyph inside monospace prose did not.
                 let (marker, accent) = match message.role {
                     crate::projects::transcript::TranscriptRole::User => {
-                        (" you ", app.palette.accent)
+                        (app.title_language.text(" you ", " 你 "), app.palette.accent)
                     }
-                    crate::projects::transcript::TranscriptRole::Assistant => {
-                        (" agent ", app.palette.green)
-                    }
+                    crate::projects::transcript::TranscriptRole::Assistant => (
+                        app.title_language.text(" agent ", " Agent "),
+                        app.palette.green,
+                    ),
                 };
                 lines.push(Line::from(vec![
                     Span::styled(
@@ -1249,14 +1320,20 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
             }
             if transcript.truncated {
                 lines.push(Line::from(Span::styled(
-                    "… earlier turns not shown",
+                    app.title_language
+                        .text("… earlier turns not shown", "… 更早的对话未显示"),
                     Style::default().fg(app.palette.overlay0),
                 )));
             }
         }
         Err(error) => {
             lines.push(Line::from(Span::styled(
-                error.message(),
+                app.title_language
+                    .text(
+                        &error.message(),
+                        "无法读取会话记录，请检查记录文件及读取权限。",
+                    )
+                    .to_string(),
                 Style::default().fg(app.palette.peach),
             )));
             // A failed resume is why the user landed here, so keep explaining it rather than
@@ -1264,7 +1341,12 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
             if let Some(reason) = app.projects.history_fallback_reason.as_deref() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
-                    reason.to_string(),
+                    app.title_language
+                        .text(
+                            reason,
+                            "暂时无法恢复原会话，请检查 Agent 与工作目录后重试。",
+                        )
+                        .to_string(),
                     Style::default().fg(app.palette.overlay0),
                 )));
             }
@@ -1279,15 +1361,22 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
                     .fg(app.palette.accent)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" back   ", Style::default().fg(app.palette.overlay0)),
             Span::styled(
-                "Enter / click again",
+                app.title_language.text(" back   ", " 返回   "),
+                Style::default().fg(app.palette.overlay0),
+            ),
+            Span::styled(
+                app.title_language
+                    .text("Enter / click again", "Enter / 再次点击"),
                 Style::default()
                     .fg(app.palette.accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                " open full context (agent stays stopped)",
+                app.title_language.text(
+                    " open full context (agent stays stopped)",
+                    " 打开完整上下文（Agent 保持停止）",
+                ),
                 Style::default().fg(app.palette.overlay0),
             ),
         ]));
@@ -1300,7 +1389,12 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
         .filter(|reason| !reason.starts_with("Read-only preview."))
     {
         lines.push(Line::from(Span::styled(
-            reason.to_string(),
+            app.title_language
+                .text(
+                    reason,
+                    "暂时无法恢复原会话，请检查 Agent 与工作目录后重试。",
+                )
+                .to_string(),
             Style::default().fg(app.palette.peach),
         )));
     }
@@ -1326,14 +1420,17 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
         );
         let draft = if app.projects.history_draft.is_empty() {
             Line::from(Span::styled(
-                "Type a message…",
+                app.title_language.text("Type a message…", "输入消息…"),
                 Style::default().fg(app.palette.overlay0),
             ))
         } else {
             Line::from(app.projects.history_draft.clone())
         };
         let composer_block = Block::default()
-            .title(" Enter 恢复 · 有内容时同时发送 · Shift+Enter 换行 ")
+            .title(app.title_language.text(
+                " Enter resumes · also sends a draft · Shift+Enter new line ",
+                " Enter 恢复 · 有内容时同时发送 · Shift+Enter 换行 ",
+            ))
             .borders(Borders::TOP)
             .border_style(Style::default().fg(app.palette.overlay0));
         let composer_inner = composer_block.inner(composer_area);
@@ -2892,6 +2989,64 @@ mod tests {
             text.contains("Enter") && text.contains("Shift+Enter"),
             "composer missing:\n{text}"
         );
+        assert!(text.contains("Enter resumes"));
+        assert!(!text.contains('恢'));
+    }
+
+    #[test]
+    fn history_resume_and_sidebar_controls_follow_the_selected_language() {
+        let mut state = AppState::test_new();
+        state.projects.snapshot = snapshot();
+        state.projects.history_session_key = Some("s1".into());
+        state.projects.history_view = crate::app::state::ProjectHistoryView::Full;
+        state.sidebar_view = crate::app::state::SidebarView::Projects;
+        for language in [
+            crate::config::TitleLanguage::Chinese,
+            crate::config::TitleLanguage::English,
+        ] {
+            state.title_language = language;
+            let sidebar = rendered_text(&state, Rect::new(0, 0, 60, 20));
+            assert!(
+                sidebar.contains(language.text("Projects", "项目")),
+                "{sidebar}"
+            );
+            assert!(
+                sidebar.contains(language.text("search projects", "搜索项目")),
+                "{sidebar}"
+            );
+            assert!(sidebar.contains(language.text("all", "全部")), "{sidebar}");
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24)).unwrap();
+            terminal
+                .draw(|frame| render_project_history(&state, frame, frame.area()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..24)
+                .map(|y| {
+                    let mut line = String::new();
+                    let mut x = 0;
+                    while x < 100 {
+                        let symbol = buffer[(x, y)].symbol();
+                        line.push_str(symbol);
+                        x += crate::ui::text::display_width(symbol).max(1) as u16;
+                    }
+                    line
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains(language.text("Enter resumes", "Enter 恢复")),
+                "{text}"
+            );
+            assert!(
+                text.contains(language.text("Type a message", "输入消息")),
+                "{text}"
+            );
+            assert!(
+                !text.contains(language.text("Enter 恢复", "Enter resumes")),
+                "{text}"
+            );
+        }
     }
 
     #[test]

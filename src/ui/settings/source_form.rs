@@ -32,16 +32,25 @@ pub(super) fn source_form(app: &AppState, width: u16) -> SettingsForm {
         },
         app,
     );
-    if titles {
-        form.field(
-            "Language",
-            if config.title_language == TitleLanguage::Chinese {
-                "中文"
-            } else {
-                "English"
-            },
-            app,
+    form.field(
+        app.title_language.text("Language", "语言"),
+        if config.title_language == TitleLanguage::Chinese {
+            "中文"
+        } else {
+            "English"
+        },
+        app,
+    );
+    if !titles {
+        form.text(
+            app.title_language.text(
+                "Also used for project briefings and follow-ups.",
+                "项目进展、下一步建议和跟进回复使用同一语言。",
+            ),
+            text,
         );
+    }
+    if titles {
         form.field(
             "Source order",
             if config.title_providers.is_none() {

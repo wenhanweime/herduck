@@ -41,8 +41,26 @@ asks the original Agent to identify and complete the next unfinished step using 
 
 Evidence is cached for 15 seconds and refreshed as indexed activity changes. While it loads, runtime
 states and conversation links remain usable. If a backend has no readable local transcript, the overview
-says that a detailed update is unavailable. Reading the overview makes no model or network requests.
-Choosing a follow-up uses the original Agent, with that Agent's existing tools and permissions.
+says that a detailed update is unavailable. Evidence reads are local. Choosing a follow-up uses the
+original Agent, with that Agent's existing tools and permissions.
+
+## Language
+
+`projects.summary.title_language` selects `en` or `zh` for automatic work descriptions, follow-up
+recommendations, controls, states, and feedback. Continuation instructions explicitly request progress
+updates and replies in that language. The language comes from the saved setting, not from individual
+conversations; config reload applies it without restarting the server.
+
+When recent evidence is in another language, a bounded background worker translates it using the
+configured **Summary** source order. Successful translations are cached by source content and language;
+normal refreshes and runtime heartbeats do not repeat those calls. Old results cannot cross a language
+or provider change. Off, Offline, and an empty Summary source list make no translation calls.
+
+Until a valid translation is available, the overview shows a message in the selected language and a
+read-only conversation link. It does not invent a recommendation or send an untranslated instruction.
+Original transcripts, authored plans, names, paths, and commands retain their exact content. Switching
+language does not create a second delivery for the same recommendation. An already queued instruction
+keeps the wording the person selected; its delivery status follows the current language.
 
 Delivery is bound to the original session, Agent, and terminal; replacing or closing that target cancels
 pending input. At most one follow-up can wait per pane, with 16 pending and 128 retained delivery records
@@ -70,14 +88,14 @@ These commands return JSON. Both overview commands use the public method `projec
 }
 ```
 
-The result has `type: "project_overview"` and an `overview` object with phase `counts`,
+The result has `type: "project_overview"` and an `overview` object with `language` (`en` or `zh`), phase `counts`,
 `observed_sessions`, `more_history_available`, `work`, and `suggestions`. Work items carry a prose
 `description`, `session_key`, `last_activity_at`, quote `update_origin`, and `evidence_read_at`
 (Unix milliseconds). Suggestions retain their `id`, `description`, `source`, `reason`, optional
 `session_key`, executable `prompt`, and any current `followup` delivery record.
 
-When `activity_loading` is true, read again after the background worker finishes. `refresh: true`
-requests fresh evidence without blocking on file reads. Reads do not change UI selection, saved plans,
+When `activity_loading` is true, read again after evidence or translation work finishes. `refresh: true`
+requests fresh evidence without blocking on file or provider work. Reads do not change UI selection, saved plans,
 Catalog revision, or running processes.
 
 After choosing a suggestion, use its exact `id` from the overview:

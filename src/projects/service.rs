@@ -172,6 +172,7 @@ pub(crate) enum ProjectCommand {
 
 pub(crate) struct ProjectService {
     activity_reader: super::activity::ActivityReader,
+    overview_localizer: super::localization::OverviewLocalizer,
     sender: Option<mpsc::Sender<ProjectCommand>>,
     snapshot: Arc<RwLock<ProjectsSnapshot>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -215,6 +216,7 @@ impl ProjectService {
     pub(crate) fn disabled() -> Self {
         Self {
             activity_reader: super::activity::ActivityReader::default(),
+            overview_localizer: super::localization::OverviewLocalizer::default(),
             sender: None,
             snapshot: Arc::new(RwLock::new(ProjectsSnapshot::empty())),
             worker: None,
@@ -238,6 +240,7 @@ impl ProjectService {
     fn degraded(category: &str) -> Self {
         Self {
             activity_reader: super::activity::ActivityReader::default(),
+            overview_localizer: super::localization::OverviewLocalizer::default(),
             sender: None,
             snapshot: Arc::new(RwLock::new(ProjectsSnapshot::degraded(category))),
             worker: None,
@@ -291,6 +294,7 @@ impl ProjectService {
         }
         Self {
             activity_reader: super::activity::ActivityReader::default(),
+            overview_localizer: super::localization::OverviewLocalizer::default(),
             sender: Some(sender),
             snapshot,
             worker,
@@ -331,7 +335,12 @@ impl ProjectService {
         project: &super::ProjectSummary,
         refresh: bool,
     ) -> super::activity::ActivityBatch {
-        self.activity_reader.for_project(project, refresh)
+        let mut activity = self.activity_reader.for_project(project, refresh);
+        activity.localization = self
+            .overview_localizer
+            .for_project(project, &activity, refresh);
+        activity.loading |= activity.localization.loading;
+        activity
     }
 
     pub(crate) fn start_background_scan(&mut self, roots: &[super::adapters::AdapterRoot]) {
@@ -495,6 +504,8 @@ impl ProjectService {
         if result.is_err() {
             self.summary_cancelled.store(true, Ordering::Release);
             self.summary_workers.clear();
+        } else {
+            self.overview_localizer.configure(summary);
         }
         result
     }

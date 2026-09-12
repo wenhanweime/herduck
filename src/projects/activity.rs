@@ -38,6 +38,7 @@ pub struct SessionActivity {
 pub(crate) struct ActivityBatch {
     pub sessions: Vec<SessionActivity>,
     pub loading: bool,
+    pub localization: super::localization::LocalizedText,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

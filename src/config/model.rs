@@ -549,7 +549,9 @@ impl From<SummaryConfigInput> for SummaryConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
 pub enum TitleLanguage {
     #[serde(rename = "zh", alias = "zh-CN", alias = "chinese")]
     Chinese,
@@ -559,6 +561,14 @@ pub enum TitleLanguage {
 }
 
 impl TitleLanguage {
+    /// The saved language also governs project briefings and continuation instructions.
+    pub(crate) fn text<'a>(self, english: &'a str, chinese: &'a str) -> &'a str {
+        match self {
+            Self::Chinese => chinese,
+            Self::English => english,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Chinese => "zh",

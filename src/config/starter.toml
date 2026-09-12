@@ -10,7 +10,7 @@ default_agent = "shell"
 [projects.summary]
 # pending = off, auto = try sources in order, local = offline names only.
 mode = "pending"
-title_language = "en" # "en" or "zh"
+title_language = "en" # "en" or "zh": names, project briefings and follow-ups
 providers = []
 
 # Add sources below in priority order: first, second, third, ...

@@ -1052,7 +1052,10 @@ impl App {
                     None => responses::encode_error(
                         request.id,
                         "not_found",
-                        "This follow-up is no longer available.",
+                        self.state.title_language.text(
+                            "This follow-up is no longer available.",
+                            "这条跟进已不可用。",
+                        ),
                     ),
                 };
             }
@@ -1065,7 +1068,10 @@ impl App {
                     None => responses::encode_error(
                         request.id,
                         "not_found",
-                        "This follow-up is no longer available.",
+                        self.state.title_language.text(
+                            "This follow-up is no longer available.",
+                            "这条跟进已不可用。",
+                        ),
                     ),
                 };
             }

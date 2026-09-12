@@ -5,6 +5,7 @@ pub(crate) mod classifier;
 pub(crate) mod cover;
 pub(crate) mod domain;
 pub(crate) mod followup;
+pub(crate) mod localization;
 pub(crate) mod overview;
 pub(crate) mod runtime;
 pub(crate) mod semantic;

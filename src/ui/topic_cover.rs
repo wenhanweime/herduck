@@ -25,6 +25,8 @@ const FIELD_LABELS: [&str; 5] = [
     "What's blocked",
 ];
 
+const FIELD_LABELS_ZH: [&str; 5] = ["本周目标", "下一步 1", "下一步 2", "下一步 3", "当前阻塞"];
+
 fn selected_topic(app: &AppState) -> Option<&ProjectSummary> {
     app.selected_project_summary()
 }
@@ -161,9 +163,12 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
     let geometry = topic_detail_geometry(app, area);
     let Some(topic) = selected_topic(app) else {
         frame.render_widget(
-            Paragraph::new("Project is no longer available. Esc returns to the list.")
-                .style(Style::default().fg(app.palette.subtext0))
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(app.title_language.text(
+                "Project is no longer available. Esc returns to the list.",
+                "项目已不可用，按 Esc 返回列表。",
+            ))
+            .style(Style::default().fg(app.palette.subtext0))
+            .wrap(Wrap { trim: false }),
             area,
         );
         return;
@@ -172,9 +177,9 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         Paragraph::new(format!(
             "{} · {}",
             if topic.kind == crate::projects::ProjectKind::Semantic {
-                "Topic"
+                app.title_language.text("Topic", "主题")
             } else {
-                "Project"
+                app.title_language.text("Project", "项目")
             },
             topic.display_name
         ))
@@ -189,7 +194,7 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         frame,
         geometry.edit,
         Some("e"),
-        "edit plan",
+        app.title_language.text("edit plan", "编辑计划"),
         Style::default()
             .fg(panel_contrast_fg(&app.palette))
             .bg(app.palette.accent)
@@ -199,7 +204,7 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         frame,
         geometry.refresh,
         Some("r"),
-        "refresh",
+        app.title_language.text("refresh", "刷新"),
         Style::default().fg(app.palette.subtext0),
     );
     if let Some(overview) = app.visible_project_overview() {
@@ -214,9 +219,12 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
     );
     frame.render_widget(
         Paragraph::new(if topic.next_cursor.is_some() {
-            "Conversations · older history below"
+            app.title_language.text(
+                "Conversations · older history below",
+                "会话 · 下方可加载更早记录",
+            )
         } else {
-            "Conversations"
+            app.title_language.text("Conversations", "会话")
         })
         .style(
             Style::default()
@@ -228,24 +236,34 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
     let rows = topic_detail_rows(app);
     if rows.is_empty() {
         frame.render_widget(
-            Paragraph::new(format!(
-                "No {}conversations in this {}{}.",
-                if app.projects.filter == ProjectFilter::Open {
-                    "open "
+            Paragraph::new(
+                if app.title_language == crate::config::TitleLanguage::Chinese {
+                    if app.projects.filter == ProjectFilter::Open {
+                        "当前没有打开的会话。".to_string()
+                    } else {
+                        "这里还没有会话。".to_string()
+                    }
                 } else {
-                    ""
+                    format!(
+                        "No {}conversations in this {}{}.",
+                        if app.projects.filter == ProjectFilter::Open {
+                            "open "
+                        } else {
+                            ""
+                        },
+                        if topic.kind == crate::projects::ProjectKind::Semantic {
+                            "Topic"
+                        } else {
+                            "Project"
+                        },
+                        if app.projects.filter == ProjectFilter::Open {
+                            ""
+                        } else {
+                            " yet"
+                        }
+                    )
                 },
-                if topic.kind == crate::projects::ProjectKind::Semantic {
-                    "Topic"
-                } else {
-                    "Project"
-                },
-                if app.projects.filter == ProjectFilter::Open {
-                    ""
-                } else {
-                    " yet"
-                },
-            ))
+            )
             .style(Style::default().fg(app.palette.overlay0)),
             geometry.sessions,
         );
@@ -283,7 +301,11 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
                 );
             }
             ProjectTreeRow::LoadOlder { .. } => frame.render_widget(
-                Paragraph::new("Load older conversations…").style(style),
+                Paragraph::new(
+                    app.title_language
+                        .text("Load older conversations…", "加载更早的会话…"),
+                )
+                .style(style),
                 hit.rect,
             ),
             _ => {}
@@ -291,9 +313,15 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
     }
     frame.render_widget(
         Paragraph::new(if topic.kind == crate::projects::ProjectKind::Semantic {
-            "1–3 follow-up · ↑↓ conversations · enter open · e plan · esc back"
+            app.title_language.text(
+                "1–3 follow-up · ↑↓ conversations · enter open · e plan · esc back",
+                "1–3 推进建议 · ↑↓ 选择会话 · Enter 打开 · e 计划 · Esc 返回",
+            )
         } else {
-            "1–3 follow-up · ↑↓ conversations · enter open · r refresh · esc back"
+            app.title_language.text(
+                "1–3 follow-up · ↑↓ conversations · enter open · r refresh · esc back",
+                "1–3 推进建议 · ↑↓ 选择会话 · Enter 打开 · r 刷新 · Esc 返回",
+            )
         })
         .style(Style::default().fg(app.palette.overlay0)),
         geometry.footer,
@@ -312,7 +340,13 @@ fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCove
             .map(|(i, step)| format!("{}. {step}", i + 1))
             .collect::<Vec<_>>()
             .join("; ");
-        let mut lines = vec![cover_line(app, "Goal", &cover.goal, "Not set", area.width)];
+        let mut lines = vec![cover_line(
+            app,
+            app.title_language.text("Goal", "目标"),
+            &cover.goal,
+            app.title_language.text("Not set", "尚未填写"),
+            area.width,
+        )];
         if area.height >= 5 && !cover.next_steps.is_empty() {
             lines.extend(
                 cover.next_steps.iter().enumerate().map(|(index, step)| {
@@ -320,13 +354,19 @@ fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCove
                 }),
             );
         } else {
-            lines.push(cover_line(app, "Next", &next, "Not set", area.width));
+            lines.push(cover_line(
+                app,
+                app.title_language.text("Next", "下一步"),
+                &next,
+                app.title_language.text("Not set", "尚未填写"),
+                area.width,
+            ));
         }
         lines.push(cover_line(
             app,
-            "Blocked",
+            app.title_language.text("Blocked", "阻塞"),
             &cover.blocked_note,
-            "None recorded",
+            app.title_language.text("None recorded", "暂无记录"),
             area.width,
         ));
         frame.render_widget(
@@ -352,12 +392,14 @@ fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCove
             app,
             frame,
             columns[0],
-            "This week's goal",
+            app.title_language.text("This week's goal", "本周目标"),
             &cover.goal,
-            "Add a goal",
+            app.title_language.text("Add a goal", "填写目标"),
         );
         let steps = if cover.next_steps.is_empty() {
-            "Add up to three next steps".to_string()
+            app.title_language
+                .text("Add up to three next steps", "最多填写三项下一步")
+                .to_string()
         } else {
             cover
                 .next_steps
@@ -380,24 +422,27 @@ fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCove
             app,
             frame,
             columns[2],
-            "Next steps",
+            app.title_language.text("Next steps", "下一步"),
             &steps,
-            "Add up to three next steps",
+            app.title_language
+                .text("Add up to three next steps", "最多填写三项下一步"),
         );
         cover_section(
             app,
             frame,
             columns[4],
-            "What's blocked",
+            app.title_language.text("What's blocked", "当前阻塞"),
             &cover.blocked_note,
-            "Add a blocker if needed",
+            app.title_language
+                .text("Add a blocker if needed", "如有阻塞请在此填写"),
         );
     } else {
         let mut lines = vec![cover_line(
             app,
-            "Goal",
+            app.title_language.text("Goal", "目标"),
             &cover.goal,
-            "Add this week's goal",
+            app.title_language
+                .text("Add this week's goal", "填写本周目标"),
             inner.width,
         )];
         // Reserve a line each for the goal and blocker before expanding the steps.
@@ -405,12 +450,15 @@ fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCove
         if inner.height >= expanded_height {
             if inner.height > expanded_height {
                 lines.push(Line::from(Span::styled(
-                    "Next steps",
+                    app.title_language.text("Next steps", "下一步"),
                     Style::default().fg(app.palette.accent),
                 )));
             }
             if cover.next_steps.is_empty() {
-                lines.push(Line::from("Add up to three next steps"));
+                lines.push(Line::from(
+                    app.title_language
+                        .text("Add up to three next steps", "最多填写三项下一步"),
+                ));
             } else {
                 lines.extend(cover.next_steps.iter().enumerate().map(|(i, step)| {
                     Line::from(format!(
@@ -433,17 +481,18 @@ fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCove
                 .join("; ");
             lines.push(cover_line(
                 app,
-                "Next",
+                app.title_language.text("Next", "下一步"),
                 &steps,
-                "Add next steps",
+                app.title_language.text("Add next steps", "填写下一步"),
                 inner.width,
             ));
         }
         lines.push(cover_line(
             app,
-            "Blocked",
+            app.title_language.text("Blocked", "阻塞"),
             &cover.blocked_note,
-            "Add a blocker if needed",
+            app.title_language
+                .text("Add a blocker if needed", "如有阻塞请在此填写"),
             inner.width,
         ));
         frame.render_widget(
@@ -465,7 +514,8 @@ fn cover_line(
     width: u16,
 ) -> Line<'static> {
     let prefix = format!("{label}: ");
-    let available = usize::from(width).saturating_sub(prefix.len());
+    let available =
+        usize::from(width).saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str()));
     Line::from(vec![
         Span::styled(prefix, Style::default().fg(app.palette.accent)),
         Span::raw(super::text::truncate_end(
@@ -546,11 +596,11 @@ pub(crate) fn topic_cover_editor_geometry(
         &[
             ActionButtonSpec {
                 hint: Some("↵"),
-                label: "save",
+                label: app.title_language.text("save", "保存"),
             },
             ActionButtonSpec {
                 hint: Some("esc"),
-                label: "cancel",
+                label: app.title_language.text("cancel", "取消"),
             },
         ],
         2,
@@ -576,7 +626,11 @@ pub(super) fn render_topic_cover_editor(app: &AppState, frame: &mut Frame, area:
     };
     let Some(layout) = topic_cover_editor_geometry(app, area) else {
         frame.render_widget(
-            Paragraph::new("Enlarge the terminal to edit. Esc cancels.").wrap(Wrap { trim: false }),
+            Paragraph::new(app.title_language.text(
+                "Enlarge the terminal to edit. Esc cancels.",
+                "请扩大终端窗口后编辑，按 Esc 取消。",
+            ))
+            .wrap(Wrap { trim: false }),
             inner,
         );
         return;
@@ -585,18 +639,29 @@ pub(super) fn render_topic_cover_editor(app: &AppState, frame: &mut Frame, area:
     render_modal_header(
         frame,
         Rect::new(inner.x, inner.y, inner.width, 1),
-        &format!("Topic plan · {}", editor.topic_name),
+        &format!(
+            "{} · {}",
+            app.title_language.text("Topic plan", "主题计划"),
+            editor.topic_name
+        ),
         &app.palette,
     );
     frame.render_widget(
-        Paragraph::new("tab next field · shift-enter new line · ctrl-u clear")
-            .style(Style::default().fg(app.palette.overlay0)),
+        Paragraph::new(app.title_language.text(
+            "tab next field · shift-enter new line · ctrl-u clear",
+            "Tab 下一项 · Shift-Enter 换行 · Ctrl-U 清空",
+        ))
+        .style(Style::default().fg(app.palette.overlay0)),
         Rect::new(inner.x, inner.y + 1, inner.width, 1),
     );
     for (index, area) in &layout.fields {
         let focused = *index == editor.focused_field;
         frame.render_widget(
-            Paragraph::new(FIELD_LABELS[*index]).style(Style::default().fg(if focused {
+            Paragraph::new(
+                app.title_language
+                    .text(FIELD_LABELS[*index], FIELD_LABELS_ZH[*index]),
+            )
+            .style(Style::default().fg(if focused {
                 app.palette.accent
             } else {
                 app.palette.subtext0
@@ -626,14 +691,22 @@ pub(super) fn render_topic_cover_editor(app: &AppState, frame: &mut Frame, area:
         }
     }
     frame.render_widget(
-        Paragraph::new(editor.error.as_str()).style(Style::default().fg(app.palette.red)),
+        Paragraph::new(
+            if editor.error == "Each field can contain up to 2000 characters" {
+                app.title_language
+                    .text(&editor.error, "每项最多可以填写 2000 个字符")
+            } else {
+                &editor.error
+            },
+        )
+        .style(Style::default().fg(app.palette.red)),
         layout.error,
     );
     render_action_button(
         frame,
         layout.save,
         Some("↵"),
-        "save",
+        app.title_language.text("save", "保存"),
         Style::default()
             .fg(panel_contrast_fg(&app.palette))
             .bg(app.palette.accent)
@@ -643,7 +716,7 @@ pub(super) fn render_topic_cover_editor(app: &AppState, frame: &mut Frame, area:
         frame,
         layout.cancel,
         Some("esc"),
-        "cancel",
+        app.title_language.text("cancel", "取消"),
         Style::default()
             .fg(app.palette.text)
             .bg(app.palette.surface0),
@@ -741,12 +814,20 @@ mod tests {
         terminal
             .draw(|frame| render_topic_detail(state, frame, frame.area()))
             .unwrap();
-        let buffer = terminal.backend().buffer();
-        (0..height)
+        buffer_text(terminal.backend().buffer())
+    }
+
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        (buffer.area.y..buffer.area.bottom())
             .map(|y| {
-                (0..width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
+                let mut line = String::new();
+                let mut x = buffer.area.x;
+                while x < buffer.area.right() {
+                    let symbol = buffer[(x, y)].symbol();
+                    line.push_str(symbol);
+                    x += (unicode_width::UnicodeWidthStr::width(symbol) as u16).max(1);
+                }
+                line
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -773,6 +854,54 @@ mod tests {
         assert_eq!(geometry.row_hits.len(), 1);
         assert!(geometry.row_hits[0].rect.y >= geometry.sessions.y);
         assert!(geometry.row_hits[0].rect.bottom() <= geometry.sessions.bottom());
+    }
+
+    #[test]
+    fn chinese_detail_and_editor_localize_controls_without_rewriting_authored_text() {
+        let mut state = fixture(true);
+        state.title_language = crate::config::TitleLanguage::Chinese;
+        let saved = state.selected_project_summary().unwrap().cover.clone();
+        let text = render_text(&state, 124, 32);
+        for expected in [
+            "主题 ·",
+            "编辑计划",
+            "刷新",
+            "现在在做什么",
+            "接下来可以这样推进",
+            "历史会话",
+            "历史记录 · 只读",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        for unwanted in [
+            "edit plan",
+            "refresh",
+            "What's happening",
+            "Suggested follow-ups",
+            "Conversations",
+            "read-only history",
+        ] {
+            assert!(!text.contains(unwanted), "mixed UI: {text}");
+        }
+        state.open_topic_cover_editor();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 32)).unwrap();
+        terminal
+            .draw(|frame| render_topic_cover_editor(&state, frame, frame.area()))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        for expected in [
+            "主题计划",
+            "本周目标",
+            "下一步 1",
+            "当前阻塞",
+            "保存",
+            "取消",
+            "Interview five users",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert_eq!(state.selected_project_summary().unwrap().cover, saved);
     }
 
     #[test]

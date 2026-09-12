@@ -67,7 +67,7 @@ impl AppState {
                     .map(|phase| (session.stable_key.clone(), phase))
             })
             .collect();
-        build_overview(project, &runtime, activity)
+        build_overview(project, &runtime, activity, self.title_language)
     }
 
     pub(crate) fn visible_project_overview(&self) -> Option<ProjectOverview> {
@@ -75,7 +75,10 @@ impl AppState {
         self.projects
             .overview
             .as_ref()
-            .filter(|overview| overview.project_key == project.canonical_key)
+            .filter(|overview| {
+                overview.project_key == project.canonical_key
+                    && overview.language == self.title_language
+            })
             .cloned()
             .or_else(|| Some(self.project_overview(project, &ActivityBatch::default())))
     }

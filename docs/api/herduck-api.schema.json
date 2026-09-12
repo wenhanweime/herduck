@@ -8786,6 +8786,10 @@
             "kind": {
               "$ref": "#/schemas/success_response/$defs/ProjectKind"
             },
+            "language": {
+              "$ref": "#/schemas/success_response/$defs/TitleLanguage",
+              "default": "en"
+            },
             "latest_activity_at": {
               "format": "int64",
               "type": [
@@ -10421,6 +10425,13 @@
             "agent_status"
           ],
           "type": "object"
+        },
+        "TitleLanguage": {
+          "enum": [
+            "zh",
+            "en"
+          ],
+          "type": "string"
         },
         "TopicCover": {
           "properties": {

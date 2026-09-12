@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use super::activity::{plain_excerpt, ActivityBatch, ActivityOrigin};
 use super::{ProjectKind, ProjectSummary};
+use crate::config::TitleLanguage;
 
 pub(crate) const OVERVIEW_SESSION_LIMIT: usize = 50;
 
@@ -23,14 +24,14 @@ pub enum WorkPhase {
 }
 
 impl WorkPhase {
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn label(self, language: TitleLanguage) -> &'static str {
         match self {
-            Self::Working => "working",
-            Self::NeedsInput => "needs input",
-            Self::Ready => "ready to continue",
-            Self::Paused => "inactive · ready to continue",
-            Self::Open => "open",
-            Self::History => "recorded conversation",
+            Self::Working => language.text("working", "正在进行"),
+            Self::NeedsInput => language.text("needs input", "等待你的答复"),
+            Self::Ready => language.text("ready to continue", "可以继续"),
+            Self::Paused => language.text("inactive · ready to continue", "已暂停 · 可以继续"),
+            Self::Open => language.text("open", "已打开"),
+            Self::History => language.text("recorded conversation", "历史会话"),
         }
     }
 
@@ -97,6 +98,8 @@ pub struct AdvanceSuggestion {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ProjectOverview {
+    #[serde(default)]
+    pub language: TitleLanguage,
     pub project_key: String,
     pub display_name: String,
     pub kind: ProjectKind,
@@ -113,6 +116,7 @@ pub(crate) fn build_overview(
     project: &ProjectSummary,
     runtime: &HashMap<String, WorkPhase>,
     activity: &ActivityBatch,
+    language: TitleLanguage,
 ) -> ProjectOverview {
     let mut sessions: Vec<_> = project.sessions.iter().collect();
     sessions.sort_by(|a, b| {
@@ -152,7 +156,7 @@ pub(crate) fn build_overview(
                 title: session.title.clone(),
                 backend: session.backend.clone(),
                 phase,
-                description: work_description(phase, evidence),
+                description: work_description(phase, evidence, activity, language),
                 last_activity_at: session.last_activity_at,
                 latest_update: evidence.and_then(|entry| entry.latest_update.clone()),
                 update_origin: evidence.and_then(|entry| entry.origin),
@@ -169,19 +173,30 @@ pub(crate) fn build_overview(
         push_suggestion(
             &mut suggestions,
             AdvanceSuggestion {
-                id: String::new(),
+                id: suggestion_id(
+                    project,
+                    Some(&item.session_key),
+                    "blocked",
+                    &item.session_key,
+                ),
                 followup: None,
-                title: format!("Unblock {}", plain_excerpt(&item.title, 100)),
+                title: language
+                    .text("Reply in this conversation", "答复此会话后继续")
+                    .into(),
                 description: format!(
                     "{} {}",
                     item.description,
-                    if chinese(&item.description) {
+                    language.text(
+                        "This conversation needs your answer before it can continue.",
                         "这个会话需要你的答复，才能继续推进。"
-                    } else {
-                        "This conversation needs your answer before it can continue."
-                    }
+                    )
                 ),
-                reason: format!("{} is waiting for your input", item.backend),
+                reason: language
+                    .text(
+                        "The Agent is waiting for your input",
+                        "Agent 正在等待你的答复",
+                    )
+                    .into(),
                 source: SuggestionSource::LiveState,
                 session_key: Some(item.session_key.clone()),
                 prompt: None,
@@ -198,11 +213,24 @@ pub(crate) fn build_overview(
             push_suggestion(
                 &mut suggestions,
                 AdvanceSuggestion {
-                    id: String::new(),
+                    id: suggestion_id(
+                        project,
+                        session_key.as_deref(),
+                        "saved_blocker",
+                        &cover.blocked_note,
+                    ),
                     followup: None,
-                    title: format!("Resolve: {}", plain_excerpt(&cover.blocked_note, 140)),
-                    description: cover.blocked_note.clone(),
-                    reason: "Blocker from your saved plan".into(),
+                    title: language
+                        .text("Resolve the saved blocker", "解决计划中的阻塞")
+                        .into(),
+                    description: activity
+                        .localization
+                        .get(&cover.blocked_note, language)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| untranslated(activity, language)),
+                    reason: language
+                        .text("Blocker from your saved plan", "来自你保存的计划：当前阻塞")
+                        .into(),
                     source: SuggestionSource::SavedPlan,
                     session_key,
                     prompt: None,
@@ -213,11 +241,19 @@ pub(crate) fn build_overview(
             push_suggestion(
                 &mut suggestions,
                 AdvanceSuggestion {
-                    id: String::new(),
+                    id: suggestion_id(project, None, "saved_step", step),
                     followup: None,
-                    title: plain_excerpt(step, 180),
-                    description: step.clone(),
-                    reason: "Next step from your saved plan".into(),
+                    title: language
+                        .text("Next step from your saved plan", "计划中的下一步")
+                        .into(),
+                    description: activity
+                        .localization
+                        .get(step, language)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| untranslated(activity, language)),
+                    reason: language
+                        .text("Next step from your saved plan", "来自你保存的计划：下一步")
+                        .into(),
                     source: SuggestionSource::SavedPlan,
                     session_key: None,
                     prompt: None,
@@ -235,21 +271,36 @@ pub(crate) fn build_overview(
             .find(|entry| entry.session_key == item.session_key)
         {
             for step in &evidence.next_steps {
+                let translated = activity.localization.get(step, language);
                 push_suggestion(
                     &mut suggestions,
                     AdvanceSuggestion {
-                        id: String::new(),
-                        followup: None,
-                        title: step.clone(),
-                        description: recommendation_description(item, step),
-                        reason: format!(
-                            "From {} · {}",
-                            item.backend,
-                            plain_excerpt(&item.title, 90)
+                        id: suggestion_id(
+                            project,
+                            Some(&item.session_key),
+                            "conversation_step",
+                            step,
                         ),
+                        followup: None,
+                        title: translated.map(str::to_string).unwrap_or_else(|| {
+                            language
+                                .text("Read the recorded next step", "查看原会话中的下一步")
+                                .into()
+                        }),
+                        description: translated
+                            .map(|text| {
+                                recommendation_description(item, step, text, activity, language)
+                            })
+                            .unwrap_or_else(|| untranslated(activity, language)),
+                        reason: language
+                            .text(
+                                "Next step recorded by the Agent",
+                                "Agent 在会话中提出的下一步",
+                            )
+                            .into(),
                         source: SuggestionSource::Conversation,
                         session_key: Some(item.session_key.clone()),
-                        prompt: Some(followup_prompt(step)),
+                        prompt: translated.map(|text| followup_prompt(text, language)),
                     },
                 );
             }
@@ -269,30 +320,36 @@ pub(crate) fn build_overview(
             {
                 continue;
             }
-            let (verb, reason) = match phase {
-                WorkPhase::Ready => ("Review", "Agent is ready for your next instruction"),
-                WorkPhase::Paused => (
-                    "Continue",
+            let reason = match phase {
+                WorkPhase::Ready => language.text(
+                    "Agent is ready for your next instruction",
+                    "Agent 已准备好接收下一条指令",
+                ),
+                WorkPhase::Paused => language.text(
                     "Agent is inactive and can continue from its previous context",
+                    "Agent 已暂停，可以从之前的上下文继续",
                 ),
-                WorkPhase::History => (
-                    "Follow up on",
+                WorkPhase::History => language.text(
                     "Read the latest record and confirm the next step",
+                    "根据最新记录确认下一步",
                 ),
-                WorkPhase::Open => ("Check", "Open conversation; activity is not confirmed"),
-                WorkPhase::Working => (
-                    "Follow",
+                WorkPhase::Open => language.text(
+                    "Open conversation; activity is not confirmed",
+                    "会话已打开，当前活动尚未确认",
+                ),
+                WorkPhase::Working => language.text(
                     "Agent is working; open it to see current progress",
+                    "Agent 正在执行，打开会话可查看进展",
                 ),
                 WorkPhase::NeedsInput => continue,
             };
             push_suggestion(
                 &mut suggestions,
                 AdvanceSuggestion {
-                    id: String::new(),
+                    id: suggestion_id(project, Some(&item.session_key), "continue", item.latest_update.as_deref().unwrap_or_default()),
                     followup: None,
-                    title: format!("{verb} {}", plain_excerpt(&item.title, 100)),
-                    description: if chinese(&item.description) {
+                    title: language.text("Continue the next unfinished step", "推进下一项未完成的工作").into(),
+                    description: if language == TitleLanguage::Chinese {
                         format!(
                             "{} 接下来可以让原 Agent 根据这些进展，找出并完成下一项未完成的工作。",
                             item.description
@@ -307,32 +364,16 @@ pub(crate) fn build_overview(
                         SuggestionSource::LiveState
                     },
                     session_key: Some(item.session_key.clone()),
-                    prompt: Some(if chinese(&item.description) {
-                        "请结合当前会话的目标和最新进展，找出下一项尚未完成的工作并继续执行，避免重复已完成的内容。完成后汇报结果；缺少必要决定时在此会话中向我说明。".into()
-                    } else {
-                        "Continue from this conversation's goal and latest progress. Identify and carry out the next unfinished step without repeating completed work. Report the result, or ask me here if a necessary decision is missing.".into()
-                    }),
+                    prompt: Some(language.text(
+                        "Continue from this conversation's goal and latest progress. Identify and carry out the next unfinished step without repeating completed work. Report the result, or ask me here if a necessary decision is missing. Use English for all progress updates, summaries, next steps and replies.",
+                        "请结合当前会话的目标和最新进展，找出下一项尚未完成的工作并继续执行，避免重复已完成的内容。完成后汇报结果；缺少必要决定时在此会话中向我说明。进展总结、下一步建议和回复都请使用简体中文。"
+                    ).into()),
                 },
             );
         }
     }
-    for suggestion in &mut suggestions {
-        // Runtime reports and native resume also advance last_activity_at. Only
-        // changed content should turn the same recommendation into a new action.
-        let mut digest = Sha256::new();
-        for value in [
-            project.canonical_key.as_str(),
-            suggestion.session_key.as_deref().unwrap_or_default(),
-            &suggestion.title,
-            &suggestion.description,
-            suggestion.prompt.as_deref().unwrap_or_default(),
-        ] {
-            digest.update((value.len() as u64).to_be_bytes());
-            digest.update(value.as_bytes());
-        }
-        suggestion.id = format!("{:x}", digest.finalize());
-    }
     ProjectOverview {
+        language,
         project_key: project.canonical_key.clone(),
         display_name: project.display_name.clone(),
         kind: project.kind,
@@ -346,21 +387,52 @@ pub(crate) fn build_overview(
     }
 }
 
-pub(crate) fn chinese(text: &str) -> bool {
-    text.chars().any(|c| matches!(c, '\u{3400}'..='\u{9fff}'))
+fn suggestion_id(
+    project: &ProjectSummary,
+    session: Option<&str>,
+    kind: &str,
+    evidence: &str,
+) -> String {
+    // Identity follows the original instruction, never a translation, runtime timestamp or label.
+    let mut digest = Sha256::new();
+    for value in [
+        project.canonical_key.as_str(),
+        session.unwrap_or_default(),
+        kind,
+        evidence,
+    ] {
+        digest.update((value.len() as u64).to_be_bytes());
+        digest.update(value.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn untranslated(activity: &ActivityBatch, language: TitleLanguage) -> String {
+    if activity.localization.loading {
+        language.text("Preparing an English summary of the latest record. You can view the original conversation meanwhile.",
+            "正在将最新记录整理为中文摘要，你可以先查看原会话。").into()
+    } else {
+        language.text("The latest record needs an English summary. View the original conversation; translated summaries require an available Summary source.",
+            "最新记录尚无中文摘要，可先查看原会话。摘要服务可用后会自动转换。").into()
+    }
 }
 
 fn work_description(
     phase: WorkPhase,
     evidence: Option<&super::activity::SessionActivity>,
+    activity: &ActivityBatch,
+    language: TitleLanguage,
 ) -> String {
     if let Some(evidence) = evidence {
         let request = evidence.latest_request.as_deref();
         let response = evidence.latest_response.as_deref();
         if phase == WorkPhase::Working {
             if let Some(request) = request {
+                let Some(request) = activity.localization.get(request, language) else {
+                    return untranslated(activity, language);
+                };
                 let request = plain_excerpt(request, 230);
-                return if chinese(&request) {
+                return if language == TitleLanguage::Chinese {
                     format!("正在推进这项请求：{request}")
                 } else {
                     format!("Working on this request: {request}")
@@ -368,38 +440,57 @@ fn work_description(
             }
         }
         if let Some(text) = evidence.latest_update.as_deref().or(response).or(request) {
-            return text.to_string();
+            return activity
+                .localization
+                .get(text, language)
+                .map(str::to_string)
+                .unwrap_or_else(|| untranslated(activity, language));
         }
     }
     match phase {
-        WorkPhase::Working => "The Agent is working; a detailed update has not been recorded yet.",
-        WorkPhase::NeedsInput => {
-            "The Agent is waiting for a decision or a reply in this conversation."
-        }
-        WorkPhase::Ready => {
-            "The Agent has finished its current turn and is ready for the next instruction."
-        }
-        WorkPhase::Paused => {
-            "The conversation is retained and can be resumed from its previous context."
-        }
-        WorkPhase::Open => {
-            "The conversation is open; a detailed activity update is not available yet."
-        }
-        WorkPhase::History => {
-            "This recorded conversation can be reopened to continue from its earlier context."
-        }
+        WorkPhase::Working => language.text(
+            "The Agent is working; a detailed update has not been recorded yet.",
+            "Agent 正在执行，暂时还没有记录详细进展。",
+        ),
+        WorkPhase::NeedsInput => language.text(
+            "The Agent is waiting for a decision or a reply in this conversation.",
+            "Agent 正在等待你在此会话中作出决定或回复。",
+        ),
+        WorkPhase::Ready => language.text(
+            "The Agent has finished its current turn and is ready for the next instruction.",
+            "Agent 已完成当前一轮，可以接收下一条指令。",
+        ),
+        WorkPhase::Paused => language.text(
+            "The conversation is retained and can be resumed from its previous context.",
+            "会话记录已保留，可以从之前的上下文继续。",
+        ),
+        WorkPhase::Open => language.text(
+            "The conversation is open; a detailed activity update is not available yet.",
+            "会话已打开，暂时还没有详细的进展记录。",
+        ),
+        WorkPhase::History => language.text(
+            "This recorded conversation can be reopened to continue from its earlier context.",
+            "可以重新打开此历史会话，从之前的上下文继续。",
+        ),
     }
     .into()
 }
 
-fn recommendation_description(item: &ProjectWorkItem, step: &str) -> String {
+fn recommendation_description(
+    item: &ProjectWorkItem,
+    original_step: &str,
+    step: &str,
+    activity: &ActivityBatch,
+    language: TitleLanguage,
+) -> String {
     let context = item
         .latest_update
         .as_deref()
-        .filter(|text| !text.contains(step.trim_end_matches(['。', '.'])))
+        .filter(|text| !text.contains(original_step.trim_end_matches(['。', '.'])))
+        .and_then(|text| activity.localization.get(text, language))
         .map(|text| plain_excerpt(text, 200))
         .unwrap_or_default();
-    if chinese(step) {
+    if language == TitleLanguage::Chinese {
         format!(
             "接下来建议{}。{}",
             step.trim_end_matches(['。', '.']),
@@ -414,11 +505,11 @@ fn recommendation_description(item: &ProjectWorkItem, step: &str) -> String {
     }
 }
 
-fn followup_prompt(step: &str) -> String {
-    if chinese(step) {
-        format!("请在当前会话中继续推进这项建议：\n\n{step}\n\n结合已有进展执行，避免重复已完成的工作，并汇报结果。")
+fn followup_prompt(step: &str, language: TitleLanguage) -> String {
+    if language == TitleLanguage::Chinese {
+        format!("请在当前会话中继续推进这项建议：\n\n{step}\n\n结合已有进展执行，避免重复已完成的工作，并汇报结果。进展总结、下一步建议和回复都请使用简体中文。")
     } else {
-        format!("Continue in this conversation with this suggested follow-up:\n\n{step}\n\nUse the existing progress, avoid repeating completed work, and report the result.")
+        format!("Continue in this conversation with this suggested follow-up:\n\n{step}\n\nUse the existing progress, avoid repeating completed work, and report the result. Use English for all progress updates, summaries, next steps and replies.")
     }
 }
 
@@ -426,7 +517,7 @@ fn push_suggestion(suggestions: &mut Vec<AdvanceSuggestion>, suggestion: Advance
     if suggestions.len() < 3
         && !suggestions
             .iter()
-            .any(|existing| existing.title == suggestion.title)
+            .any(|existing| existing.id == suggestion.id)
     {
         suggestions.push(suggestion);
     }
@@ -436,6 +527,14 @@ fn push_suggestion(suggestions: &mut Vec<AdvanceSuggestion>, suggestion: Advance
 pub(crate) mod tests {
     use super::*;
     use crate::projects::{IndexedSessionSummary, SessionClass, SessionRefKind, TopicCover};
+
+    fn build_overview(
+        project: &ProjectSummary,
+        runtime: &HashMap<String, WorkPhase>,
+        activity: &ActivityBatch,
+    ) -> ProjectOverview {
+        super::build_overview(project, runtime, activity, TitleLanguage::English)
+    }
 
     pub(crate) fn fixture_project() -> ProjectSummary {
         let sessions = [
@@ -492,7 +591,7 @@ pub(crate) mod tests {
             Some("session-1")
         );
         assert_eq!(overview.suggestions[0].source, SuggestionSource::LiveState);
-        assert!(overview.suggestions[0].title.contains("Confirm pricing"));
+        assert_eq!(overview.suggestions[0].title, "Reply in this conversation");
         assert_eq!(overview.work[2].phase, WorkPhase::History);
     }
 
@@ -512,6 +611,7 @@ pub(crate) mod tests {
                 ..Default::default()
             }],
             loading: false,
+            ..Default::default()
         };
         let overview = build_overview(&project, &HashMap::new(), &activity);
         assert_eq!(overview.suggestions[0].source, SuggestionSource::SavedPlan);
@@ -551,6 +651,7 @@ pub(crate) mod tests {
                 ..Default::default()
             }],
             loading: false,
+            ..Default::default()
         };
         let before = build_overview(&project, &HashMap::new(), &activity);
         project.sessions[0].last_activity_at += 5_000;
@@ -560,5 +661,131 @@ pub(crate) mod tests {
         activity.sessions[0].next_steps[0] = "Revise the consent form before submitting.".into();
         let changed = build_overview(&project, &HashMap::new(), &activity);
         assert_ne!(before.suggestions[0].id, changed.suggestions[0].id);
+    }
+
+    #[test]
+    fn configured_language_controls_prose_and_prompts_without_changing_action_identity() {
+        let project = fixture_project();
+        let request = "Finish the consent review.";
+        let response = "The invitations are ready for review.";
+        let step = "Submit for review, then deploy after approval.";
+        let activity = ActivityBatch {
+            sessions: vec![super::super::activity::SessionActivity {
+                session_key: "session-0".into(),
+                latest_request: Some(request.into()),
+                latest_update: Some(response.into()),
+                next_steps: vec![step.into()],
+                ..Default::default()
+            }],
+            localization: super::super::localization::LocalizedText {
+                language: TitleLanguage::Chinese,
+                values: HashMap::from([
+                    (request.into(), "完成同意书审核。".into()),
+                    (response.into(), "邀请函已准备好，可以提交审核。".into()),
+                    (step.into(), "提交审核，获批后再部署。".into()),
+                ]),
+                loading: false,
+            },
+            ..Default::default()
+        };
+        let states = HashMap::from([("session-0".into(), WorkPhase::Working)]);
+        let zh = super::build_overview(&project, &states, &activity, TitleLanguage::Chinese);
+        let en = super::build_overview(&project, &states, &activity, TitleLanguage::English);
+        assert_eq!(zh.language, TitleLanguage::Chinese);
+        assert_eq!(zh.work[0].description, "正在推进这项请求：完成同意书审核。");
+        assert!(zh.suggestions[0]
+            .description
+            .contains("接下来建议提交审核，获批后再部署"));
+        assert!(zh.suggestions[0]
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("回复都请使用简体中文"));
+        assert!(en.work[0].description.contains(request));
+        assert!(en.suggestions[0]
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("Use English for all progress updates"));
+        assert_eq!(zh.suggestions[0].id, en.suggestions[0].id);
+        assert_eq!(activity.sessions[0].next_steps, [step]);
+        // Cached translations cannot leak back into English mode.
+        for work in &en.work {
+            assert!(!work.description.contains('邀'));
+        }
+        assert_eq!(zh.work[0].latest_update.as_deref(), Some(response));
+    }
+
+    #[test]
+    fn opposite_language_evidence_is_read_only_until_a_valid_translation_is_available() {
+        let project = fixture_project();
+        for (language, response, step) in [
+            (
+                TitleLanguage::Chinese,
+                "The change passed checks.",
+                "Submit for review.",
+            ),
+            (TitleLanguage::English, "变更已通过检查。", "提交审核。"),
+        ] {
+            let activity = ActivityBatch {
+                sessions: vec![super::super::activity::SessionActivity {
+                    session_key: "session-0".into(),
+                    latest_update: Some(response.into()),
+                    next_steps: vec![step.into()],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            };
+            let overview = super::build_overview(&project, &HashMap::new(), &activity, language);
+            assert!(overview.suggestions[0].prompt.is_none());
+            assert_eq!(
+                overview.suggestions[0].session_key.as_deref(),
+                Some("session-0")
+            );
+            assert!(crate::projects::localization::matches_language(
+                &overview.work[0].description,
+                language
+            ));
+            assert!(crate::projects::localization::matches_language(
+                &overview.suggestions[0].description,
+                language
+            ));
+            assert!(!overview.suggestions[0].description.contains(step));
+        }
+    }
+
+    #[test]
+    fn english_summary_translates_chinese_evidence_and_keeps_complete_followup() {
+        let project = fixture_project();
+        let mut activity = ActivityBatch {
+            sessions: vec![super::super::activity::SessionActivity {
+                session_key: "session-0".into(),
+                latest_update: Some("检查已通过。".into()),
+                next_steps: vec!["请先提交审核，获得批准后再部署。".into()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        activity.localization.values = HashMap::from([
+            ("检查已通过。".into(), "The checks passed.".into()),
+            (
+                "请先提交审核，获得批准后再部署。".into(),
+                "Submit for review first, then deploy after approval.".into(),
+            ),
+        ]);
+        let overview =
+            super::build_overview(&project, &HashMap::new(), &activity, TitleLanguage::English);
+        assert_eq!(overview.work[0].description, "The checks passed.");
+        assert!(overview.suggestions[0]
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("Submit for review first, then deploy after approval."));
+        for suggestion in overview.suggestions {
+            assert!(crate::projects::localization::matches_language(
+                &suggestion.description,
+                TitleLanguage::English
+            ));
+        }
     }
 }

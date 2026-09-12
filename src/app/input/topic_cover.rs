@@ -191,9 +191,13 @@ impl App {
                 crate::app::ToastKind::Finished
             },
             title: if failed {
-                "Follow-up not sent"
+                self.state
+                    .title_language
+                    .text("Follow-up not sent", "跟进未发送")
             } else {
-                "Project follow-up"
+                self.state
+                    .title_language
+                    .text("Project follow-up", "项目跟进")
             }
             .into(),
             context: message.into(),
@@ -300,8 +304,25 @@ impl App {
             self.cancel_topic_cover_editor();
         } else if let Some(editor) = self.state.projects.cover_editor.as_mut() {
             editor.error = serde_json::from_str::<ErrorResponse>(&response)
-                .map(|response| response.error.message)
-                .unwrap_or_else(|_| "Could not save Topic cover".into());
+                .map(|response| {
+                    self.state
+                        .title_language
+                        .text(
+                            &response.error.message,
+                            match response.error.code.as_str() {
+                                "conflict" => "计划已在别处更新，请重新打开后再保存。",
+                                "not_found" => "此主题已不可用，请返回列表。",
+                                _ => "无法保存计划，请检查输入后重试。",
+                            },
+                        )
+                        .to_string()
+                })
+                .unwrap_or_else(|_| {
+                    self.state
+                        .title_language
+                        .text("Could not save Topic cover", "无法保存主题计划，请重试。")
+                        .into()
+                });
         }
     }
 
@@ -471,6 +492,57 @@ mod tests {
             }),
         );
         assert_eq!(missing["error"]["code"], "not_found");
+        assert!(app.state.terminals.is_empty());
+    }
+
+    #[tokio::test]
+    async fn language_change_replaces_cached_overview_for_ui_api_and_feedback() {
+        use crate::api::schema::ProjectOverviewGetParams;
+        use crate::config::TitleLanguage;
+        let (mut app, topic_key) = fixture();
+        app.sync_project_overview();
+        let original = app.state.visible_project_overview().unwrap();
+        assert_eq!(original.language, TitleLanguage::English);
+        let saved = app.state.selected_project_summary().unwrap().cover.clone();
+        for language in [TitleLanguage::Chinese, TitleLanguage::English] {
+            let mut summary = app.state.summary_config.clone();
+            summary.title_language = language;
+            app.project_service.configure_summaries(&summary).unwrap();
+            app.state.title_language = language;
+            app.state.summary_config = summary;
+            // No draw may display a cached briefing in the old language, even before the next tick.
+            assert_eq!(
+                app.state.visible_project_overview().unwrap().language,
+                language
+            );
+            app.sync_project_overview();
+            let visible = app.state.visible_project_overview().unwrap();
+            let response = api(
+                &mut app,
+                Method::ProjectOverviewGet(ProjectOverviewGetParams {
+                    project_key: topic_key.clone(),
+                    refresh: false,
+                }),
+            );
+            assert_eq!(
+                response["result"]["overview"],
+                serde_json::to_value(&visible).unwrap()
+            );
+            assert_eq!(visible.suggestions[0].id, original.suggestions[0].id);
+            assert!(crate::projects::localization::matches_language(
+                &visible.work[0].description,
+                language
+            ));
+            app.project_followup_feedback(
+                language.text("The instruction was sent.", "指令已发送。"),
+                false,
+            );
+            assert_eq!(
+                app.state.toast.as_ref().unwrap().title,
+                language.text("Project follow-up", "项目跟进")
+            );
+        }
+        assert_eq!(app.state.selected_project_summary().unwrap().cover, saved);
         assert!(app.state.terminals.is_empty());
     }
 

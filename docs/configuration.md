@@ -158,7 +158,12 @@ title_language = "zh"
 title_providers = []
 ```
 
-Titles default to English. Canonical language values are `en` and `zh`; `english`, `chinese`, and
+The language also controls project briefings, follow-up suggestions, buttons, delivery feedback, and
+the language requested in continuation prompts. Opposite-language evidence uses the configured Summary
+sources for background translation; Off, Offline, and `providers = []` make no translation calls.
+See [Project overview](project-overview.md#language) for caching and source preservation.
+
+Titles and briefings default to English. Canonical language values are `en` and `zh`; `english`, `chinese`, and
 `zh-CN` are accepted aliases. Keep these options inside `[projects.summary]`, before any `[[...]]`
 provider entries. The shared `mode` governs both naming and topic generation: independent naming
 sources do not bypass Off or Offline. Save and reopen Settings to apply the new configuration.

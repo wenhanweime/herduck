@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::config::TitleLanguage;
 use crate::projects::followup::{FollowupState, ProjectFollowup};
 
 use super::App;
@@ -14,6 +15,50 @@ struct FollowupTask {
     backend: String,
     prompt: String,
     awaiting_agent: bool,
+    message: FollowupMessage,
+}
+
+enum FollowupMessage {
+    Queued,
+    Sent,
+    Cancelled,
+    AgentExited,
+    TargetChanged,
+}
+
+impl FollowupMessage {
+    fn text(&self, language: TitleLanguage) -> &'static str {
+        match self {
+            Self::Queued => language.text(
+                "Queued for the original Agent; it will be sent when the Agent is ready.",
+                "已加入原 Agent 的跟进队列，空闲后会自动发送。",
+            ),
+            Self::Sent => language.text(
+                "Follow-up sent to the original Agent.",
+                "跟进指令已发送给原 Agent。",
+            ),
+            Self::Cancelled => language.text(
+                "Cancelled before the follow-up was sent.",
+                "已取消，跟进指令未发送。",
+            ),
+            Self::AgentExited => language.text(
+                "The original Agent exited before the follow-up was sent.",
+                "原 Agent 已退出，跟进指令未发送。",
+            ),
+            Self::TargetChanged => language.text(
+                "The original session or Agent changed; the follow-up was not sent.",
+                "原会话或 Agent 已改变，跟进指令未发送。",
+            ),
+        }
+    }
+}
+
+impl FollowupTask {
+    fn localized_result(&self, language: TitleLanguage) -> ProjectFollowup {
+        let mut result = self.result.clone();
+        result.message = self.message.text(language).into();
+        result
+    }
 }
 
 #[derive(Default)]
@@ -26,7 +71,7 @@ impl App {
         self.project_followups
             .tasks
             .get(id)
-            .map(|task| task.result.clone())
+            .map(|task| task.localized_result(self.state.title_language))
     }
 
     pub(crate) fn start_project_followup(
@@ -38,7 +83,13 @@ impl App {
             if existing.project_key != project_key {
                 return Err((
                     "not_found",
-                    "This follow-up belongs to another project.".into(),
+                    self.state
+                        .title_language
+                        .text(
+                            "This follow-up belongs to another project.",
+                            "这条跟进属于另一个项目。",
+                        )
+                        .into(),
                 ));
             }
             return Ok(existing);
@@ -46,7 +97,15 @@ impl App {
         let project = self
             .project_service
             .project_summary(project_key)
-            .map_err(|error| (error.code, error.message))?;
+            .map_err(|error| {
+                (
+                    error.code,
+                    self.state
+                        .title_language
+                        .text(&error.message, "无法读取此项目，请刷新后重试。")
+                        .into(),
+                )
+            })?;
         let activity = self.project_service.recent_activity(&project, false);
         let overview = self.state.project_overview(&project, &activity);
         let suggestion = overview
@@ -55,11 +114,23 @@ impl App {
             .find(|item| item.id == suggestion_id)
             .ok_or((
                 "conflict",
-                "This suggestion has changed. Refresh the project and choose it again.".into(),
+                self.state
+                    .title_language
+                    .text(
+                        "This suggestion has changed. Refresh the project and choose it again.",
+                        "这条建议已更新，请刷新项目后重新选择。",
+                    )
+                    .into(),
             ))?;
         let prompt = suggestion.prompt.clone().ok_or((
             "invalid_params",
-            "This suggestion needs your answer or a plan edit. Open it to continue.".into(),
+            self.state
+                .title_language
+                .text(
+                    "This suggestion needs your answer or a plan edit. Open it to continue.",
+                    "这条建议暂时不能直接执行，请打开会话查看或编辑计划。",
+                )
+                .into(),
         ))?;
         let session = project
             .sessions
@@ -67,7 +138,13 @@ impl App {
             .find(|item| Some(&item.stable_key) == suggestion.session_key.as_ref())
             .ok_or((
                 "not_found",
-                "The original conversation is no longer available.".into(),
+                self.state
+                    .title_language
+                    .text(
+                        "The original conversation is no longer available.",
+                        "原会话已不可用。",
+                    )
+                    .into(),
             ))?
             .clone();
         self.queue_project_followup(
@@ -97,7 +174,13 @@ impl App {
         {
             return Err((
                 "busy",
-                "Wait for an earlier follow-up to be delivered before adding another.".into(),
+                self.state
+                    .title_language
+                    .text(
+                        "Wait for an earlier follow-up to be delivered before adding another.",
+                        "请等待已有跟进发送后再添加新的建议。",
+                    )
+                    .into(),
             ));
         }
         if self.project_followups.tasks.len() >= MAX_FOLLOWUPS {
@@ -124,7 +207,13 @@ impl App {
                 if session.ref_value.starts_with("herduck-live:") {
                     return Err((
                         "not_found",
-                        "This Agent no longer has a running conversation to continue.".into(),
+                        self.state
+                            .title_language
+                            .text(
+                                "This Agent no longer has a running conversation to continue.",
+                                "此 Agent 已没有可继续的运行中会话。",
+                            )
+                            .into(),
                     ));
                 }
                 if session
@@ -132,11 +221,22 @@ impl App {
                     .as_deref()
                     .is_none_or(|path| !std::path::Path::new(path).is_dir())
                 {
-                    return Err(("resume_failed", "The original working directory is unavailable. Open the conversation to choose where to continue.".into()));
+                    return Err(("resume_failed", self.state.title_language.text("The original working directory is unavailable. Open the conversation to choose where to continue.", "原工作目录已不可用，请打开会话选择继续的位置。").into()));
                 }
-                let (index, pane_id) = self
-                    .spawn_catalog_session_resume(session)
-                    .map_err(|reason| ("resume_failed", reason))?;
+                let (index, pane_id) =
+                    self.spawn_catalog_session_resume(session)
+                        .map_err(|reason| {
+                            (
+                                "resume_failed",
+                                self.state
+                                    .title_language
+                                    .text(
+                                        &reason,
+                                        "无法恢复原会话，请检查 Agent 和工作目录后重试。",
+                                    )
+                                    .into(),
+                            )
+                        })?;
                 (index, pane_id, true)
             }
         };
@@ -149,14 +249,26 @@ impl App {
             .cloned()
             .ok_or((
                 "not_found",
-                "The original pane is no longer available.".into(),
+                self.state
+                    .title_language
+                    .text(
+                        "The original pane is no longer available.",
+                        "原会话窗口已不可用。",
+                    )
+                    .into(),
             ))?;
         if self.terminal_runtimes.get(&terminal_id).is_none() {
             let (rows, cols) = self.state.estimate_pane_size();
             if !self.start_pending_agent_resume_for_terminal(&terminal_id, rows, cols, true) {
                 return Err((
                     "resume_failed",
-                    "The original Agent could not be resumed in its pane.".into(),
+                    self.state
+                        .title_language
+                        .text(
+                            "The original Agent could not be resumed in its pane.",
+                            "无法在原窗口恢复此 Agent。",
+                        )
+                        .into(),
                 ));
             }
             awaiting_agent = true;
@@ -174,12 +286,24 @@ impl App {
         {
             return Err((
                 "busy",
-                "This conversation already has a follow-up waiting to be delivered.".into(),
+                self.state
+                    .title_language
+                    .text(
+                        "This conversation already has a follow-up waiting to be delivered.",
+                        "此会话已有一条等待发送的跟进。",
+                    )
+                    .into(),
             ));
         }
         let public_pane_id = self.public_pane_id(ws_idx, pane_id).ok_or((
             "not_found",
-            "The original pane is no longer available.".into(),
+            self.state
+                .title_language
+                .text(
+                    "The original pane is no longer available.",
+                    "原会话窗口已不可用。",
+                )
+                .into(),
         ))?;
         let result = ProjectFollowup {
             id: suggestion_id.to_string(),
@@ -188,8 +312,7 @@ impl App {
             pane_id: public_pane_id,
             title: title.to_string(),
             state: FollowupState::Queued,
-            message: "Queued for the original Agent; it will be sent when the Agent is ready."
-                .into(),
+            message: String::new(),
             created_at: crate::projects::runtime::unix_time_ms(),
         };
         self.project_followups.tasks.insert(
@@ -201,12 +324,19 @@ impl App {
                 backend: session.backend.clone(),
                 prompt,
                 awaiting_agent,
+                message: FollowupMessage::Queued,
             },
         );
         self.flush_project_followups();
         self.project_followup(suggestion_id).ok_or((
             "internal_error",
-            "Could not retain the follow-up status.".into(),
+            self.state
+                .title_language
+                .text(
+                    "Could not retain the follow-up status.",
+                    "无法保留跟进状态。",
+                )
+                .into(),
         ))
     }
 
@@ -217,7 +347,7 @@ impl App {
             })
         {
             task.result.state = FollowupState::Cancelled;
-            task.result.message = "The original Agent exited before the follow-up was sent.".into();
+            task.message = FollowupMessage::AgentExited;
             task.prompt.clear();
         }
     }
@@ -226,10 +356,10 @@ impl App {
         let task = self.project_followups.tasks.get_mut(id)?;
         if task.result.state == FollowupState::Queued {
             task.result.state = FollowupState::Cancelled;
-            task.result.message = "Cancelled before the follow-up was sent.".into();
+            task.message = FollowupMessage::Cancelled;
             task.prompt.clear();
         }
-        Some(task.result.clone())
+        Some(task.localized_result(self.state.title_language))
     }
 
     pub(crate) fn annotate_project_followups(
@@ -246,7 +376,7 @@ impl App {
                             && task.result.project_key == overview.project_key
                             && Some(&task.result.session_key) == suggestion.session_key.as_ref()
                     })
-                    .map(|task| task.result.clone())
+                    .map(|task| task.localized_result(self.state.title_language))
             });
         }
     }
@@ -289,8 +419,7 @@ impl App {
             let Some((ws_idx, state, confirmed)) = target else {
                 if let Some(task) = self.project_followups.tasks.get_mut(&id) {
                     task.result.state = FollowupState::Cancelled;
-                    task.result.message =
-                        "The original session or Agent changed; the follow-up was not sent.".into();
+                    task.message = FollowupMessage::TargetChanged;
                     task.prompt.clear();
                 }
                 continue;
@@ -330,7 +459,7 @@ impl App {
                 Ok(()) => {
                     if let Some(task) = self.project_followups.tasks.get_mut(&id) {
                         task.result.state = FollowupState::Sent;
-                        task.result.message = "Follow-up sent to the original Agent.".into();
+                        task.message = FollowupMessage::Sent;
                         task.prompt.clear();
                     }
                 }
@@ -418,6 +547,55 @@ mod tests {
         app.flush_project_followups();
         assert!(receiver.try_recv().is_err());
         assert_eq!(app.state.workspaces[0].tabs.len(), before);
+        app.state.assert_invariants_for_test();
+    }
+
+    #[tokio::test]
+    async fn changing_language_localizes_delivery_status_without_repeating_or_rewriting_input() {
+        let (mut app, session, mut receiver) = fixture(AgentState::Working);
+        app.state.title_language = TitleLanguage::Chinese;
+        let instruction = "提交审核，获批后再部署。进展总结和回复都请使用简体中文。";
+        let queued = app
+            .queue_project_followup(
+                "project",
+                "same-instruction",
+                &session,
+                "提交审核",
+                instruction.into(),
+            )
+            .unwrap();
+        assert_eq!(
+            queued.message,
+            "已加入原 Agent 的跟进队列，空闲后会自动发送。"
+        );
+        app.state.title_language = TitleLanguage::English;
+        let again = app
+            .start_project_followup("project", "same-instruction")
+            .unwrap();
+        assert!(again.message.starts_with("Queued for the original Agent"));
+        assert!(receiver.try_recv().is_err());
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        app.state.terminals.get_mut(&terminal_id).unwrap().state = AgentState::Idle;
+        app.flush_project_followups();
+        assert_eq!(receiver.try_recv().unwrap(), format!("{instruction}\r"));
+        assert_eq!(
+            app.project_followup("same-instruction").unwrap().message,
+            "Follow-up sent to the original Agent."
+        );
+        app.state.title_language = TitleLanguage::Chinese;
+        assert_eq!(
+            app.start_project_followup("project", "same-instruction")
+                .unwrap()
+                .message,
+            "跟进指令已发送给原 Agent。"
+        );
+        app.flush_project_followups();
+        assert!(receiver.try_recv().is_err());
+        let error = app
+            .start_project_followup("different-project", "same-instruction")
+            .unwrap_err();
+        assert_eq!(error.1, "这条跟进属于另一个项目。");
         app.state.assert_invariants_for_test();
     }
 

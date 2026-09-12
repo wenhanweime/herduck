@@ -8,8 +8,9 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{AppState, ProjectOverviewAction, ProjectOverviewHit};
+use crate::config::TitleLanguage;
 use crate::projects::followup::FollowupState;
-use crate::projects::overview::{chinese, AdvanceSuggestion, ProjectOverview, WorkPhase};
+use crate::projects::overview::{AdvanceSuggestion, ProjectOverview, SuggestionSource, WorkPhase};
 
 use super::widgets::{panel_contrast_fg, render_action_button};
 
@@ -34,8 +35,8 @@ struct BriefingLayout {
     suggestions: Vec<SuggestionArea>,
 }
 
-fn action_label(suggestion: &AdvanceSuggestion) -> &'static str {
-    let zh = chinese(&suggestion.description);
+fn action_label(suggestion: &AdvanceSuggestion, language: TitleLanguage) -> &'static str {
+    let zh = language == TitleLanguage::Chinese;
     if let Some(followup) = &suggestion.followup {
         return match (followup.state, zh) {
             (FollowupState::Queued, true) => "取消待发送的跟进",
@@ -45,6 +46,9 @@ fn action_label(suggestion: &AdvanceSuggestion) -> &'static str {
             (FollowupState::Cancelled, true) => "已取消 · 查看会话",
             (FollowupState::Cancelled, false) => "Cancelled · view session",
         };
+    }
+    if suggestion.prompt.is_none() && suggestion.source == SuggestionSource::Conversation {
+        return language.text("View conversation →", "查看会话 →");
     }
     match (
         suggestion.prompt.is_some(),
@@ -144,7 +148,8 @@ fn layout(overview: &ProjectOverview, area: Rect) -> BriefingLayout {
         let source = Rect::new(area.x, body.bottom(), width, source_height);
         let action_y = source.bottom();
         let primary_width =
-            (action_label(&overview.suggestions[index]).width() as u16 + 5).min(width);
+            (action_label(&overview.suggestions[index], overview.language).width() as u16 + 5)
+                .min(width);
         let primary = Rect::new(area.x, action_y, primary_width, 1);
         let secondary_x = primary.right().saturating_add(2);
         let secondary = Rect::new(
@@ -206,13 +211,29 @@ fn clipped(text: &str, width: u16) -> String {
 fn scope(overview: &ProjectOverview) -> String {
     let mut parts = Vec::new();
     if overview.more_history_available {
-        parts.push(format!("Latest {}", overview.observed_sessions));
+        parts.push(if overview.language == TitleLanguage::Chinese {
+            format!("最近 {} 个会话", overview.observed_sessions)
+        } else {
+            format!("Latest {}", overview.observed_sessions)
+        });
     }
     for (count, label) in [
-        (overview.counts.working, "working"),
-        (overview.counts.needs_input, "need input"),
-        (overview.counts.ready, "ready"),
-        (overview.counts.paused, "paused"),
+        (
+            overview.counts.working,
+            overview.language.text("working", "正在进行"),
+        ),
+        (
+            overview.counts.needs_input,
+            overview.language.text("need input", "等待答复"),
+        ),
+        (
+            overview.counts.ready,
+            overview.language.text("ready", "可以继续"),
+        ),
+        (
+            overview.counts.paused,
+            overview.language.text("paused", "已暂停"),
+        ),
     ] {
         if count > 0 {
             parts.push(format!("{count} {label}"));
@@ -228,7 +249,7 @@ pub(super) fn render_project_overview(
     overview: &ProjectOverview,
 ) {
     let layout = layout(overview, area);
-    let zh = overview.work.iter().any(|item| chinese(&item.description));
+    let zh = overview.language == TitleLanguage::Chinese;
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
@@ -258,7 +279,12 @@ pub(super) fn render_project_overview(
         );
         frame.render_widget(
             Paragraph::new(clipped(
-                &format!("{} · {} · {}", item.title, item.backend, item.phase.label()),
+                &format!(
+                    "{} · {} · {}",
+                    item.title,
+                    item.backend,
+                    item.phase.label(overview.language)
+                ),
                 entry.source.width,
             ))
             .style(Style::default().fg(app.palette.subtext0)),
@@ -280,22 +306,15 @@ pub(super) fn render_project_overview(
     );
     for entry in layout.suggestions {
         let suggestion = &overview.suggestions[entry.index];
-        let text = if let Some(followup) = suggestion
+        let text = if suggestion
             .followup
             .as_ref()
-            .filter(|item| item.state == FollowupState::Queued)
+            .is_some_and(|item| item.state == FollowupState::Queued)
         {
-            if chinese(&suggestion.description) {
-                format!(
-                    "已安排下一轮跟进：{}。Agent 完成当前工作后会收到这条指令。",
-                    followup.title.trim_end_matches(['。', '.'])
-                )
-            } else {
-                format!(
-                    "Queued next: {}. The Agent will receive this after its current work.",
-                    followup.title.trim_end_matches(['。', '.'])
-                )
-            }
+            overview.language.text(
+                "The selected follow-up is queued. The original Agent will receive the instruction after its current work.",
+                "已安排下一轮跟进。原 Agent 完成当前工作后会收到你选定的指令。"
+            ).into()
         } else {
             suggestion.description.clone()
         };
@@ -320,7 +339,7 @@ pub(super) fn render_project_overview(
             frame,
             entry.primary,
             Some(&(entry.index + 1).to_string()),
-            action_label(suggestion),
+            action_label(suggestion, overview.language),
             Style::default()
                 .fg(panel_contrast_fg(&app.palette))
                 .bg(app.palette.accent)
@@ -328,7 +347,7 @@ pub(super) fn render_project_overview(
         );
         if entry.secondary.width >= 12 && suggestion.session_key.is_some() {
             frame.render_widget(
-                Paragraph::new(if chinese(&suggestion.description) {
+                Paragraph::new(if zh {
                     "查看会话"
                 } else {
                     "View conversation"
@@ -341,9 +360,12 @@ pub(super) fn render_project_overview(
     if overview.suggestions.is_empty() {
         let y = layout.next_heading.bottom().max(area.y);
         frame.render_widget(
-            Paragraph::new("Follow-ups appear as conversations record their progress.")
-                .style(Style::default().fg(app.palette.subtext0))
-                .wrap(Wrap { trim: true }),
+            Paragraph::new(overview.language.text(
+                "Follow-ups appear as conversations record their progress.",
+                "会话产生进展记录后，这里会显示下一步建议。",
+            ))
+            .style(Style::default().fg(app.palette.subtext0))
+            .wrap(Wrap { trim: true }),
             Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
         );
     }
@@ -353,8 +375,22 @@ pub(super) fn render_project_overview(
 mod tests {
     use super::*;
     use crate::projects::activity::{ActivityBatch, ActivityOrigin, SessionActivity};
-    use crate::projects::overview::{build_overview, tests::fixture_project};
+    use crate::projects::overview::tests::fixture_project;
+    use crate::projects::ProjectSummary;
     use std::collections::HashMap;
+
+    fn build_overview(
+        project: &ProjectSummary,
+        runtime: &HashMap<String, WorkPhase>,
+        activity: &ActivityBatch,
+    ) -> ProjectOverview {
+        crate::projects::overview::build_overview(
+            project,
+            runtime,
+            activity,
+            TitleLanguage::English,
+        )
+    }
 
     fn fixture() -> ProjectOverview {
         build_overview(
@@ -375,8 +411,94 @@ mod tests {
                     read_at: 100,
                 }],
                 loading: false,
+                ..Default::default()
             },
         )
+    }
+
+    #[test]
+    fn chinese_controls_counts_empty_states_and_hit_areas_follow_the_saved_language() {
+        let mut overview = crate::projects::overview::build_overview(
+            &fixture_project(),
+            &HashMap::from([("session-0".into(), WorkPhase::Working)]),
+            &ActivityBatch::default(),
+            TitleLanguage::Chinese,
+        );
+        // Even source titles in another language cannot select English controls.
+        overview.work[0].description = "正在核对同意书，邀请函准备提交审核。".into();
+        overview.suggestions[0].description = "建议先提交审核，获得批准后再发送邀请函。".into();
+        for (width, height) in [(120, 24), (76, 16), (48, 16)] {
+            let (text, area) = draw(&overview, width, height);
+            for expected in [
+                "现在在做什么",
+                "正在进行",
+                "接下来可以这样推进",
+                "推进此建议",
+            ] {
+                assert!(text.contains(expected), "missing {expected}: {text}");
+            }
+            for english in [
+                "What's happening",
+                "Suggested follow-ups",
+                "working",
+                "Continue with this",
+                "View conversation",
+            ] {
+                assert!(!text.contains(english), "mixed control {english}: {text}");
+            }
+            for hit in overview_hit_areas(&overview, area) {
+                assert_eq!(hit.rect.intersection(area), hit.rect);
+            }
+        }
+        overview.suggestions.clear();
+        let (text, _) = draw(&overview, 120, 24);
+        assert!(text.contains("会话产生进展记录后"));
+        overview.language = TitleLanguage::English;
+        let (text, _) = draw(&overview, 120, 24);
+        assert!(text.contains("What's happening"));
+        assert!(text.contains("Follow-ups appear"));
+    }
+
+    #[test]
+    fn queued_sent_and_cancelled_actions_do_not_infer_language_from_description() {
+        let mut overview = fixture();
+        for (state, zh, en) in [
+            (
+                FollowupState::Queued,
+                "取消待发送的跟进",
+                "Cancel queued follow-up",
+            ),
+            (
+                FollowupState::Sent,
+                "已交给 Agent · 查看",
+                "Sent to Agent · view",
+            ),
+            (
+                FollowupState::Cancelled,
+                "已取消 · 查看会话",
+                "Cancelled · view session",
+            ),
+        ] {
+            overview.suggestions[0].followup = Some(crate::projects::followup::ProjectFollowup {
+                id: "same-action".into(),
+                project_key: overview.project_key.clone(),
+                session_key: "session-0".into(),
+                pane_id: "pane-0".into(),
+                title: "A previously selected instruction".into(),
+                state,
+                message: String::new(),
+                created_at: 1,
+            });
+            assert_eq!(
+                action_label(&overview.suggestions[0], TitleLanguage::Chinese),
+                zh
+            );
+            overview.suggestions[0].description = "原始建议使用中文。".into();
+            assert_eq!(
+                action_label(&overview.suggestions[0], TitleLanguage::English),
+                en
+            );
+        }
     }
 
     fn draw(overview: &ProjectOverview, width: u16, height: u16) -> (String, Rect) {
@@ -391,9 +513,15 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let text = (area.y..area.bottom())
             .map(|y| {
-                (area.x..area.right())
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>()
+                let mut line = String::new();
+                let mut x = area.x;
+                while x < area.right() {
+                    let symbol = buffer[(x, y)].symbol();
+                    line.push_str(symbol);
+                    // A wide glyph's next cell is padding, not an actual space in the text.
+                    x += (symbol.width() as u16).max(1);
+                }
+                line
             })
             .collect::<Vec<_>>()
             .join("\n");
