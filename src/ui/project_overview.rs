@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
     Frame,
@@ -10,29 +10,25 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::state::{AppState, ProjectOverviewAction, ProjectOverviewHit};
 use crate::config::TitleLanguage;
 use crate::projects::followup::FollowupState;
-use crate::projects::overview::{AdvanceSuggestion, ProjectOverview, SuggestionSource, WorkPhase};
+use crate::projects::overview::{
+    AdvanceSuggestion, ProjectOverview, ProjectWorkItem, SuggestionSource, WorkPhase,
+};
 
 use super::widgets::{panel_contrast_fg, render_action_button};
-
-struct WorkArea {
-    index: usize,
-    body: Rect,
-    source: Rect,
-}
 
 struct SuggestionArea {
     index: usize,
     body: Rect,
-    source: Rect,
     primary: Rect,
     secondary: Rect,
 }
 
-struct BriefingLayout {
+#[derive(Default)]
+struct SessionLayout {
     heading: Rect,
-    next_heading: Rect,
-    work: Vec<WorkArea>,
+    progress: Rect,
     suggestions: Vec<SuggestionArea>,
+    view: Rect,
 }
 
 fn action_label(suggestion: &AdvanceSuggestion, language: TitleLanguage) -> &'static str {
@@ -85,130 +81,206 @@ fn primary_action(
     }
 }
 
-fn layout(overview: &ProjectOverview, area: Rect) -> BriefingLayout {
-    let mut result = BriefingLayout {
-        heading: Rect::default(),
-        next_heading: Rect::default(),
-        work: Vec::new(),
-        suggestions: Vec::new(),
+fn suggestions_for<'a>(
+    overview: &'a ProjectOverview,
+    key: &'a str,
+) -> impl Iterator<Item = (usize, &'a AdvanceSuggestion)> {
+    overview
+        .suggestions
+        .iter()
+        .enumerate()
+        .filter(move |(_, suggestion)| suggestion.session_key.as_deref() == Some(key))
+}
+
+fn next_step_text(suggestion: &AdvanceSuggestion, language: TitleLanguage) -> Option<String> {
+    if suggestion
+        .followup
+        .as_ref()
+        .is_some_and(|followup| followup.state == FollowupState::Queued)
+    {
+        return Some(if language == TitleLanguage::Chinese {
+            format!("当前工作结束后继续：{}", suggestion.title)
+        } else {
+            format!("Queued for after the current work: {}", suggestion.title)
+        });
+    }
+    // The progress above already explains the pending decision or missing translation.
+    if suggestion.prompt.is_none() && suggestion.source != SuggestionSource::SavedPlan {
+        return None;
+    }
+    let step = if suggestion.source == SuggestionSource::SavedPlan {
+        &suggestion.description
+    } else {
+        &suggestion.title
     };
-    if area.width == 0 || area.height == 0 {
+    Some(format!(
+        "{}{}",
+        language.text("Next: ", "下一步建议："),
+        step
+    ))
+}
+
+fn content_width(width: u16) -> u16 {
+    width.saturating_sub(2).min(120)
+}
+
+fn text_height(text: &str, width: u16, maximum: u16) -> u16 {
+    if text.is_empty() || width == 0 {
+        return 0;
+    }
+    Paragraph::new(text)
+        .wrap(Wrap { trim: true })
+        .line_count(width)
+        .min(usize::from(maximum)) as u16
+}
+
+pub(super) fn session_height(overview: &ProjectOverview, key: &str, width: u16) -> Option<u16> {
+    let item = overview.work.iter().find(|item| item.session_key == key)?;
+    let width = content_width(width);
+    let mut height = 1 + text_height(
+        &item.description,
+        width,
+        if item.phase == WorkPhase::History {
+            2
+        } else {
+            4
+        },
+    );
+    let mut has_suggestion = false;
+    for (_, suggestion) in suggestions_for(overview, key) {
+        has_suggestion = true;
+        height += 1 + next_step_text(suggestion, overview.language)
+            .map_or(0, |text| text_height(&text, width, 3));
+    }
+    Some(height + u16::from(!has_suggestion))
+}
+
+fn layout(overview: &ProjectOverview, key: &str, area: Rect) -> SessionLayout {
+    let mut result = SessionLayout::default();
+    let Some(item) = overview.work.iter().find(|item| item.session_key == key) else {
+        return result;
+    };
+    if area.width <= 2 || area.height == 0 {
         return result;
     }
-    let width = area.width.min(120);
-    let mut y = area.y;
-    if area.height >= 7 {
-        result.heading = Rect::new(area.x, y, width, 1);
-        y += 1;
-        let mut indices: Vec<_> = overview
-            .work
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| item.phase != WorkPhase::History)
-            .map(|(index, _)| index)
-            .collect();
-        indices.sort_by_key(|index| overview.work[*index].phase.attention_order());
-        if indices.is_empty() {
-            indices.extend(0..overview.work.len().min(2));
-        }
-        let count = if area.height >= 23 { 2 } else { 1 };
-        let body_height = if width >= 95 { 2 } else { 3 };
-        for index in indices.into_iter().take(count) {
-            let remaining = area.bottom().saturating_sub(y);
-            let height = body_height.min(remaining.saturating_sub(6));
-            if height == 0 {
-                break;
-            }
-            let body = Rect::new(area.x, y, width, height);
-            let source = Rect::new(area.x, body.bottom(), width, 1);
-            result.work.push(WorkArea {
-                index,
-                body,
-                source,
-            });
-            y = source.bottom();
-        }
-        if y + 3 < area.bottom() {
-            y += 1;
-        }
-        result.next_heading = Rect::new(area.x, y, width, 1);
-        y += 1;
-    }
-    let remaining = area.bottom().saturating_sub(y);
-    if remaining == 0 {
+    let width = content_width(area.width);
+    let x = area.x + 2;
+    result.heading = Rect::new(x, area.y, width, 1);
+    let mut y = area.y + 1;
+    if y == area.bottom() {
         return result;
     }
-    let minimum = if width >= 100 { 5 } else { 6 };
-    let count = usize::from((remaining / minimum).clamp(1, 3)).min(overview.suggestions.len());
-    for index in 0..count {
-        let height = (remaining / count as u16).min(8);
-        let source_height = u16::from(height >= 3);
-        let body_height = height.saturating_sub(source_height + 1).min(6);
-        let body = Rect::new(area.x, y, width, body_height);
-        let source = Rect::new(area.x, body.bottom(), width, source_height);
-        let action_y = source.bottom();
-        let primary_width =
-            (action_label(&overview.suggestions[index], overview.language).width() as u16 + 5)
-                .min(width);
-        let primary = Rect::new(area.x, action_y, primary_width, 1);
-        let secondary_x = primary.right().saturating_add(2);
-        let secondary = Rect::new(
-            secondary_x,
-            action_y,
-            width.saturating_sub(primary_width + 2),
+    // Keep each visible action with its own instruction. Short viewports omit later
+    // actions instead of exposing a shortcut whose source is off screen.
+    let suggestions: Vec<_> = suggestions_for(overview, key)
+        .take(usize::from((area.height.saturating_sub(1) / 2).max(1)))
+        .collect();
+    let action_rows = suggestions.len().max(1) as u16;
+    let text_rows = suggestions
+        .iter()
+        .filter(|(_, suggestion)| next_step_text(suggestion, overview.language).is_some())
+        .count() as u16;
+    let progress_height = text_height(
+        &item.description,
+        width,
+        if item.phase == WorkPhase::History {
+            2
+        } else {
+            4
+        },
+    )
+    .min(area.bottom().saturating_sub(y + action_rows + text_rows));
+    result.progress = Rect::new(x, y, width, progress_height);
+    y += progress_height;
+    if suggestions.is_empty() {
+        result.view = Rect::new(
+            x,
+            y,
+            width.min(
+                overview
+                    .language
+                    .text("View conversation →", "查看会话 →")
+                    .width() as u16,
+            ),
             1,
         );
+        return result;
+    }
+    for (position, (index, suggestion)) in suggestions.iter().enumerate() {
+        let later = &suggestions[position + 1..];
+        let reserved = 1
+            + later.len() as u16
+            + later
+                .iter()
+                .filter(|(_, item)| next_step_text(item, overview.language).is_some())
+                .count() as u16;
+        let height = next_step_text(suggestion, overview.language)
+            .map_or(0, |text| text_height(&text, width, 3))
+            .min(area.bottom().saturating_sub(y + reserved));
+        let body = Rect::new(x, y, width, height);
+        y += height;
+        let primary_width =
+            (action_label(suggestion, overview.language).width() as u16 + 5).min(width);
+        let primary = Rect::new(x, y, primary_width, 1);
+        let secondary_width = overview
+            .language
+            .text("View conversation", "查看会话")
+            .width() as u16;
+        let secondary = if !matches!(
+            primary_action(overview, suggestion),
+            ProjectOverviewAction::OpenConversation
+        ) && width >= primary_width + 2 + secondary_width
+        {
+            Rect::new(primary.right() + 2, y, secondary_width, 1)
+        } else {
+            Rect::default()
+        };
         result.suggestions.push(SuggestionArea {
-            index,
+            index: *index,
             body,
-            source,
             primary,
             secondary,
         });
-        y += height;
+        y += 1;
     }
     result
 }
 
-pub(crate) fn overview_hit_areas(
+pub(super) fn session_hit_areas(
     overview: &ProjectOverview,
+    key: &str,
     area: Rect,
 ) -> Vec<ProjectOverviewHit> {
-    let layout = layout(overview, area);
+    let layout = layout(overview, key, area);
     let mut hits = Vec::new();
-    for entry in layout.work {
-        hits.push(ProjectOverviewHit {
-            rect: entry.body.union(entry.source),
-            session_key: Some(overview.work[entry.index].session_key.clone()),
-            action: ProjectOverviewAction::OpenConversation,
-            shortcut: None,
-        });
+    let mut open = |rect: Rect| {
+        if rect.width > 0 && rect.height > 0 {
+            hits.push(ProjectOverviewHit {
+                rect,
+                session_key: Some(key.into()),
+                action: ProjectOverviewAction::OpenConversation,
+                shortcut: None,
+            });
+        }
+    };
+    open(layout.heading);
+    open(layout.view);
+    for entry in &layout.suggestions {
+        open(entry.secondary);
     }
     for entry in layout.suggestions {
         let suggestion = &overview.suggestions[entry.index];
         hits.push(ProjectOverviewHit {
             rect: entry.primary,
-            session_key: suggestion.session_key.clone(),
+            session_key: Some(key.into()),
             action: primary_action(overview, suggestion),
             shortcut: Some(entry.index as u8 + 1),
         });
-        if entry.secondary.width >= 12 && suggestion.session_key.is_some() {
-            hits.push(ProjectOverviewHit {
-                rect: entry.secondary,
-                session_key: suggestion.session_key.clone(),
-                action: ProjectOverviewAction::OpenConversation,
-                shortcut: None,
-            });
-        }
     }
     hits
 }
 
-fn clipped(text: &str, width: u16) -> String {
-    super::text::truncate_end(text, usize::from(width))
-}
-
-fn scope(overview: &ProjectOverview) -> String {
+pub(super) fn scope(overview: &ProjectOverview) -> String {
     let mut parts = Vec::new();
     if overview.more_history_available {
         parts.push(if overview.language == TitleLanguage::Chinese {
@@ -219,20 +291,28 @@ fn scope(overview: &ProjectOverview) -> String {
     }
     for (count, label) in [
         (
+            overview.counts.needs_input,
+            overview.language.text("need your answer", "等待答复"),
+        ),
+        (
             overview.counts.working,
             overview.language.text("working", "正在进行"),
         ),
         (
-            overview.counts.needs_input,
-            overview.language.text("need input", "等待答复"),
-        ),
-        (
             overview.counts.ready,
-            overview.language.text("ready", "可以继续"),
+            overview.language.text("ready to continue", "可以继续"),
         ),
         (
             overview.counts.paused,
             overview.language.text("paused", "已暂停"),
+        ),
+        (
+            overview.counts.open,
+            overview.language.text("open", "已打开"),
+        ),
+        (
+            overview.counts.history,
+            overview.language.text("in history", "历史会话"),
         ),
     ] {
         if count > 0 {
@@ -242,99 +322,108 @@ fn scope(overview: &ProjectOverview) -> String {
     parts.join(" · ")
 }
 
-pub(super) fn render_project_overview(
+fn phase_style(app: &AppState, phase: WorkPhase) -> (Color, &'static str) {
+    let language = app.title_language;
+    match phase {
+        WorkPhase::NeedsInput => (
+            app.palette.yellow,
+            language.text("Needs your answer", "等待你的答复"),
+        ),
+        WorkPhase::Working => (app.palette.blue, language.text("Working", "正在进行")),
+        WorkPhase::Ready => (
+            app.palette.green,
+            language.text("Ready to continue", "可以继续"),
+        ),
+        WorkPhase::Paused => (app.palette.subtext0, language.text("Paused", "已暂停")),
+        WorkPhase::Open => (app.palette.subtext0, language.text("Open", "已打开")),
+        WorkPhase::History => (app.palette.overlay0, language.text("History", "历史会话")),
+    }
+}
+
+pub(super) fn render_prose(frame: &mut Frame, area: Rect, text: &str, style: Style) {
+    let paragraph = Paragraph::new(text).style(style).wrap(Wrap { trim: true });
+    let clipped = paragraph.line_count(area.width) > usize::from(area.height);
+    frame.render_widget(paragraph, area);
+    if clipped && area.width > 0 && area.height > 0 {
+        frame.render_widget(
+            Paragraph::new("…").style(style),
+            Rect::new(area.right() - 1, area.bottom() - 1, 1, 1),
+        );
+    }
+}
+
+pub(super) fn render_session_overview(
     app: &AppState,
     frame: &mut Frame,
     area: Rect,
     overview: &ProjectOverview,
+    item: &ProjectWorkItem,
+    selected: bool,
 ) {
-    let layout = layout(overview, area);
-    let zh = overview.language == TitleLanguage::Chinese;
+    let layout = layout(overview, &item.session_key, area);
+    let (color, phase) = phase_style(app, item.phase);
+    if area.width > 0 {
+        for y in area.y..area.bottom() {
+            frame.render_widget(
+                Paragraph::new(if y == area.y && selected {
+                    "▸"
+                } else {
+                    "│"
+                })
+                .style(Style::default().fg(if selected {
+                    app.palette.accent
+                } else {
+                    color
+                })),
+                Rect::new(area.x, y, 1, 1),
+            );
+        }
+    }
+    let heading_style = Style::default().bg(if selected {
+        app.palette.surface0
+    } else {
+        app.palette.panel_bg
+    });
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                if zh {
-                    "现在在做什么"
-                } else {
-                    "What's happening"
-                },
+                phase,
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", item.title),
                 Style::default()
                     .fg(app.palette.text)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("   {}", scope(overview)),
-                Style::default().fg(app.palette.overlay0),
+                format!(" · {}", item.backend),
+                Style::default().fg(app.palette.subtext0),
             ),
-        ])),
+        ]))
+        .style(heading_style),
         layout.heading,
     );
-    for entry in layout.work {
-        let item = &overview.work[entry.index];
-        frame.render_widget(
-            Paragraph::new(item.description.as_str())
-                .style(Style::default().fg(app.palette.text))
-                .wrap(Wrap { trim: true }),
-            entry.body,
-        );
-        frame.render_widget(
-            Paragraph::new(clipped(
-                &format!(
-                    "{} · {} · {}",
-                    item.title,
-                    item.backend,
-                    item.phase.label(overview.language)
-                ),
-                entry.source.width,
-            ))
-            .style(Style::default().fg(app.palette.subtext0)),
-            entry.source,
-        );
-    }
-    frame.render_widget(
-        Paragraph::new(if zh {
-            "接下来可以这样推进"
+    render_prose(
+        frame,
+        layout.progress,
+        &item.description,
+        Style::default().fg(if item.phase == WorkPhase::History {
+            app.palette.subtext0
         } else {
-            "Suggested follow-ups"
-        })
-        .style(
-            Style::default()
-                .fg(app.palette.text)
-                .add_modifier(Modifier::BOLD),
-        ),
-        layout.next_heading,
+            app.palette.text
+        }),
     );
     for entry in layout.suggestions {
         let suggestion = &overview.suggestions[entry.index];
-        let text = if suggestion
-            .followup
-            .as_ref()
-            .is_some_and(|item| item.state == FollowupState::Queued)
-        {
-            overview.language.text(
-                "The selected follow-up is queued. The original Agent will receive the instruction after its current work.",
-                "已安排下一轮跟进。原 Agent 完成当前工作后会收到你选定的指令。"
-            ).into()
-        } else {
-            suggestion.description.clone()
-        };
-        frame.render_widget(
-            Paragraph::new(text)
-                .style(Style::default().fg(app.palette.text))
-                .wrap(Wrap { trim: true }),
-            entry.body,
-        );
-        let source = suggestion
-            .session_key
-            .as_ref()
-            .and_then(|key| overview.work.iter().find(|item| &item.session_key == key))
-            .map(|item| format!("{} · {}", item.title, item.backend))
-            .unwrap_or_else(|| suggestion.reason.clone());
-        frame.render_widget(
-            Paragraph::new(clipped(&source, entry.source.width))
-                .style(Style::default().fg(app.palette.subtext0)),
-            entry.source,
-        );
+        if let Some(text) = next_step_text(suggestion, overview.language) {
+            render_prose(
+                frame,
+                entry.body,
+                &text,
+                Style::default().fg(app.palette.text),
+            );
+        }
         render_action_button(
             frame,
             entry.primary,
@@ -345,30 +434,17 @@ pub(super) fn render_project_overview(
                 .bg(app.palette.accent)
                 .add_modifier(Modifier::BOLD),
         );
-        if entry.secondary.width >= 12 && suggestion.session_key.is_some() {
-            frame.render_widget(
-                Paragraph::new(if zh {
-                    "查看会话"
-                } else {
-                    "View conversation"
-                })
-                .style(Style::default().fg(app.palette.subtext0)),
-                entry.secondary,
-            );
-        }
-    }
-    if overview.suggestions.is_empty() {
-        let y = layout.next_heading.bottom().max(area.y);
         frame.render_widget(
-            Paragraph::new(overview.language.text(
-                "Follow-ups appear as conversations record their progress.",
-                "会话产生进展记录后，这里会显示下一步建议。",
-            ))
-            .style(Style::default().fg(app.palette.subtext0))
-            .wrap(Wrap { trim: true }),
-            Rect::new(area.x, y, area.width, area.bottom().saturating_sub(y)),
+            Paragraph::new(overview.language.text("View conversation", "查看会话"))
+                .style(Style::default().fg(app.palette.subtext0)),
+            entry.secondary,
         );
     }
+    frame.render_widget(
+        Paragraph::new(overview.language.text("View conversation →", "查看会话 →"))
+            .style(Style::default().fg(app.palette.subtext0)),
+        layout.view,
+    );
 }
 
 #[cfg(test)]
@@ -429,34 +505,23 @@ mod tests {
         overview.suggestions[0].description = "建议先提交审核，获得批准后再发送邀请函。".into();
         for (width, height) in [(120, 24), (76, 16), (48, 16)] {
             let (text, area) = draw(&overview, width, height);
-            for expected in [
-                "现在在做什么",
-                "正在进行",
-                "接下来可以这样推进",
-                "推进此建议",
-            ] {
+            for expected in ["正在进行", "推进此建议"] {
                 assert!(text.contains(expected), "missing {expected}: {text}");
             }
-            for english in [
-                "What's happening",
-                "Suggested follow-ups",
-                "working",
-                "Continue with this",
-                "View conversation",
-            ] {
+            for english in ["working", "Continue with this", "View conversation"] {
                 assert!(!text.contains(english), "mixed control {english}: {text}");
             }
-            for hit in overview_hit_areas(&overview, area) {
+            for hit in session_hit_areas(&overview, &overview.work[0].session_key, area) {
                 assert_eq!(hit.rect.intersection(area), hit.rect);
             }
         }
         overview.suggestions.clear();
         let (text, _) = draw(&overview, 120, 24);
-        assert!(text.contains("会话产生进展记录后"));
+        assert!(text.contains("查看会话"));
         overview.language = TitleLanguage::English;
         let (text, _) = draw(&overview, 120, 24);
-        assert!(text.contains("What's happening"));
-        assert!(text.contains("Follow-ups appear"));
+        assert!(text.contains("Working"));
+        assert!(text.contains("View conversation"));
     }
 
     #[test]
@@ -502,13 +567,16 @@ mod tests {
     }
 
     fn draw(overview: &ProjectOverview, width: u16, height: u16) -> (String, Rect) {
-        let state = AppState::test_new();
+        let mut state = AppState::test_new();
+        state.title_language = overview.language;
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width + 6, height + 4))
                 .unwrap();
         let area = Rect::new(3, 2, width, height);
         terminal
-            .draw(|frame| render_project_overview(&state, frame, area, overview))
+            .draw(|frame| {
+                render_session_overview(&state, frame, area, overview, &overview.work[0], true)
+            })
             .unwrap();
         let buffer = terminal.backend().buffer();
         let text = (area.y..area.bottom())
@@ -533,20 +601,14 @@ mod tests {
         let overview = fixture();
         for (width, height) in [(120, 24), (76, 16), (48, 16)] {
             let (text, area) = draw(&overview, width, height);
-            for expected in [
-                "What's happening",
-                "consent form",
-                "Suggested follow-ups",
-                "Continue with this",
-                "approved copy",
-            ] {
+            for expected in ["consent form", "Continue with this", "approved copy"] {
                 assert!(
                     text.contains(expected),
                     "missing {expected} at {width}x{height}:\n{text}"
                 );
             }
             assert!(!text.contains("CURRENT WORK"));
-            let hits = overview_hit_areas(&overview, area);
+            let hits = session_hit_areas(&overview, &overview.work[0].session_key, area);
             assert!(hits.iter().any(|hit| matches!(
                 hit.action,
                 ProjectOverviewAction::Continue { .. }
@@ -573,7 +635,7 @@ mod tests {
         for (width, height) in [(68, 2), (40, 4), (24, 6)] {
             let (text, area) = draw(&overview, width, height);
             assert!(text.contains("Continue"), "{text}");
-            let hits = overview_hit_areas(&overview, area);
+            let hits = session_hit_areas(&overview, &overview.work[0].session_key, area);
             assert!(hits.iter().any(|hit| hit.shortcut == Some(1)));
             assert!(hits
                 .iter()
@@ -590,7 +652,7 @@ mod tests {
         );
         let (text, area) = draw(&overview, 76, 16);
         assert!(text.contains("Open to answer"));
-        let first = overview_hit_areas(&overview, area)
+        let first = session_hit_areas(&overview, &overview.work[0].session_key, area)
             .into_iter()
             .find(|hit| hit.shortcut == Some(1))
             .unwrap();
@@ -599,5 +661,38 @@ mod tests {
             first.action,
             ProjectOverviewAction::OpenConversation
         ));
+    }
+
+    #[test]
+    fn multiple_suggestions_stay_with_their_session_and_exact_instruction() {
+        let mut overview = fixture();
+        let mut other = overview.suggestions[0].clone();
+        other.id = "second-instruction-for-same-session".into();
+        other.title = "Check the final invitation wording.".into();
+        overview.suggestions[2] = other;
+        let (text, area) = draw(&overview, 76, 20);
+        assert_eq!(text.matches("Prepare invitations").count(), 1);
+        assert!(text.contains("approved copy") && text.contains("final invitation wording"));
+        let hits = session_hit_areas(&overview, "session-0", area);
+        let actions: Vec<_> = hits
+            .iter()
+            .filter_map(|hit| {
+                if let ProjectOverviewAction::Continue { suggestion_id, .. } = &hit.action {
+                    Some((hit.shortcut, suggestion_id.as_str()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                (Some(1), overview.suggestions[0].id.as_str()),
+                (Some(3), "second-instruction-for-same-session")
+            ]
+        );
+        assert!(hits
+            .iter()
+            .all(|hit| hit.session_key.as_deref() == Some("session-0")));
     }
 }

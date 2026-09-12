@@ -533,9 +533,15 @@ pub(crate) fn project_tree_scroll_for_selection(app: &AppState, viewport: u16) -
     app.projects.scroll.clamp(minimum, selected).min(maximum)
 }
 
-/// Terminal cells have integral heights; one row keeps compact labels vertically centered.
-pub(super) fn sidebar_tab_height(available_height: u16) -> u16 {
-    available_height.min(1)
+/// Keep all four navigation names readable as the sidebar narrows.
+pub(super) fn sidebar_tab_height(width: u16, available_height: u16) -> u16 {
+    available_height.min(if width >= 31 {
+        1
+    } else if width >= 17 {
+        2
+    } else {
+        4
+    })
 }
 
 pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSidebarGeometry {
@@ -551,52 +557,47 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
         };
     }
 
-    let tab_gap = u16::from(content.width >= 31);
-    let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(3));
-    // Full labels require 28 columns. Drop only the decorative gaps before truncating labels, then
-    // distribute spare width evenly so every tab keeps a generous click target.
-    let (first_width, second_width, third_width, fourth_width) = if tab_inner >= 28 {
-        let extra = tab_inner - 28;
-        let shared = extra / 4;
-        let remainder = extra % 4;
-        (
-            6 + shared + u16::from(remainder > 0),
-            8 + shared + u16::from(remainder > 1),
-            8 + shared + u16::from(remainder > 2),
-            6 + shared,
-        )
+    let tab_height = sidebar_tab_height(content.width, content.height);
+    let sidebar_tabs = if content.width < 31 && tab_height > 1 {
+        let columns = if content.width >= 17 { 2 } else { 1 };
+        let first_width = if columns == 2 {
+            (content.width - 1) / 2
+        } else {
+            content.width
+        };
+        std::array::from_fn(|index| {
+            let column = index as u16 % columns;
+            let row = index as u16 / columns;
+            let x = content.x + column * (first_width + 1);
+            Rect::new(
+                x,
+                content.y + row,
+                if column == 0 {
+                    first_width
+                } else {
+                    content.right() - x
+                },
+                u16::from(row < tab_height),
+            )
+        })
     } else {
-        let first = tab_inner.saturating_mul(6) / 28;
-        let second = tab_inner.saturating_sub(first).saturating_mul(8) / 22;
-        let third = tab_inner
-            .saturating_sub(first.saturating_add(second))
-            .saturating_mul(8)
-            / 14;
-        let fourth = tab_inner.saturating_sub(first.saturating_add(second).saturating_add(third));
-        (first, second, third, fourth)
+        let gap = u16::from(content.width >= 31);
+        let available = content.width.saturating_sub(gap * 3);
+        let mut x = content.x;
+        std::array::from_fn(|index| {
+            let minimum = [6, 8, 8, 6][index];
+            let width = if available >= 28 {
+                minimum + (available - 28) / 4 + u16::from((index as u16) < (available - 28) % 4)
+            } else if index == 3 {
+                content.right().saturating_sub(x)
+            } else {
+                available * minimum / 28
+            };
+            let rect = Rect::new(x, content.y, width, 1);
+            x += width + gap;
+            rect
+        })
     };
-    let tab_height = sidebar_tab_height(content.height);
-    let sidebar_tabs = [
-        Rect::new(content.x, content.y, first_width, tab_height),
-        Rect::new(
-            content.x + first_width + tab_gap,
-            content.y,
-            second_width,
-            tab_height,
-        ),
-        Rect::new(
-            content.x + first_width + tab_gap + second_width + tab_gap,
-            content.y,
-            third_width,
-            tab_height,
-        ),
-        Rect::new(
-            content.x + first_width + tab_gap + second_width + tab_gap + third_width + tab_gap,
-            content.y,
-            fourth_width,
-            tab_height,
-        ),
-    ];
     let controls_y = content.y.saturating_add(tab_height);
     let filter_height = content.height.saturating_sub(tab_height).min(1);
     // Filter chips paint a background when selected, so two adjacent chips would read as one block.
@@ -658,18 +659,12 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 }
 
 pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect; 4]) {
-    if let (Some(first), Some(last)) = (
-        tabs.iter().find(|rect| rect.width > 0 && rect.height > 0),
-        tabs.iter()
-            .rev()
-            .find(|rect| rect.width > 0 && rect.height > 0),
-    ) {
-        let strip = Rect::new(
-            first.x,
-            first.y,
-            last.right().saturating_sub(first.x),
-            first.height,
-        );
+    if let Some(strip) = tabs
+        .iter()
+        .copied()
+        .filter(|rect| rect.width > 0 && rect.height > 0)
+        .reduce(|left, right| left.union(right))
+    {
         frame.render_widget(Clear, strip);
         frame.render_widget(
             Paragraph::new("").style(Style::default().bg(app.palette.panel_bg)),
@@ -677,12 +672,7 @@ pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect
         );
     }
 
-    let labels = [
-        "Agents",
-        app.title_language.text("Sessions", "会话"),
-        app.title_language.text("Projects", "项目"),
-        app.title_language.text("Topics", "主题"),
-    ];
+    let labels = ["Agents", "Sessions", "Projects", "Topics"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 || rect.height == 0 {
             continue;
@@ -1648,7 +1638,13 @@ mod tests {
                 .collect::<String>();
             assert!(text.contains("herduck · menu"), "{view:?}: {text}");
             if view == SidebarView::SpacesAgents {
-                let y = state.view.project_sidebar_tabs[0].bottom();
+                let y = state
+                    .view
+                    .project_sidebar_tabs
+                    .iter()
+                    .map(|rect| rect.bottom())
+                    .max()
+                    .unwrap();
                 let text = (0..state.view.sidebar_rect.width)
                     .map(|x| buffer[(x, y)].symbol())
                     .collect::<String>();
@@ -1694,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_tabs_fill_their_height_and_clear_underlying_content() {
+    fn top_level_tabs_keep_english_names_and_clear_both_rows_in_narrow_sidebars() {
         let mut state = AppState::test_new();
         state.sidebar_view = crate::app::state::SidebarView::Sessions;
         for palette in [
@@ -1703,54 +1699,69 @@ mod tests {
             crate::app::state::Palette::terminal(),
         ] {
             state.palette = palette;
-            for (height, tab_height) in [(4, 1), (12, 1), (24, 1)] {
-                let area = Rect::new(0, 0, 30, height);
-                let tabs = project_sidebar_geometry(&state, area).sidebar_tabs;
-                assert!(tabs.iter().all(|rect| rect.height == tab_height));
-                let backend = ratatui::backend::TestBackend::new(area.width, area.height);
-                let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
-                terminal
-                    .draw(|frame| {
-                        for y in 0..tab_height {
-                            frame.render_widget(
-                                Paragraph::new(" spaces spaces spaces spaces"),
-                                Rect::new(0, y, 29, 1),
-                            );
-                        }
-                        render_sidebar_tabs(&state, frame, tabs);
-                    })
-                    .expect("draw tabs");
-                let buffer = terminal.backend().buffer();
-                let label_y = (tab_height - 1) / 2;
-                for y in 0..tab_height {
-                    let line = (0..29).map(|x| buffer[(x, y)].symbol()).collect::<String>();
-                    assert!(!line.to_lowercase().contains("spaces"));
-                    if y == label_y {
-                        for label in ["Agents", "Sessions", "Projects", "Topics"] {
-                            assert!(line.contains(label), "missing {label}: {line}");
-                        }
-                    } else {
-                        assert!(line.trim().is_empty(), "padding must stay clear: {line}");
-                    }
-                }
-                for (index, rect) in tabs.into_iter().enumerate() {
-                    let (fg, bg) = if index == 1 {
-                        (
-                            super::super::widgets::panel_contrast_fg(&state.palette),
-                            state.palette.accent,
-                        )
-                    } else {
-                        (state.palette.text, state.palette.surface0)
-                    };
-                    for y in rect.y..rect.bottom() {
+            for language in [
+                crate::config::TitleLanguage::Chinese,
+                crate::config::TitleLanguage::English,
+            ] {
+                state.title_language = language;
+                for width in [18, 25, 30, 40] {
+                    let area = Rect::new(0, 0, width, 12);
+                    let geometry = project_sidebar_geometry(&state, area);
+                    let tabs = geometry.sidebar_tabs;
+                    let bottom = tabs.iter().map(|rect| rect.bottom()).max().unwrap();
+                    assert_eq!(geometry.filter_tabs[0].y, bottom);
+                    assert_eq!(bottom, if width < 32 { 2 } else { 1 });
+                    let mut terminal =
+                        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 12))
+                            .unwrap();
+                    terminal
+                        .draw(|frame| {
+                            for y in 0..bottom {
+                                frame.render_widget(
+                                    Paragraph::new("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                                    Rect::new(0, y, width, 1),
+                                );
+                            }
+                            render_sidebar_tabs(&state, frame, tabs);
+                        })
+                        .unwrap();
+                    let buffer = terminal.backend().buffer();
+                    for (index, (rect, label)) in tabs
+                        .into_iter()
+                        .zip(["Agents", "Sessions", "Projects", "Topics"])
+                        .enumerate()
+                    {
+                        let text = (rect.x..rect.right())
+                            .map(|x| buffer[(x, rect.y)].symbol())
+                            .collect::<String>();
+                        assert_eq!(text.trim(), label, "{language:?} at width {width}");
+                        let (fg, bg) = if index == 1 {
+                            (
+                                super::super::widgets::panel_contrast_fg(&state.palette),
+                                state.palette.accent,
+                            )
+                        } else {
+                            (state.palette.text, state.palette.surface0)
+                        };
                         for x in rect.x..rect.right() {
-                            let cell = &buffer[(x, y)];
+                            let cell = &buffer[(x, rect.y)];
                             assert_eq!(cell.style().bg, Some(bg));
                             if !cell.symbol().trim().is_empty() {
                                 assert_eq!(cell.style().fg, Some(fg));
                                 assert!(cell.modifier.contains(Modifier::BOLD));
                             }
                         }
+                        assert!(tabs
+                            .iter()
+                            .enumerate()
+                            .all(|(other, area)| other == index
+                                || area.intersection(rect).area() == 0));
+                    }
+                    for y in 0..bottom {
+                        let line = (0..width - 1)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect::<String>();
+                        assert!(!line.contains('x'), "underlying content leaked: {line}");
                     }
                 }
             }
@@ -3006,10 +3017,7 @@ mod tests {
         ] {
             state.title_language = language;
             let sidebar = rendered_text(&state, Rect::new(0, 0, 60, 20));
-            assert!(
-                sidebar.contains(language.text("Projects", "项目")),
-                "{sidebar}"
-            );
+            assert!(sidebar.contains("Projects"), "{sidebar}");
             assert!(
                 sidebar.contains(language.text("search projects", "搜索项目")),
                 "{sidebar}"

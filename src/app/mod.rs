@@ -1743,12 +1743,8 @@ impl App {
             .unwrap_or(self.state.projects.topic_detail_selected)
             .min(detail_rows.len().saturating_sub(1));
         self.state.projects.topic_detail_selected = detail_selected;
-        let visible = usize::from(self.state.view.topic_detail.sessions.height.div_ceil(2)).max(1);
-        self.state.projects.topic_detail_scroll = self
-            .state
-            .projects
-            .topic_detail_scroll
-            .clamp(detail_selected.saturating_sub(visible - 1), detail_selected);
+        self.state.projects.topic_detail_scroll =
+            crate::ui::topic_detail_selection_scroll(&self.state);
 
         self.state.projects.selected_row = selected_identity
             .and_then(|identity| {

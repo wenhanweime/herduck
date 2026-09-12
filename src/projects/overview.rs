@@ -24,17 +24,6 @@ pub enum WorkPhase {
 }
 
 impl WorkPhase {
-    pub(crate) fn label(self, language: TitleLanguage) -> &'static str {
-        match self {
-            Self::Working => language.text("working", "正在进行"),
-            Self::NeedsInput => language.text("needs input", "等待你的答复"),
-            Self::Ready => language.text("ready to continue", "可以继续"),
-            Self::Paused => language.text("inactive · ready to continue", "已暂停 · 可以继续"),
-            Self::Open => language.text("open", "已打开"),
-            Self::History => language.text("recorded conversation", "历史会话"),
-        }
-    }
-
     pub(crate) fn attention_order(self) -> u8 {
         match self {
             Self::NeedsInput => 0,
@@ -203,64 +192,6 @@ pub(crate) fn build_overview(
             },
         );
     }
-    if let Some(cover) = &project.cover {
-        if !cover.blocked_note.trim().is_empty() {
-            let session_key = cover
-                .blocked_session_ref
-                .as_ref()
-                .filter(|key| work.iter().any(|item| &item.session_key == *key))
-                .cloned();
-            push_suggestion(
-                &mut suggestions,
-                AdvanceSuggestion {
-                    id: suggestion_id(
-                        project,
-                        session_key.as_deref(),
-                        "saved_blocker",
-                        &cover.blocked_note,
-                    ),
-                    followup: None,
-                    title: language
-                        .text("Resolve the saved blocker", "解决计划中的阻塞")
-                        .into(),
-                    description: activity
-                        .localization
-                        .get(&cover.blocked_note, language)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| untranslated(activity, language)),
-                    reason: language
-                        .text("Blocker from your saved plan", "来自你保存的计划：当前阻塞")
-                        .into(),
-                    source: SuggestionSource::SavedPlan,
-                    session_key,
-                    prompt: None,
-                },
-            );
-        }
-        for step in &cover.next_steps {
-            push_suggestion(
-                &mut suggestions,
-                AdvanceSuggestion {
-                    id: suggestion_id(project, None, "saved_step", step),
-                    followup: None,
-                    title: language
-                        .text("Next step from your saved plan", "计划中的下一步")
-                        .into(),
-                    description: activity
-                        .localization
-                        .get(step, language)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| untranslated(activity, language)),
-                    reason: language
-                        .text("Next step from your saved plan", "来自你保存的计划：下一步")
-                        .into(),
-                    source: SuggestionSource::SavedPlan,
-                    session_key: None,
-                    prompt: None,
-                },
-            );
-        }
-    }
     for item in &work {
         if item.phase == WorkPhase::NeedsInput {
             continue;
@@ -368,6 +299,65 @@ pub(crate) fn build_overview(
                         "Continue from this conversation's goal and latest progress. Identify and carry out the next unfinished step without repeating completed work. Report the result, or ask me here if a necessary decision is missing. Use English for all progress updates, summaries, next steps and replies.",
                         "请结合当前会话的目标和最新进展，找出下一项尚未完成的工作并继续执行，避免重复已完成的内容。完成后汇报结果；缺少必要决定时在此会话中向我说明。进展总结、下一步建议和回复都请使用简体中文。"
                     ).into()),
+                },
+            );
+        }
+    }
+    // Session-specific Agent actions take precedence over unlinked authored plan items.
+    if let Some(cover) = &project.cover {
+        if !cover.blocked_note.trim().is_empty() {
+            let session_key = cover
+                .blocked_session_ref
+                .as_ref()
+                .filter(|key| work.iter().any(|item| &item.session_key == *key))
+                .cloned();
+            push_suggestion(
+                &mut suggestions,
+                AdvanceSuggestion {
+                    id: suggestion_id(
+                        project,
+                        session_key.as_deref(),
+                        "saved_blocker",
+                        &cover.blocked_note,
+                    ),
+                    followup: None,
+                    title: language
+                        .text("Resolve the saved blocker", "解决计划中的阻塞")
+                        .into(),
+                    description: activity
+                        .localization
+                        .get(&cover.blocked_note, language)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| untranslated(activity, language)),
+                    reason: language
+                        .text("Blocker from your saved plan", "来自你保存的计划：当前阻塞")
+                        .into(),
+                    source: SuggestionSource::SavedPlan,
+                    session_key,
+                    prompt: None,
+                },
+            );
+        }
+        for step in &cover.next_steps {
+            push_suggestion(
+                &mut suggestions,
+                AdvanceSuggestion {
+                    id: suggestion_id(project, None, "saved_step", step),
+                    followup: None,
+                    title: language
+                        .text("Next step from your saved plan", "计划中的下一步")
+                        .into(),
+                    description: activity
+                        .localization
+                        .get(step, language)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| untranslated(activity, language)),
+                    reason: language
+                        .text("Next step from your saved plan", "来自你保存的计划：下一步")
+                        .into(),
+                    source: SuggestionSource::SavedPlan,
+                    session_key: None,
+                    prompt: None,
                 },
             );
         }
@@ -614,15 +604,30 @@ pub(crate) mod tests {
             ..Default::default()
         };
         let overview = build_overview(&project, &HashMap::new(), &activity);
-        assert_eq!(overview.suggestions[0].source, SuggestionSource::SavedPlan);
         assert_eq!(
-            overview.suggestions[1].source,
+            overview.suggestions[0].source,
             SuggestionSource::Conversation
         );
         assert_eq!(
-            overview.suggestions[1].session_key.as_deref(),
+            overview.suggestions[0].session_key.as_deref(),
             Some("session-2")
         );
+        assert_eq!(overview.suggestions.len(), 3);
+        assert!(overview
+            .suggestions
+            .iter()
+            .all(|suggestion| suggestion.session_key.is_some()));
+        // A small group still exposes authored plan provenance through the public API.
+        project
+            .sessions
+            .retain(|session| session.stable_key == "session-2");
+        let smaller = build_overview(&project, &HashMap::new(), &activity);
+        assert_eq!(smaller.suggestions[1].source, SuggestionSource::SavedPlan);
+        assert_eq!(
+            smaller.suggestions[1].description,
+            "Call the first customer"
+        );
+        assert!(smaller.suggestions[1].session_key.is_none());
         assert_eq!(project.cover, before);
     }
 

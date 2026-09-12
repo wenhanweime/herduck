@@ -955,7 +955,6 @@ pub struct TopicDetailGeometry {
     pub title: Rect,
     pub edit: Rect,
     pub cover: Rect,
-    pub overview: Rect,
     pub refresh: Rect,
     pub overview_hits: Vec<ProjectOverviewHit>,
     pub heading: Rect,

@@ -4,11 +4,16 @@ Available in the **0.1.0-alpha.4 source preview**. Open a Topic or folder Projec
 Agents are doing and choose a next action. No plan has to be filled in first. The selected group
 stays highlighted when viewing its detail, editing its plan, or opening a child session.
 
-**What's happening** shows the concrete request being worked on or the latest recorded result.
-The session name, Agent, and state sit below the description, so you can tell where it came from.
-**Suggested follow-ups** quotes next actions from the conversation, with their context. For example:
+Each conversation appears once: its name, Agent, and status come first, followed by what is being
+worked on or the latest recorded result. The next step and its controls sit directly below that
+progress, so every action has a clear owner. Conversations waiting for your answer come first,
+followed by ongoing work and quieter history. For example:
 
-> The Agent recommends submitting the tested change for review, then redeploying after approval.
+> **Working · Interview invitations · Pi**
+>
+> Checking the invitations and consent form.
+>
+> **Next:** Submit the consent form for review, then send the approved invitations.
 
 Choose **Continue with this** (or the displayed number) to send that follow-up to its original
 Agent and open the session. Herduck reuses a matching live pane; for history, it resumes the same
@@ -16,20 +21,23 @@ native conversation in its original working directory. If the Agent is busy, del
 its idle prompt. The pending action becomes **Cancel queued follow-up**. A sent state means the
 instruction was delivered, not that the Agent completed the work.
 
-**View conversation** and the conversation list open context without sending instructions or
-starting a history session. A blocked Agent offers **Open to answer**, leaving the pending decision
-to you. A saved step without a conversation link opens the Topic plan editor. Existing goals,
+**View conversation**, a conversation heading, or **Enter** open context without sending instructions
+or starting a history session. A blocked Agent offers **Open to answer**, leaving the pending decision
+to you. The saved goal and blocker provide context at the top; **edit plan** opens the complete authored plan.
+Agent follow-ups take precedence over saved steps in the bounded suggestion list. Existing goals,
 next steps, and blockers stay editable and are never overwritten by automatic updates.
 
-Press **r** or click **refresh** to reread recent evidence. Use **↑/↓** and **Enter** for the conversation
-list, **e** to edit a Topic plan, and **Esc** to return to the sidebar. Smaller terminals show fewer
-descriptions while keeping follow-up controls and conversation navigation reachable. Folder Projects
+Press **r** or click **refresh** to reread recent evidence. Use **↑/↓** and **Enter** to browse the session
+sections, **e** to edit a Topic plan, and **Esc** to return to the sidebar. Use the mouse wheel to scroll the same sections. Smaller terminals wrap the text and preserve each
+visible action beside its owner. The footer shows the visible range and whether more conversations
+are below; arrow keys bring the selected conversation and its controls into view. Folder Projects
 share the overview; authored goals and plans remain a Topic feature.
 
 ## Evidence and scope
 
 The overview covers the newest 50 indexed conversations in the selected group, independently of the
-conversation-list filter. If older history exists, the status strip says **Latest 50**. An idle Agent
+All / Open filter. The filter controls which conversation sections are shown, and older paged records
+remain accessible below the recent work. If older history exists, the status strip says **Latest 50**. An idle Agent
 is ready for another instruction; a recorded conversation is history. Neither proves project completion.
 
 The four newest conversations supply text evidence. A bounded background worker reads recent local
@@ -49,7 +57,9 @@ original Agent, with that Agent's existing tools and permissions.
 `projects.summary.title_language` selects `en` or `zh` for automatic work descriptions, follow-up
 recommendations, controls, states, and feedback. Continuation instructions explicitly request progress
 updates and replies in that language. The language comes from the saved setting, not from individual
-conversations; config reload applies it without restarting the server.
+conversations; config reload applies it without restarting the server. The four sidebar tabs always
+keep their English names: **Agents / Sessions / Projects / Topics**. Narrow sidebars use two rows so
+the names remain readable; the other controls follow the selected language.
 
 When recent evidence is in another language, a bounded background worker translates it using the
 configured **Summary** source order. Successful translations are cached by source content and language;

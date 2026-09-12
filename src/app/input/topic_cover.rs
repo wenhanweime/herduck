@@ -218,12 +218,8 @@ impl App {
             .saturating_add_signed(delta)
             .min(last);
         self.state.projects.topic_detail_selected = selected;
-        let visible = usize::from(self.state.view.topic_detail.sessions.height.div_ceil(2)).max(1);
-        self.state.projects.topic_detail_scroll = self
-            .state
-            .projects
-            .topic_detail_scroll
-            .clamp(selected.saturating_sub(visible - 1), selected);
+        self.state.projects.topic_detail_scroll =
+            crate::ui::topic_detail_selection_scroll(&self.state);
     }
 
     pub(crate) fn handle_topic_cover_key(&mut self, key: KeyEvent) {
@@ -388,11 +384,12 @@ impl App {
             }
             MouseEventKind::ScrollDown => {
                 let count = crate::ui::topic_detail_rows(&self.state).len();
-                let visible =
-                    usize::from(self.state.view.topic_detail.sessions.height.div_ceil(2)).max(1);
-                self.state.projects.topic_detail_scroll = (self.state.projects.topic_detail_scroll
-                    + 1)
-                .min(count.saturating_sub(visible));
+                self.state.projects.topic_detail_scroll = self
+                    .state
+                    .projects
+                    .topic_detail_scroll
+                    .saturating_add(1)
+                    .min(count.saturating_sub(1));
             }
             _ => {}
         }

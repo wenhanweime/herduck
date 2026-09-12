@@ -2,16 +2,17 @@
 
 Introduced in the **0.1.0-alpha.3 source preview**. A Topic's saved plan contains this week's goal,
 up to three next steps, and what's blocked. In **0.1.0-alpha.4**, the [project overview](project-overview.md)
-appears first, with readable work updates and explicit follow-up actions. The saved plan stays below
-it. Empty plans leave room for progress and conversations. Unlinked saved steps open the plan editor;
-follow-ups from an Agent conversation have a separate **Continue with this** action.
+shows each conversation's progress and next action together. The saved goal and blocker stay at the
+top as context, while the complete plan is available through **edit plan**. An empty plan takes no
+space. Agent follow-ups have a separate **Continue with this** action and take precedence over saved
+plan items in the overview's suggestion list.
 
 Click **edit plan** or press **e** in the Topic detail view. Use Tab / Shift-Tab to move between
 fields, Shift-Enter for a new line, and Enter or the **save** button to save. Esc cancels the
 draft. Ctrl-U clears the current field. The editor supports Chinese input and pasted text.
 On smaller terminals, it scrolls the form to the focused field while keeping the action buttons visible.
 
-The cover stays fixed while the conversations below it scroll. Click a conversation or select it
+The goal and blocker stay fixed while the conversation sections below them scroll. Click a conversation or select it
 with the arrow keys and press Enter to use the existing history-preview or live-session controls.
 Esc returns to the Topic list. Editing a cover does not start an Agent.
 

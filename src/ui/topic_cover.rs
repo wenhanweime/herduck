@@ -1,7 +1,7 @@
 use ratatui::{
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Clear, Paragraph, Wrap},
     Frame,
 };
@@ -10,9 +10,10 @@ use unicode_width::UnicodeWidthChar;
 use super::projects::ProjectTreeRow;
 use super::widgets::{
     action_button_row_rects, centered_popup_rect, panel_contrast_fg, render_action_button,
-    render_modal_header, render_modal_shell, render_panel_shell, ActionButtonSpec,
+    render_modal_header, render_modal_shell, ActionButtonSpec,
 };
 use crate::app::state::{AppState, ProjectFilter, ProjectRowHitArea, TopicDetailGeometry};
+use crate::projects::overview::{ProjectOverview, WorkPhase};
 use crate::projects::{ProjectSummary, TopicCover};
 
 const EDITOR_WIDTH: u16 = 76;
@@ -35,10 +36,34 @@ pub(crate) fn topic_detail_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     let Some(topic) = selected_topic(app) else {
         return Vec::new();
     };
-    let mut rows: Vec<_> = topic
+    let overview = app.visible_project_overview();
+    let mut sessions: Vec<_> = topic
         .sessions
         .iter()
         .filter(|session| app.projects.filter != ProjectFilter::Open || session.live)
+        .collect();
+    sessions.sort_by_key(|session| {
+        overview
+            .as_ref()
+            .and_then(|overview| {
+                overview
+                    .work
+                    .iter()
+                    .find(|item| item.session_key == session.stable_key)
+            })
+            .map(|item| item.phase)
+            .unwrap_or_else(|| {
+                app.project_session_phase(session)
+                    .unwrap_or(if session.live {
+                        WorkPhase::Open
+                    } else {
+                        WorkPhase::History
+                    })
+            })
+            .attention_order()
+    });
+    let mut rows: Vec<_> = sessions
+        .into_iter()
         .cloned()
         .map(ProjectTreeRow::Session)
         .collect();
@@ -50,8 +75,79 @@ pub(crate) fn topic_detail_rows(app: &AppState) -> Vec<ProjectTreeRow> {
     rows
 }
 
-fn cover_is_empty(cover: &TopicCover) -> bool {
-    cover.goal.is_empty() && cover.next_steps.is_empty() && cover.blocked_note.is_empty()
+fn row_height(row: &ProjectTreeRow, overview: Option<&ProjectOverview>, width: u16) -> u16 {
+    match row {
+        ProjectTreeRow::Session(session) => overview
+            .and_then(|overview| {
+                super::project_overview::session_height(overview, &session.stable_key, width)
+            })
+            .unwrap_or(2),
+        _ => 1,
+    }
+}
+
+fn scroll_to_show_row(
+    rows: &[ProjectTreeRow],
+    overview: Option<&ProjectOverview>,
+    index: usize,
+    area: Rect,
+) -> usize {
+    let index = index.min(rows.len().saturating_sub(1));
+    let Some(row) = rows.get(index) else {
+        return 0;
+    };
+    let mut height = row_height(row, overview, area.width);
+    let mut start = index;
+    while start > 0 {
+        let next = height.saturating_add(1).saturating_add(row_height(
+            &rows[start - 1],
+            overview,
+            area.width,
+        ));
+        if next > area.height {
+            break;
+        }
+        height = next;
+        start -= 1;
+    }
+    start
+}
+
+pub(crate) fn topic_detail_selection_scroll(app: &AppState) -> usize {
+    let rows = topic_detail_rows(app);
+    let selected = app
+        .projects
+        .topic_detail_selected
+        .min(rows.len().saturating_sub(1));
+    let overview = app.visible_project_overview();
+    let minimum = scroll_to_show_row(
+        &rows,
+        overview.as_ref(),
+        selected,
+        app.view.topic_detail.sessions,
+    );
+    app.projects.topic_detail_scroll.clamp(minimum, selected)
+}
+
+fn context_lines(app: &AppState, cover: &TopicCover) -> Vec<String> {
+    [
+        (app.title_language.text("Goal: ", "目标："), &cover.goal),
+        (
+            app.title_language.text("Saved blocker: ", "计划中的阻塞："),
+            &cover.blocked_note,
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, value)| !value.trim().is_empty())
+    .map(|(label, value)| format!("{label}{}", single_line(value)))
+    .collect()
+}
+
+fn context_height(text: &str, width: u16) -> u16 {
+    Paragraph::new(text)
+        .wrap(Wrap { trim: true })
+        .line_count(width)
+        .min(2) as u16
 }
 
 pub(crate) fn topic_detail_geometry(app: &AppState, area: Rect) -> TopicDetailGeometry {
@@ -61,95 +157,98 @@ pub(crate) fn topic_detail_geometry(app: &AppState, area: Rect) -> TopicDetailGe
     let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
     let is_topic = selected_topic(app)
         .is_some_and(|topic| topic.kind == crate::projects::ProjectKind::Semantic);
+    let toolbar_on_next_line = inner.width < 64 && inner.height >= 8;
+    let header_height = 1 + u16::from(toolbar_on_next_line);
+    let controls_y = inner.y + u16::from(toolbar_on_next_line);
     let edit_width = if is_topic { inner.width.min(15) } else { 0 };
-    let edit = Rect::new(inner.right() - edit_width, inner.y, edit_width, 1);
+    let edit = Rect::new(inner.right() - edit_width, controls_y, edit_width, 1);
     let refresh_width = inner.width.saturating_sub(edit_width).min(12);
     let refresh = Rect::new(
         edit.x.saturating_sub(refresh_width),
-        inner.y,
+        controls_y,
         refresh_width,
         1,
     );
     let title = Rect::new(
         inner.x,
         inner.y,
-        inner.width.saturating_sub(edit_width + refresh_width + 1),
+        if toolbar_on_next_line {
+            inner.width
+        } else {
+            inner.width.saturating_sub(edit_width + refresh_width + 1)
+        },
         1,
     );
-    let filled = selected_topic(app)
+    let context_y = inner.y + header_height + u16::from(inner.height >= 10);
+    let cover_height = selected_topic(app)
         .and_then(|topic| topic.cover.as_ref())
-        .is_some_and(|cover| !cover_is_empty(cover));
-    // Automatic progress is useful before a plan is written. The authored plan is
-    // a compact supplement, with at least one conversation and navigation kept visible.
-    let cover_height = if filled {
-        if inner.height >= 24 {
-            if inner.width >= 82 {
-                6
-            } else {
-                7
-            }
-        } else if inner.width < 80 && inner.height >= 13 {
-            5
-        } else {
-            3
-        }
-    } else {
-        0
-    }
-    .min(inner.height.saturating_sub(6));
-    let preferred = 24;
-    // An empty plan gives the conversation list extra space, rather than growing
-    // the overview until only one conversation remains visible.
-    let reserved = if filled { cover_height + 6 } else { 8 };
-    let overview_height = preferred.min(inner.height.saturating_sub(reserved));
-    let overview = Rect::new(inner.x, inner.y + 2, inner.width, overview_height);
-    let cover = Rect::new(inner.x, overview.bottom(), inner.width, cover_height);
+        .map(|cover| {
+            context_lines(app, cover)
+                .iter()
+                .map(|text| context_height(text, inner.width))
+                .sum::<u16>()
+        })
+        .unwrap_or(0)
+        .min(inner.bottom().saturating_sub(context_y + 4));
+    let cover = Rect::new(inner.x, context_y, inner.width, cover_height);
+    let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
     let heading = Rect::new(
         inner.x,
         cover.bottom(),
         inner.width,
-        1.min(inner.height.saturating_sub(2)),
+        u16::from(footer.y.saturating_sub(cover.bottom()) >= 3),
     );
-    let footer = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
+    let sessions_y = heading.bottom() + u16::from(footer.y.saturating_sub(heading.bottom()) >= 5);
     let sessions = Rect::new(
         inner.x,
-        heading.bottom(),
+        sessions_y,
         inner.width,
-        footer.y.saturating_sub(heading.bottom()),
+        footer.y.saturating_sub(sessions_y),
     );
     let rows = topic_detail_rows(app);
-    let visible = usize::from(sessions.height.div_ceil(2)).max(1);
-    let normalized_scroll = app
-        .projects
-        .topic_detail_scroll
-        .min(rows.len().saturating_sub(visible));
-    let row_hits = rows
-        .iter()
-        .enumerate()
-        .skip(normalized_scroll)
-        .take(visible)
-        .filter_map(|(row_index, row)| {
-            let y = sessions.y + ((row_index - normalized_scroll) as u16).saturating_mul(2);
-            if y >= sessions.bottom() {
-                return None;
-            }
-            row.action().map(|action| ProjectRowHitArea {
-                rect: Rect::new(sessions.x, y, sessions.width, 2.min(sessions.bottom() - y)),
+    let overview = app.visible_project_overview();
+    let max_scroll = scroll_to_show_row(
+        &rows,
+        overview.as_ref(),
+        rows.len().saturating_sub(1),
+        sessions,
+    );
+    let normalized_scroll = app.projects.topic_detail_scroll.min(max_scroll);
+    let mut row_hits = Vec::new();
+    let mut overview_hits = Vec::new();
+    let mut y = sessions.y;
+    for (row_index, row) in rows.iter().enumerate().skip(normalized_scroll) {
+        let remaining = sessions.bottom().saturating_sub(y);
+        if remaining == 0
+            || (remaining < row_height(row, overview.as_ref(), sessions.width).min(3)
+                && row_index != normalized_scroll)
+        {
+            break;
+        }
+        let height = row_height(row, overview.as_ref(), sessions.width).min(remaining);
+        let rect = Rect::new(sessions.x, y, sessions.width, height);
+        if let Some(action) = row.action() {
+            row_hits.push(ProjectRowHitArea {
+                rect,
                 action,
                 row_index,
-            })
-        })
-        .collect();
+            });
+        }
+        if let (Some(overview), ProjectTreeRow::Session(session)) = (&overview, row) {
+            overview_hits.extend(super::project_overview::session_hit_areas(
+                overview,
+                &session.stable_key,
+                rect,
+            ));
+        }
+        y = rect.bottom().saturating_add(1);
+    }
     TopicDetailGeometry {
         title,
         edit,
         cover,
-        overview,
         refresh,
-        overview_hits: app
-            .visible_project_overview()
-            .map(|value| super::project_overview::overview_hit_areas(&value, overview))
-            .unwrap_or_default(),
+        overview_hits,
         heading,
         sessions,
         footer,
@@ -160,6 +259,10 @@ pub(crate) fn topic_detail_geometry(app: &AppState, area: Rect) -> TopicDetailGe
 
 pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.palette.panel_bg)),
+        area,
+    );
     let geometry = topic_detail_geometry(app, area);
     let Some(topic) = selected_topic(app) else {
         frame.render_widget(
@@ -207,64 +310,60 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         app.title_language.text("refresh", "刷新"),
         Style::default().fg(app.palette.subtext0),
     );
-    if let Some(overview) = app.visible_project_overview() {
-        super::project_overview::render_project_overview(app, frame, geometry.overview, &overview);
+    if let Some(cover) = &topic.cover {
+        let lines = context_lines(app, cover);
+        let mut y = geometry.cover.y;
+        for (index, text) in lines.iter().enumerate() {
+            let remaining = geometry.cover.bottom().saturating_sub(y);
+            let height = context_height(text, geometry.cover.width)
+                .min(remaining.saturating_sub((lines.len() - index - 1) as u16));
+            super::project_overview::render_prose(
+                frame,
+                Rect::new(geometry.cover.x, y, geometry.cover.width, height),
+                text,
+                Style::default().fg(app.palette.subtext0),
+            );
+            y += height;
+        }
     }
-    let empty_cover = TopicCover::default();
-    render_cover(
-        app,
-        frame,
-        geometry.cover,
-        topic.cover.as_ref().unwrap_or(&empty_cover),
-    );
-    frame.render_widget(
-        Paragraph::new(if topic.next_cursor.is_some() {
-            app.title_language.text(
-                "Conversations · older history below",
-                "会话 · 下方可加载更早记录",
-            )
-        } else {
-            app.title_language.text("Conversations", "会话")
-        })
-        .style(
-            Style::default()
-                .fg(app.palette.subtext0)
-                .add_modifier(Modifier::BOLD),
-        ),
-        geometry.heading,
-    );
+    let overview = app.visible_project_overview();
+    if let Some(overview) = &overview {
+        frame.render_widget(
+            Paragraph::new(super::project_overview::scope(overview))
+                .style(Style::default().fg(app.palette.subtext0)),
+            geometry.heading,
+        );
+    }
     let rows = topic_detail_rows(app);
     if rows.is_empty() {
-        frame.render_widget(
-            Paragraph::new(
-                if app.title_language == crate::config::TitleLanguage::Chinese {
-                    if app.projects.filter == ProjectFilter::Open {
-                        "当前没有打开的会话。".to_string()
-                    } else {
-                        "这里还没有会话。".to_string()
-                    }
+        let text = if app.title_language == crate::config::TitleLanguage::Chinese {
+            if app.projects.filter == ProjectFilter::Open {
+                "当前没有打开的会话。".to_string()
+            } else {
+                "这里还没有会话。".to_string()
+            }
+        } else {
+            format!(
+                "No {}conversations in this {}{}.",
+                if app.projects.filter == ProjectFilter::Open {
+                    "open "
                 } else {
-                    format!(
-                        "No {}conversations in this {}{}.",
-                        if app.projects.filter == ProjectFilter::Open {
-                            "open "
-                        } else {
-                            ""
-                        },
-                        if topic.kind == crate::projects::ProjectKind::Semantic {
-                            "Topic"
-                        } else {
-                            "Project"
-                        },
-                        if app.projects.filter == ProjectFilter::Open {
-                            ""
-                        } else {
-                            " yet"
-                        }
-                    )
+                    ""
                 },
+                if topic.kind == crate::projects::ProjectKind::Semantic {
+                    "Topic"
+                } else {
+                    "Project"
+                },
+                if app.projects.filter == ProjectFilter::Open {
+                    ""
+                } else {
+                    " yet"
+                }
             )
-            .style(Style::default().fg(app.palette.overlay0)),
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(app.palette.overlay0)),
             geometry.sessions,
         );
     }
@@ -273,32 +372,39 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
             continue;
         };
         let selected = hit.row_index == app.projects.topic_detail_selected;
-        let style = Style::default().fg(app.palette.text).bg(if selected {
-            app.palette.surface1
+        let style = Style::default().fg(app.palette.subtext0).bg(if selected {
+            app.palette.surface0
         } else {
             app.palette.panel_bg
         });
         match row {
             ProjectTreeRow::Session(session) => {
-                let label = super::session_label::session_label(
-                    &session.title,
-                    session.topic_label.as_deref(),
-                );
-                let title = Line::from(vec![
-                    Span::styled(
-                        format!("{} ", session.backend),
-                        Style::default().fg(app.palette.accent),
-                    ),
-                    Span::styled(label.task, Style::default().add_modifier(Modifier::BOLD)),
-                ]);
-                frame.render_widget(
-                    Paragraph::new(vec![
-                        title,
-                        super::projects::session_status_line(app, session),
-                    ])
-                    .style(style),
-                    hit.rect,
-                );
+                if let Some((overview, item)) = overview.as_ref().and_then(|overview| {
+                    overview
+                        .work
+                        .iter()
+                        .find(|item| item.session_key == session.stable_key)
+                        .map(|item| (overview, item))
+                }) {
+                    super::project_overview::render_session_overview(
+                        app, frame, hit.rect, overview, item, selected,
+                    );
+                } else {
+                    // Paged history outside the evidence window remains reachable and read-only.
+                    frame.render_widget(
+                        Paragraph::new(vec![
+                            Line::from(format!(
+                                "{} {} · {}",
+                                if selected { "▸" } else { " " },
+                                session.title,
+                                session.backend
+                            )),
+                            super::projects::session_status_line(app, session),
+                        ])
+                        .style(style),
+                        hit.rect,
+                    );
+                }
             }
             ProjectTreeRow::LoadOlder { .. } => frame.render_widget(
                 Paragraph::new(
@@ -311,251 +417,35 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
             _ => {}
         }
     }
+    let shown = match (geometry.row_hits.first(), geometry.row_hits.last()) {
+        (Some(first), Some(last)) => format!(
+            "{}–{} / {}{}  ",
+            first.row_index + 1,
+            last.row_index + 1,
+            rows.len(),
+            if last.row_index + 1 < rows.len() {
+                " ↓"
+            } else {
+                ""
+            }
+        ),
+        _ => String::new(),
+    };
     frame.render_widget(
-        Paragraph::new(if topic.kind == crate::projects::ProjectKind::Semantic {
+        Paragraph::new(format!(
+            "{shown}{}",
             app.title_language.text(
-                "1–3 follow-up · ↑↓ conversations · enter open · e plan · esc back",
-                "1–3 推进建议 · ↑↓ 选择会话 · Enter 打开 · e 计划 · Esc 返回",
+                "↑↓ scroll · Enter view · Esc back",
+                "↑↓ 浏览 · Enter 查看 · Esc 返回"
             )
-        } else {
-            app.title_language.text(
-                "1–3 follow-up · ↑↓ conversations · enter open · r refresh · esc back",
-                "1–3 推进建议 · ↑↓ 选择会话 · Enter 打开 · r 刷新 · Esc 返回",
-            )
-        })
+        ))
         .style(Style::default().fg(app.palette.overlay0)),
         geometry.footer,
     );
 }
 
-fn render_cover(app: &AppState, frame: &mut Frame, area: Rect, cover: &TopicCover) {
-    if cover_is_empty(cover) || area.height == 0 {
-        return;
-    }
-    if area.height <= 5 {
-        let next = cover
-            .next_steps
-            .iter()
-            .enumerate()
-            .map(|(i, step)| format!("{}. {step}", i + 1))
-            .collect::<Vec<_>>()
-            .join("; ");
-        let mut lines = vec![cover_line(
-            app,
-            app.title_language.text("Goal", "目标"),
-            &cover.goal,
-            app.title_language.text("Not set", "尚未填写"),
-            area.width,
-        )];
-        if area.height >= 5 && !cover.next_steps.is_empty() {
-            lines.extend(
-                cover.next_steps.iter().enumerate().map(|(index, step)| {
-                    Line::from(format!("{}. {}", index + 1, single_line(step)))
-                }),
-            );
-        } else {
-            lines.push(cover_line(
-                app,
-                app.title_language.text("Next", "下一步"),
-                &next,
-                app.title_language.text("Not set", "尚未填写"),
-                area.width,
-            ));
-        }
-        lines.push(cover_line(
-            app,
-            app.title_language.text("Blocked", "阻塞"),
-            &cover.blocked_note,
-            app.title_language.text("None recorded", "暂无记录"),
-            area.width,
-        ));
-        frame.render_widget(
-            Paragraph::new(lines).style(Style::default().fg(app.palette.text)),
-            area,
-        );
-        return;
-    }
-    let Some(inner) = render_panel_shell(frame, area, app.palette.overlay0, app.palette.panel_bg)
-    else {
-        return;
-    };
-    if inner.width >= 80 && inner.height >= 4 {
-        let columns = Layout::horizontal([
-            Constraint::Ratio(1, 3),
-            Constraint::Length(2),
-            Constraint::Ratio(1, 3),
-            Constraint::Length(2),
-            Constraint::Ratio(1, 3),
-        ])
-        .split(inner);
-        cover_section(
-            app,
-            frame,
-            columns[0],
-            app.title_language.text("This week's goal", "本周目标"),
-            &cover.goal,
-            app.title_language.text("Add a goal", "填写目标"),
-        );
-        let steps = if cover.next_steps.is_empty() {
-            app.title_language
-                .text("Add up to three next steps", "最多填写三项下一步")
-                .to_string()
-        } else {
-            cover
-                .next_steps
-                .iter()
-                .enumerate()
-                .map(|(i, step)| {
-                    format!(
-                        "{}. {}",
-                        i + 1,
-                        super::text::truncate_end(
-                            &single_line(step),
-                            usize::from(columns[2].width.saturating_sub(3))
-                        )
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        cover_section(
-            app,
-            frame,
-            columns[2],
-            app.title_language.text("Next steps", "下一步"),
-            &steps,
-            app.title_language
-                .text("Add up to three next steps", "最多填写三项下一步"),
-        );
-        cover_section(
-            app,
-            frame,
-            columns[4],
-            app.title_language.text("What's blocked", "当前阻塞"),
-            &cover.blocked_note,
-            app.title_language
-                .text("Add a blocker if needed", "如有阻塞请在此填写"),
-        );
-    } else {
-        let mut lines = vec![cover_line(
-            app,
-            app.title_language.text("Goal", "目标"),
-            &cover.goal,
-            app.title_language
-                .text("Add this week's goal", "填写本周目标"),
-            inner.width,
-        )];
-        // Reserve a line each for the goal and blocker before expanding the steps.
-        let expanded_height = cover.next_steps.len().max(1) as u16 + 2;
-        if inner.height >= expanded_height {
-            if inner.height > expanded_height {
-                lines.push(Line::from(Span::styled(
-                    app.title_language.text("Next steps", "下一步"),
-                    Style::default().fg(app.palette.accent),
-                )));
-            }
-            if cover.next_steps.is_empty() {
-                lines.push(Line::from(
-                    app.title_language
-                        .text("Add up to three next steps", "最多填写三项下一步"),
-                ));
-            } else {
-                lines.extend(cover.next_steps.iter().enumerate().map(|(i, step)| {
-                    Line::from(format!(
-                        "{}. {}",
-                        i + 1,
-                        super::text::truncate_end(
-                            &single_line(step),
-                            usize::from(inner.width.saturating_sub(3))
-                        )
-                    ))
-                }));
-            }
-        } else {
-            let steps = cover
-                .next_steps
-                .iter()
-                .enumerate()
-                .map(|(i, step)| format!("{}. {step}", i + 1))
-                .collect::<Vec<_>>()
-                .join("; ");
-            lines.push(cover_line(
-                app,
-                app.title_language.text("Next", "下一步"),
-                &steps,
-                app.title_language.text("Add next steps", "填写下一步"),
-                inner.width,
-            ));
-        }
-        lines.push(cover_line(
-            app,
-            app.title_language.text("Blocked", "阻塞"),
-            &cover.blocked_note,
-            app.title_language
-                .text("Add a blocker if needed", "如有阻塞请在此填写"),
-            inner.width,
-        ));
-        frame.render_widget(
-            Paragraph::new(lines).style(Style::default().fg(app.palette.text)),
-            inner,
-        );
-    }
-}
-
 fn single_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn cover_line(
-    app: &AppState,
-    label: &str,
-    value: &str,
-    placeholder: &str,
-    width: u16,
-) -> Line<'static> {
-    let prefix = format!("{label}: ");
-    let available =
-        usize::from(width).saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str()));
-    Line::from(vec![
-        Span::styled(prefix, Style::default().fg(app.palette.accent)),
-        Span::raw(super::text::truncate_end(
-            &single_line(if value.is_empty() { placeholder } else { value }),
-            available,
-        )),
-    ])
-}
-
-fn cover_section(
-    app: &AppState,
-    frame: &mut Frame,
-    area: Rect,
-    label: &str,
-    value: &str,
-    placeholder: &str,
-) {
-    frame.render_widget(
-        Paragraph::new(label).style(
-            Style::default()
-                .fg(app.palette.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Rect::new(area.x, area.y, area.width, area.height.min(1)),
-    );
-    frame.render_widget(
-        Paragraph::new(if value.is_empty() { placeholder } else { value })
-            .style(Style::default().fg(if value.is_empty() {
-                app.palette.overlay0
-            } else {
-                app.palette.text
-            }))
-            .wrap(Wrap { trim: false }),
-        Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        ),
-    );
 }
 
 pub(crate) struct TopicCoverEditorGeometry {
@@ -840,9 +730,6 @@ mod tests {
         for expected in [
             "First users",
             "Interview five users",
-            "1. Send invitations",
-            "2. Schedule calls",
-            "3. Prepare questions",
             "Waiting for replies",
             "Plan first user interviews",
         ] {
@@ -866,10 +753,9 @@ mod tests {
             "主题 ·",
             "编辑计划",
             "刷新",
-            "现在在做什么",
-            "接下来可以这样推进",
+            "下一步建议",
             "历史会话",
-            "历史记录 · 只读",
+            "查看会话",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }
@@ -898,6 +784,10 @@ mod tests {
             "保存",
             "取消",
             "Interview five users",
+            "Send invitations",
+            "Schedule calls",
+            "Prepare questions",
+            "Waiting for replies",
         ] {
             assert!(text.contains(expected), "missing {expected}: {text}");
         }
@@ -915,13 +805,7 @@ mod tests {
         ] {
             assert!(state.open_topic_detail(key));
             let text = render_text(&state, 124, 32);
-            for expected in [
-                label,
-                "What's happening",
-                "Suggested follow-ups",
-                "Plan first user interviews",
-                "recorded conversation",
-            ] {
+            for expected in [label, "Next:", "Plan first user interviews", "History"] {
                 assert!(text.contains(expected), "missing {expected}:\n{text}");
             }
             assert!(!text.contains("Write this week's goal"));
@@ -955,7 +839,7 @@ mod tests {
         assert!(topic_detail_geometry(&state, area).sessions.height > after.sessions.height);
         let text = render_text(&state, 90, 20);
         assert!(!text.contains("Write this week's goal"));
-        assert!(text.contains("Suggested follow-ups"));
+        assert!(text.contains("History"));
     }
 
     #[test]
@@ -986,23 +870,190 @@ mod tests {
     #[test]
     fn topic_cover_narrow_layout_keeps_blocker_visible_with_three_steps() {
         let state = fixture(true);
-        // Five inner cover rows fit the goal, all three steps, and the blocker.
+        // Context stays above progress; the full authored plan is accessible in its editor.
         let text = render_text(&state, 70, 15);
         for expected in [
             "Goal: Interview five users",
-            "1. Send invitations",
-            "2. Schedule calls",
-            "3. Prepare questions",
-            "Blocked: Waiting for replies",
+            "Saved blocker: Waiting for replies",
             "Plan first user interviews",
         ] {
             assert!(text.contains(expected), "missing {expected}:\n{text}");
         }
-        // One fewer row uses the compact steps line, retaining the blocker and sessions.
+        // One fewer row still retains both context lines and the session.
         let compact = render_text(&state, 70, 14);
-        assert!(compact.contains("Next: 1. Send invitations"));
-        assert!(compact.contains("Blocked: Waiting for replies"));
+        assert!(compact.contains("Goal: Interview five users"));
+        assert!(compact.contains("Saved blocker: Waiting for replies"));
         assert!(compact.contains("Plan first user interviews"));
+    }
+
+    fn progress_fixture() -> AppState {
+        use crate::projects::activity::{ActivityBatch, SessionActivity};
+        let mut state = AppState::test_new();
+        let mut project = crate::projects::overview::tests::fixture_project();
+        project.cover = Some(TopicCover {
+            goal: "Learn why new users leave".into(),
+            next_steps: vec![
+                "Authored step one".into(),
+                "Authored step two".into(),
+                "Authored step three".into(),
+            ],
+            blocked_note: "Waiting for a finance decision".into(),
+            ..Default::default()
+        });
+        let activity = ActivityBatch {
+            sessions: vec![
+                SessionActivity {
+                    session_key: "session-0".into(),
+                    latest_request: Some("Check the consent form.".into()),
+                    next_steps: vec!["Send the approved invitations.".into()],
+                    ..Default::default()
+                },
+                SessionActivity {
+                    session_key: "session-1".into(),
+                    latest_update: Some("Compared three prices; finance must choose one.".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let overview = crate::projects::overview::build_overview(
+            &project,
+            &std::collections::HashMap::from([
+                ("session-0".into(), WorkPhase::Working),
+                ("session-1".into(), WorkPhase::NeedsInput),
+            ]),
+            &activity,
+            state.title_language,
+        );
+        let key = project.canonical_key.clone();
+        state.projects.snapshot.topics = vec![project];
+        state.open_topic_detail(&key);
+        state.replace_project_overview(overview);
+        state
+    }
+
+    #[test]
+    fn detail_shows_each_session_once_with_its_progress_and_own_actions() {
+        let state = progress_fixture();
+        let text = render_text(&state, 120, 36);
+        for title in [
+            "Confirm pricing",
+            "Prepare invitations",
+            "Review interview notes",
+        ] {
+            assert_eq!(text.matches(title).count(), 1, "duplicate session: {text}");
+        }
+        assert!(text.find("Confirm pricing") < text.find("Prepare invitations"));
+        assert!(text.find("Prepare invitations") < text.find("Review interview notes"));
+        assert!(text.find("Learn why new users leave") < text.find("Confirm pricing"));
+        assert_eq!(text.matches("Check the consent form.").count(), 1);
+        assert_eq!(text.matches("Send the approved invitations.").count(), 1);
+        assert!(
+            !text.contains("Authored step"),
+            "the complete plan belongs in the editor"
+        );
+        let rows = topic_detail_rows(&state);
+        let geometry = topic_detail_geometry(&state, Rect::new(0, 0, 120, 36));
+        for hit in &geometry.overview_hits {
+            let row = geometry
+                .row_hits
+                .iter()
+                .find(|row| row.rect.intersection(hit.rect) == hit.rect)
+                .unwrap();
+            let ProjectTreeRow::Session(session) = &rows[row.row_index] else {
+                panic!("action outside a session")
+            };
+            assert_eq!(
+                hit.session_key.as_deref(),
+                Some(session.stable_key.as_str())
+            );
+        }
+        assert_eq!(
+            geometry
+                .overview_hits
+                .iter()
+                .filter(|hit| hit.shortcut.is_some())
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn detail_scroll_reaches_variable_height_sessions_and_paged_history() {
+        let mut state = progress_fixture();
+        let seed = state.projects.snapshot.topics[0].sessions[2].clone();
+        for index in 3..65 {
+            let mut session = seed.clone();
+            session.stable_key = format!("session-{index}");
+            session.title = format!("Earlier interview {index}");
+            state.projects.snapshot.topics[0].sessions.push(session);
+        }
+        state.projects.snapshot.topics[0].next_cursor = Some(crate::projects::SessionCursor {
+            last_activity_at: 1,
+            stable_key: "older".into(),
+        });
+        for (width, height) in [(44, 14), (80, 24), (120, 32)] {
+            let area = Rect::new(0, 0, width, height);
+            state.view.topic_detail = topic_detail_geometry(&state, area);
+            let rows = topic_detail_rows(&state);
+            for (index, row) in rows.iter().enumerate() {
+                state.projects.topic_detail_selected = index;
+                state.projects.topic_detail_scroll = topic_detail_selection_scroll(&state);
+                let geometry = topic_detail_geometry(&state, area);
+                let selected = geometry
+                    .row_hits
+                    .iter()
+                    .find(|hit| hit.row_index == index)
+                    .unwrap_or_else(|| panic!("selection {index} hidden at {width}x{height}"));
+                assert_eq!(
+                    selected.rect.height,
+                    row_height(
+                        row,
+                        state.visible_project_overview().as_ref(),
+                        geometry.sessions.width
+                    )
+                    .min(geometry.sessions.height)
+                );
+                assert!(geometry
+                    .row_hits
+                    .iter()
+                    .all(|hit| hit.rect.intersection(geometry.sessions) == hit.rect));
+                assert!(geometry
+                    .overview_hits
+                    .iter()
+                    .all(|hit| hit.rect.intersection(geometry.sessions) == hit.rect));
+            }
+            assert!(matches!(
+                rows.last(),
+                Some(ProjectTreeRow::LoadOlder { .. })
+            ));
+            let text = render_text(&state, width, height);
+            assert!(text.contains("Load older conversations"), "{text}");
+        }
+    }
+
+    #[test]
+    fn overview_status_reordering_preserves_selected_session_and_scroll_anchor() {
+        let mut state = progress_fixture();
+        state.projects.topic_detail_selected = 1;
+        state.projects.topic_detail_scroll = 1;
+        let original = topic_detail_rows(&state)[1].identity();
+        let mut next = state.visible_project_overview().unwrap();
+        next.work[0].phase = WorkPhase::NeedsInput;
+        next.work[1].phase = WorkPhase::Ready;
+        state.replace_project_overview(next);
+        let rows = topic_detail_rows(&state);
+        assert_eq!(
+            rows[state.projects.topic_detail_selected].identity(),
+            original
+        );
+        assert_eq!(
+            rows[state.projects.topic_detail_scroll].identity(),
+            original
+        );
+        state.projects.filter = ProjectFilter::Open;
+        assert_eq!(topic_detail_rows(&state).len(), 2);
+        state.assert_invariants_for_test();
     }
 
     #[test]

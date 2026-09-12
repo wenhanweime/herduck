@@ -30,6 +30,7 @@ mod widgets;
 use self::topic_cover::{render_topic_cover_editor, render_topic_detail};
 pub(crate) use self::topic_cover::{
     topic_cover_editor_geometry, topic_detail_geometry, topic_detail_rows,
+    topic_detail_selection_scroll,
 };
 
 use self::dialogs::{

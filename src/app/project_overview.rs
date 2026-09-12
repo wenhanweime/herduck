@@ -82,6 +82,39 @@ impl AppState {
             .cloned()
             .or_else(|| Some(self.project_overview(project, &ActivityBatch::default())))
     }
+
+    pub(crate) fn replace_project_overview(&mut self, next: ProjectOverview) {
+        let previous = self
+            .projects
+            .overview
+            .as_ref()
+            .filter(|overview| overview.project_key == next.project_key)
+            .map(|_| {
+                let rows = crate::ui::topic_detail_rows(self);
+                (
+                    rows.get(self.projects.topic_detail_selected)
+                        .and_then(crate::ui::ProjectTreeRow::identity),
+                    rows.get(self.projects.topic_detail_scroll)
+                        .and_then(crate::ui::ProjectTreeRow::identity),
+                )
+            });
+        self.projects.overview = Some(next);
+        if let Some((selection, anchor)) = previous {
+            let rows = crate::ui::topic_detail_rows(self);
+            let position = |identity| {
+                rows.iter()
+                    .position(|row| row.identity().as_ref() == Some(&identity))
+            };
+            self.projects.topic_detail_selected = selection
+                .and_then(position)
+                .unwrap_or(self.projects.topic_detail_selected)
+                .min(rows.len().saturating_sub(1));
+            self.projects.topic_detail_scroll = anchor
+                .and_then(position)
+                .unwrap_or(self.projects.topic_detail_scroll)
+                .min(rows.len().saturating_sub(1));
+        }
+    }
 }
 
 impl App {
@@ -102,7 +135,7 @@ impl App {
         if self.state.projects.overview.as_ref() == Some(&next) {
             return false;
         }
-        self.state.projects.overview = Some(next);
+        self.state.replace_project_overview(next);
         true
     }
 }

@@ -85,15 +85,23 @@ fn sidebar_section_heights(total_h: u16, split_ratio: f32) -> (u16, u16) {
     (ws_h, detail_h)
 }
 
+fn expanded_section_heights(content: Rect, split_ratio: f32) -> (u16, u16) {
+    let extra_tabs =
+        super::projects::sidebar_tab_height(content.width, content.height).saturating_sub(1);
+    let (workspace, agents) =
+        sidebar_section_heights(content.height.saturating_sub(extra_tabs), split_ratio);
+    (workspace + extra_tabs, agents)
+}
+
 pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
     let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
     if content.width == 0 || content.height == 0 {
         return (Rect::default(), Rect::default());
     }
 
-    let (ws_h, detail_h) = sidebar_section_heights(content.height, split_ratio);
-    // Keep the Spaces header below the shared tabs without moving the section divider.
-    let tab_inset = super::projects::sidebar_tab_height(content.height).min(ws_h);
+    let (ws_h, detail_h) = expanded_section_heights(content, split_ratio);
+    // Additional tab rows get their own space instead of hiding the first workspace.
+    let tab_inset = super::projects::sidebar_tab_height(content.width, content.height).min(ws_h);
     let ws_area = Rect::new(
         content.x,
         content.y + tab_inset,
@@ -110,7 +118,7 @@ pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect
         return Rect::default();
     }
 
-    let (ws_h, _) = sidebar_section_heights(content.height, split_ratio);
+    let (ws_h, _) = expanded_section_heights(content, split_ratio);
     Rect::new(content.x, content.y + ws_h, content.width, 1)
 }
 
@@ -2321,7 +2329,7 @@ mod tests {
     fn expanded_sidebar_sections_handle_tiny_heights() {
         let (ws_area, detail_area) = expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9);
 
-        assert_eq!(ws_area, Rect::new(0, 1, 19, 2));
+        assert_eq!(ws_area, Rect::new(0, 2, 19, 1));
         assert_eq!(detail_area, Rect::new(0, 3, 19, 2));
     }
 
