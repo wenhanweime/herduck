@@ -280,7 +280,7 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
         Paragraph::new(format!(
             "{} · {}",
             if topic.kind == crate::projects::ProjectKind::Semantic {
-                app.title_language.text("Topic", "主题")
+                app.title_language.text("Work", "工作")
             } else {
                 app.title_language.text("Project", "项目")
             },
@@ -351,7 +351,7 @@ pub(super) fn render_topic_detail(app: &AppState, frame: &mut Frame, area: Rect)
                     ""
                 },
                 if topic.kind == crate::projects::ProjectKind::Semantic {
-                    "Topic"
+                    "Work"
                 } else {
                     "Project"
                 },
@@ -531,7 +531,7 @@ pub(super) fn render_topic_cover_editor(app: &AppState, frame: &mut Frame, area:
         Rect::new(inner.x, inner.y, inner.width, 1),
         &format!(
             "{} · {}",
-            app.title_language.text("Topic plan", "主题计划"),
+            app.title_language.text("Work plan", "工作计划"),
             editor.topic_name
         ),
         &app.palette,
@@ -750,7 +750,7 @@ mod tests {
         let saved = state.selected_project_summary().unwrap().cover.clone();
         let text = render_text(&state, 124, 32);
         for expected in [
-            "主题 ·",
+            "工作 ·",
             "编辑计划",
             "刷新",
             "下一步建议",
@@ -777,7 +777,7 @@ mod tests {
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
         for expected in [
-            "主题计划",
+            "工作计划",
             "本周目标",
             "下一步 1",
             "当前阻塞",
@@ -800,7 +800,7 @@ mod tests {
         let topic_key = state.projects.snapshot.topics[0].canonical_key.clone();
         let folder_key = state.projects.snapshot.projects[0].canonical_key.clone();
         for (key, label, editable) in [
-            (&topic_key, "Topic ·", true),
+            (&topic_key, "Work ·", true),
             (&folder_key, "Project ·", false),
         ] {
             assert!(state.open_topic_detail(key));
@@ -1083,6 +1083,6 @@ mod tests {
             .any(|row| matches!(row, ProjectTreeRow::Project { .. })));
         let text = render_text(&state, 120, 26);
         assert!(text.contains("Interview five users"));
-        assert!(text.contains("No conversations in this Topic yet"));
+        assert!(text.contains("No conversations in this Work yet"));
     }
 }

@@ -414,7 +414,7 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
                     .title_language
                     .text("No indexed projects yet", "还没有索引到项目"),
                 crate::app::state::ProjectGrouping::Topics => {
-                    app.title_language.text("No topics yet", "还没有主题")
+                    app.title_language.text("No work yet", "还没有工作")
                 }
             }
         } else {
@@ -672,7 +672,7 @@ pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect
         );
     }
 
-    let labels = ["Agents", "Sessions", "Projects", "Topics"];
+    let labels = ["Agents", "Sessions", "Projects", "Work"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 || rect.height == 0 {
             continue;
@@ -890,7 +890,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
                 ),
                 crate::app::state::SidebarView::Clusters => app
                     .title_language
-                    .text("search topics, sessions, agents", "搜索主题、会话或 Agent"),
+                    .text("search work, sessions, agents", "搜索工作、会话或 Agent"),
                 crate::app::state::SidebarView::SpacesAgents => {
                     app.title_language.text("search sessions", "搜索会话")
                 }
@@ -1665,7 +1665,7 @@ mod tests {
         assert_eq!(geometry.sidebar_tabs[3].right(), 39);
         assert!(
             geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
-            "Sessions/Projects/Topics tabs must not abut"
+            "Sessions/Projects/Work tabs must not abut"
         );
         assert!(geometry.filter_tabs.iter().all(|rect| rect.height == 1));
         assert!(
@@ -1681,11 +1681,11 @@ mod tests {
     }
 
     #[test]
-    fn semantic_grouping_tab_is_named_topics() {
+    fn semantic_grouping_tab_is_named_work() {
         let mut state = AppState::test_new();
         state.projects.snapshot = snapshot();
         let text = rendered_text(&state, Rect::new(0, 0, 60, 8));
-        assert!(text.contains("Topics"));
+        assert!(text.contains("Work"));
         assert!(!text.contains("Clusters"));
     }
 
@@ -1728,7 +1728,7 @@ mod tests {
                     let buffer = terminal.backend().buffer();
                     for (index, (rect, label)) in tabs
                         .into_iter()
-                        .zip(["Agents", "Sessions", "Projects", "Topics"])
+                        .zip(["Agents", "Sessions", "Projects", "Work"])
                         .enumerate()
                     {
                         let text = (rect.x..rect.right())

@@ -1,24 +1,27 @@
-# Topic covers
+# Work plans
 
-Introduced in the **0.1.0-alpha.3 source preview**. A Topic's saved plan contains this week's goal,
+Work was previously labelled Topics. The existing `herduck topic` commands and `topic.*` API
+names remain compatible; this name change does not migrate saved plans or conversation identities.
+
+Introduced in the **0.1.0-alpha.3 source preview**. A saved Work plan contains this week's goal,
 up to three next steps, and what's blocked. In **0.1.0-alpha.4**, the [project overview](project-overview.md)
 shows each conversation's progress and next action together. The saved goal and blocker stay at the
 top as context, while the complete plan is available through **edit plan**. An empty plan takes no
 space. Agent follow-ups have a separate **Continue with this** action and take precedence over saved
 plan items in the overview's suggestion list.
 
-Click **edit plan** or press **e** in the Topic detail view. Use Tab / Shift-Tab to move between
+Click **edit plan** or press **e** in the Work detail view. Use Tab / Shift-Tab to move between
 fields, Shift-Enter for a new line, and Enter or the **save** button to save. Esc cancels the
 draft. Ctrl-U clears the current field. The editor supports Chinese input and pasted text.
 On smaller terminals, it scrolls the form to the focused field while keeping the action buttons visible.
 
 The goal and blocker stay fixed while the conversation sections below them scroll. Click a conversation or select it
 with the arrow keys and press Enter to use the existing history-preview or live-session controls.
-Esc returns to the Topic list. Editing a cover does not start an Agent.
+Esc returns to the Work list. Editing a cover does not start an Agent.
 
 ## CLI
 
-With the matching Herduck server running, list Topics and copy the desired `canonical_key`:
+With the matching Herduck server running, list Work groups and copy the desired `canonical_key`:
 
 ```sh
 herduck topic list
@@ -76,23 +79,23 @@ The result has `type: "topic_cover"`, `topic_key`, and `cover`. A cover contains
 
 Successful updates return `type: "topic_cover_updated"` and the new Catalog `revision`.
 They also publish `project.snapshot.updated`; `project.snapshot` includes the saved `cover`
-on its Topic entry. Running clients refresh from that shared snapshot.
+on its Work entry. Running clients refresh from that shared snapshot.
 
 At most three next steps are accepted, and each text field is limited to 2,000 Unicode characters.
 Newlines and tabs are allowed; terminal control characters are rejected. Text is trimmed and blank
 next-step slots are omitted. Invalid updates fail atomically with `invalid_topic_cover`.
-Unknown Topic keys and directory-project keys return `not_found`. Unknown patch fields are rejected.
+Unknown Work keys and directory-project keys return `not_found`. Unknown patch fields are rejected.
 The complete contract is included in [the API schema](api/herduck-api.schema.json).
 
 ## Persistence and scope
 
 Covers are stored in the existing per-session Catalog (`projects/catalog.sqlite3` under the
 [session data directory](configuration.md#paths)). The v7 migration adds a separate `topic_covers`
-table. Existing conversations and Topic identities are preserved; old Topics and snapshots without
+table. Existing conversations and group identities are preserved; older groups and snapshots without
 a cover read as empty. Saved covers survive client detachment and server restart.
 
-Classification and model-based Topic merging never rewrite or merge authored cover text. If a
-Topic's last conversation moves to another Topic, its saved cover remains accessible under its
+Classification and model-based merging never rewrite or merge authored cover text. If a
+group's last conversation moves to another Work group, its saved cover remains accessible under its
 original name. A cover is not inferred from chat content.
 
 Authored blockers remain text; `blocked_session_ref` is reserved and remains `null` through the

@@ -1,16 +1,18 @@
 # Herduck
 
-**An Agent window manager with a project dashboard.**
+**The persistent work layer for agents.**
 
 Built on [Herdr](https://github.com/ogulcancelik/herdr), Herduck brings familiar tmux window
-management together with an Agent activity dashboard and a conversation library across your device.
-Arrange terminals, follow Agent progress, and browse the same work through Topics, Projects, and
-Sessions. People use the UI; Agents can inspect and manage the workspace through the CLI and JSON API.
+management together with Agent activity and a conversation library across your device.
+Arrange terminals and browse related conversations through Work, Projects, and Sessions.
+People use the UI; Agents can inspect and manage the workspace through the CLI and JSON API.
+Work is the new name for Topics in GitHub source; the published npm alpha still uses Topics.
+Saved plans and executable follow-ups are available in the [source preview](https://github.com/wenhanweime/herduck/pull/1).
 
 Version **0.1.0-alpha.4** describes current work from local conversations and offers concrete
 follow-ups. Choose **Continue with this** to send a suggestion to its original Agent, or
-**View conversation** to inspect the context. Selected Topics and Projects stay highlighted;
-Topic goals, next steps, and blockers remain editable.
+**View conversation** to inspect the context. Selected Work groups and Projects stay highlighted;
+Work goals, next steps, and blockers remain editable.
 This source preview is awaiting publication; `herduck@alpha` follows the latest published release.
 
 This package launches the native Herduck application on macOS and Linux (x64 and arm64).

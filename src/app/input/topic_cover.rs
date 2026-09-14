@@ -307,7 +307,7 @@ impl App {
                             &response.error.message,
                             match response.error.code.as_str() {
                                 "conflict" => "计划已在别处更新，请重新打开后再保存。",
-                                "not_found" => "此主题已不可用，请返回列表。",
+                                "not_found" => "此工作已不可用，请返回列表。",
                                 _ => "无法保存计划，请检查输入后重试。",
                             },
                         )
@@ -316,7 +316,7 @@ impl App {
                 .unwrap_or_else(|_| {
                     self.state
                         .title_language
-                        .text("Could not save Topic cover", "无法保存主题计划，请重试。")
+                        .text("Could not save Work plan", "无法保存工作计划，请重试。")
                         .into()
                 });
         }

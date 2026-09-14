@@ -49,7 +49,7 @@ impl TopicCoverPatch {
             .as_ref()
             .is_some_and(|steps| steps.len() > MAX_NEXT_STEPS)
         {
-            return Err("A Topic cover can have at most three next steps");
+            return Err("A Work plan can have at most three next steps");
         }
         let fields = self
             .goal
@@ -58,13 +58,13 @@ impl TopicCoverPatch {
             .chain(self.next_steps.iter().flatten());
         for field in fields {
             if field.chars().count() > MAX_COVER_TEXT_CHARS {
-                return Err("Each Topic cover field must be at most 2000 characters");
+                return Err("Each Work plan field must be at most 2000 characters");
             }
             if field
                 .chars()
                 .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
             {
-                return Err("Topic cover text cannot contain terminal control characters");
+                return Err("Work plan text cannot contain terminal control characters");
             }
         }
         if self.expected_updated_at.is_some_and(|value| value < 0) {

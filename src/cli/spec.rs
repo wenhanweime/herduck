@@ -143,16 +143,14 @@ fn api_command() -> Command {
 
 fn topic_command() -> Command {
     Command::new("topic")
-        .about("Read Topic progress and edit saved plans over the socket API")
-        .subcommand(
-            Command::new("list").about("List Topic keys, covers, and conversations as JSON"),
-        )
+        .about("Read Work progress and edit saved plans over the socket API")
+        .subcommand(Command::new("list").about("List Work keys, plans, and conversations as JSON"))
         .subcommand(overview_command())
         .subcommand(followup_command())
         .subcommand(
             Command::new("cover")
-                .about("Read or update a Topic cover")
-                .subcommand(id_command("get", "topic_key", "Read a Topic cover"))
+                .about("Read or update a Work plan")
+                .subcommand(id_command("get", "topic_key", "Read a Work plan"))
                 .subcommand(
                     Command::new("update")
                         .about("Update only the supplied cover fields")
@@ -170,7 +168,7 @@ fn overview_command() -> Command {
     Command::new("overview")
         .about("Read current work, recent progress, and suggested next moves as JSON")
         .subcommand(
-            id_command("get", "project_key", "Read a Topic or Project overview")
+            id_command("get", "project_key", "Read a Work or Project overview")
                 .arg(flag("refresh").help("Refresh recent local conversation evidence")),
         )
 }

@@ -23,7 +23,7 @@ fn run_group_command(args: &[String], topics: bool) -> std::io::Result<i32> {
         return Ok(if args.is_empty() { 2 } else { 0 });
     }
     let parsed = if !topics && args.first().is_some_and(|arg| arg == "cover") {
-        Err("Authored covers belong to Topics; use herduck topic cover".into())
+        Err("Saved plans belong to Work; use herduck topic cover".into())
     } else {
         parse_method(args)
     };
@@ -103,7 +103,7 @@ fn parse_method(args: &[String]) -> Result<Method, String> {
                 patch: parse_patch(flags)?,
             }))
         }
-        _ => Err("Unknown or incomplete Topic/Project command".into()),
+        _ => Err("Unknown or incomplete Work/Project command".into()),
     }
 }
 
@@ -157,7 +157,7 @@ fn print_help(topics: bool) {
         eprintln!("herduck project commands (JSON output):\n  herduck project list\n  herduck project overview get <project-key> [--refresh]\n  herduck project followup start <project-key> <suggestion-id>\n  herduck project followup get <followup-id>\n  herduck project followup cancel <followup-id>");
         return;
     }
-    eprintln!("herduck topic commands (JSON output):");
+    eprintln!("herduck topic commands for Work (JSON output):");
     eprintln!("  herduck topic list");
     eprintln!("  herduck topic overview get <topic-key> [--refresh]");
     eprintln!("  herduck topic followup start <topic-key> <suggestion-id>");

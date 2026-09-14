@@ -1,6 +1,6 @@
 # Project overview and follow-ups
 
-Available in the **0.1.0-alpha.4 source preview**. Open a Topic or folder Project to read what its
+Available in the **0.1.0-alpha.4 source preview**. Open a Work group or folder Project to read what its
 Agents are doing and choose a next action. No plan has to be filled in first. The selected group
 stays highlighted when viewing its detail, editing its plan, or opening a child session.
 
@@ -28,10 +28,10 @@ Agent follow-ups take precedence over saved steps in the bounded suggestion list
 next steps, and blockers stay editable and are never overwritten by automatic updates.
 
 Press **r** or click **refresh** to reread recent evidence. Use **↑/↓** and **Enter** to browse the session
-sections, **e** to edit a Topic plan, and **Esc** to return to the sidebar. Use the mouse wheel to scroll the same sections. Smaller terminals wrap the text and preserve each
+sections, **e** to edit a Work plan, and **Esc** to return to the sidebar. Use the mouse wheel to scroll the same sections. Smaller terminals wrap the text and preserve each
 visible action beside its owner. The footer shows the visible range and whether more conversations
 are below; arrow keys bring the selected conversation and its controls into view. Folder Projects
-share the overview; authored goals and plans remain a Topic feature.
+share the overview; authored goals and plans remain a Work feature.
 
 ## Evidence and scope
 
@@ -58,7 +58,7 @@ original Agent, with that Agent's existing tools and permissions.
 recommendations, controls, states, and feedback. Continuation instructions explicitly request progress
 updates and replies in that language. The language comes from the saved setting, not from individual
 conversations; config reload applies it without restarting the server. The four sidebar tabs always
-keep their English names: **Agents / Sessions / Projects / Topics**. Narrow sidebars use two rows so
+keep their English names: **Agents / Sessions / Projects / Work**. Narrow sidebars use two rows so
 the names remain readable; the other controls follow the selected language.
 
 When recent evidence is in another language, a bounded background worker translates it using the
@@ -75,7 +75,7 @@ keeps the wording the person selected; its delivery status follows the current l
 Delivery is bound to the original session, Agent, and terminal; replacing or closing that target cancels
 pending input. At most one follow-up can wait per pane, with 16 pending and 128 retained delivery records
 per server. These delivery records last for the running server's lifetime; they do not survive a restart
-or live handoff. Saved Topic plans and native conversation histories retain their existing persistence.
+or live handoff. Saved Work plans and native conversation histories retain their existing persistence.
 
 ## CLI and socket API
 

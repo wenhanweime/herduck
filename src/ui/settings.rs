@@ -533,7 +533,7 @@ providers = [
         let saved = form_text(&app);
         assert!(saved.contains("Sources · inactive"));
         assert!(saved.contains("No Agent or API calls in this mode."));
-        assert!(saved.contains("Existing topics and session names stay unchanged."));
+        assert!(saved.contains("Existing Work groups and session names stay unchanged."));
         assert!(saved.contains("saved-model"));
         app.summary_config.mode = crate::config::SummaryModeConfig::Local;
         let local = form_text(&app);
@@ -541,7 +541,7 @@ providers = [
         assert!(local.contains("No Agent or API calls in this mode."));
         assert!(local.contains("saved-model"));
         assert!(local.contains("Names use local session text."));
-        assert!(local.contains("Existing topics stay unchanged."));
+        assert!(local.contains("Existing Work groups stay unchanged."));
     }
 
     #[test]

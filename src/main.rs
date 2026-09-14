@@ -663,7 +663,7 @@ fn main() -> io::Result<()> {
             ),
             (
                 "herduck topic <subcommand>",
-                "List Topics and read or edit their covers",
+                "List Work groups and read or edit their plans",
             ),
             (
                 "herduck notification <subcommand>",
