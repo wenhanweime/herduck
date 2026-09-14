@@ -134,7 +134,7 @@ fn render_onboarding_welcome(app: &AppState, frame: &mut Frame, area: Rect) {
         Line::raw("Find past work in Sessions."),
     ];
     if copy.width >= 32 {
-        lines.push(Line::raw("Group it in Projects and Topics."));
+        lines.push(Line::raw("Group it in Projects and Work."));
     }
     if copy.height >= 10 {
         lines.extend([

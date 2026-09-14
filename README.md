@@ -2,36 +2,29 @@
   <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. A duck in a white hood, working at a laptop." width="880">
 </p>
 
-<h1 align="center">Sessions end. Work continues.</h1>
+<h1 align="center">The persistent work layer for agents.</h1>
 
-<p align="center">Agent window management. Shared project context for people and Agents.</p>
+<p align="center">Agents execute. Herduck keeps the work continuous.</p>
 
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#features">Features</a> ·
-  <a href="#toward-persistent-work-state">Product direction</a> ·
-  <a href="docs/configuration.md">Configuration</a> ·
+  <a href="#for-people-and-agents">For people and agents</a> ·
+  <a href="#where-work-is-going">Product direction</a> ·
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-Herduck brings **Agent terminals, conversation history, and project views** into one terminal
-workspace. Run several Agents, see which ones need attention, find their related conversations,
-and pick up the right context to continue.
+Herduck is a **terminal workspace for people and agents to organize and continue work together**.
+It combines **tmux-style Agent window management** with related conversations and project context:
+run your Agents, find the work they belong to, and return to the right conversation to move it forward.
 
-It builds on [Herdr](https://github.com/ogulcancelik/herdr), a terminal manager and runtime for
-Agents with a workflow familiar to **tmux** users: workspaces, tabs, split panes, and terminal
-sessions that keep running when you detach. Herduck adds organization across Agents and sessions,
-with a terminal UI for people and a CLI and JSON API for Agents.
+Built on [Herdr](https://github.com/ogulcancelik/herdr), it keeps the familiar workspaces, tabs,
+split panes, and terminals that keep running when you detach. **People use the terminal UI;
+Agents use the CLI and JSON API.** The source preview adds saved goals and next steps that both
+can update, alongside recent progress and executable follow-ups.
 
-Our goal is to make returning to work straightforward: **what are we trying to finish, where
-does it stand, what needs a decision, and what should happen next?** We are building toward a
-persistent work state that both people and Agents can read, maintain, and act on.
-
-| Availability | What you can use |
-| --- | --- |
-| **npm alpha · 0.1.0-alpha.2** | Agent windows and activity, a local session library, directory Projects, semantic Topics, and CLI/API controls. |
-| **Source preview · 0.1.0-alpha.4** | Saved Topic plans, descriptions of recent progress, and follow-ups sent to the original Agent. See [the preview PR](https://github.com/wenhanweime/herduck/pull/1). |
-| **Planned** | Persistent work-level synthesis, decisions and failed attempts, prioritized actions with dependencies, and results written back into work state. |
+The goal: come back to a piece of work and understand **what we are trying to finish, where it
+stands, what needs attention, and what to do next**.
 
 ## Install
 
@@ -48,50 +41,59 @@ Or try it without a global install:
 npx --yes herduck@alpha
 ```
 
-The npm alpha currently installs **0.1.0-alpha.2**. The launcher downloads a native binary and
-verifies its SHA-256 hash on first use; Rust and Zig are not needed. Install and sign in to your
-Agent CLIs separately. Source-preview features require the [preview branch](https://github.com/wenhanweime/herduck/pull/1).
+**Work is the new name for Topics in GitHub source.** The npm alpha still installs
+**0.1.0-alpha.2**, which uses the previous name. Choose the version for the capabilities you need:
 
-Prebuilt downloads support Apple silicon and Intel Macs, and x64/arm64 Linux with glibc 2.39+
-(such as Ubuntu 24.04). Windows and Alpine/musl are not supported by these downloads.
-See [installation](docs/installation.md) for version pinning, direct binaries, source builds,
-upgrades, and troubleshooting.
+| Version | Available capabilities |
+| --- | --- |
+| **npm alpha · 0.1.0-alpha.2** | Agent windows and activity, a local session library, directory Projects, related conversations under Topics, and CLI/API controls. |
+| **Source preview · 0.1.0-alpha.4** | The Work name, saved goals and next steps, recent progress descriptions, and follow-ups sent to the original Agent. [Preview branch and usage](https://github.com/wenhanweime/herduck/pull/1). |
+
+The launcher downloads a native binary and verifies its SHA-256 hash on first use; Rust and Zig
+are not needed. Install and sign in to your Agent CLIs separately. Prebuilt downloads support
+Apple silicon and Intel Macs, and x64/arm64 Linux with glibc 2.39+ (such as Ubuntu 24.04).
+Windows and Alpine/musl are not supported by these downloads.
+See [installation](docs/installation.md) for source builds, direct binaries, and upgrades.
 
 ## Features
 
-Four views connect the execution environment with its history and project context:
+Four views connect the work with its execution, directories, and history:
 
 | View | What it helps you do |
 | --- | --- |
-| **Agents** | Manage terminal windows and see Agent activity across Herduck workspaces. |
-| **Sessions** | Find supported local Agent histories, including work started outside Herduck, and continue supported conversations. |
-| **Projects** | Follow work by directory; create project directories and workspaces, and browse each project's conversations. |
-| **Topics** | Automatically bring related conversations together across directories and Agents when semantic organization is enabled. |
+| **Agents** | Arrange terminal windows and see which Agents are working or need your attention. |
+| **Sessions** | Find supported Agent histories across your device and return to the right conversation. |
+| **Projects** | Organize by working directory, create project directories and workspaces, and browse their conversations. |
+| **Work** | Bring related conversations together across directories and Agents; the source preview adds shared goals and next steps. |
 
-### Keep running Agents in view
+### Keep execution in view
 
 Run Agent CLIs side by side. Split and resize panes with the mouse, switch tabs and workspaces,
 and detach without stopping the terminals. Open `herduck` to attach again.
 
-Activity indicators and configurable notifications help you notice an Agent working, waiting
-for input, or becoming idle or inactive. Select an Agent to reach its terminal. Runtime activity
-describes the Agent; confirming that the work is complete still requires its result.
+Activity indicators and configurable notifications show when an Agent is working, waiting for
+input, idle, or inactive. Select an Agent to reach its terminal. An idle Agent is ready for more
+input; the result still needs to be checked before the work can be called complete.
 
-![Native Herduck Agents view showing split terminal panes and the Agent activity overview](assets/screenshots/agents.png)
+![Herduck v0.1.0-alpha.2 native Agents view with split terminals and Agent activity](assets/screenshots/agents.png)
 
-### Find related work across sessions
+*Screenshots show native Ghostty windows running v0.1.0-alpha.2 with prepared example histories.
+That version labels Work as Topics. [Capture notes](assets/screenshots/README.md).*
 
-**Topics** groups conversations by meaning, including conversations from different directories
-or Agents. Follow several topics, expand a group, and inspect its history. Generation is opt-in;
-existing Topics remain available when generation is off or a model source is unavailable.
+### Bring related conversations together
 
-![Native Herduck Topics view grouping related conversations across directories and Agents](assets/screenshots/topics.png)
+**Work** groups related conversations by meaning, including conversations from different
+directories or Agents. Follow several pieces of work, expand a group, and inspect its history.
+Automatic organization is opt-in; existing groups remain available when generation is off or
+a model source is unavailable.
 
-**Projects** keeps the familiar directory view. Create a project directory and a workspace for
-it; supported conversations from that directory appear in its project group. Each project has
-its own view of recent and open sessions.
+![Herduck v0.1.0-alpha.2 related conversations view, labelled Topics in this release](assets/screenshots/topics.png)
 
-![Native Herduck Projects view grouping sessions by working directory](assets/screenshots/projects.png)
+**Projects** keeps the familiar directory view, whether the folder holds code, documents, or
+other working material. Create a project directory and a workspace for it; supported conversations
+from that directory appear in its project group.
+
+![Herduck v0.1.0-alpha.2 native Projects view grouping sessions by working directory](assets/screenshots/projects.png)
 
 ### Return to the right conversation
 
@@ -101,64 +103,68 @@ transcripts without launching an Agent. OpenCode history indexing is supported; 
 preview is not yet available.
 
 Continue a supported conversation with its original Agent. Herduck focuses a matching running
-session when one exists, or resumes its native history when supported. Projects and Topics are
-additional ways to find that same history.
+session when one exists, or resumes its native history when supported. Work and Projects give
+you two more ways to find that same history.
 
-![Native Herduck Sessions view showing a conversation list, saved context, and resume controls](assets/screenshots/sessions.png)
+![Herduck v0.1.0-alpha.2 native Sessions view with history and resume controls](assets/screenshots/sessions.png)
 
-*These are native Ghostty window captures of Herduck v0.1.0-alpha.2 with prepared example histories
-and Topics. Agent panes show native CLIs, a prepared conversation, and local test output.
-They illustrate the available interface. [Capture notes](assets/screenshots/README.md).*
+### Read recent progress and act on it — source preview
 
-### See recent progress and act on a follow-up — source preview
-
-In **0.1.0-alpha.4**, opening a Topic or Project shows descriptions from recent requests and Agent
-replies, along with suggested next steps. A Topic also keeps an editable goal, up to three next
-steps, and a blocker note. Its saved plan survives a server restart.
+Opening a Work group or Project shows descriptions from recent requests and Agent replies,
+alongside suggested next steps. A Work group also keeps an editable goal, up to three next steps,
+and a blocker note. Its saved plan survives a server restart.
 
 Choose **Continue with this** to send a selected follow-up to its original Agent. Herduck reuses
 a matching live session or resumes the original conversation; busy Agents receive queued input
-when ready. **View conversation** opens the evidence. If the Agent needs your answer, open it to
-respond. Controls and generated descriptions follow the configured Chinese or English language;
-the four navigation tabs keep their English names.
+when ready. **View conversation** opens the supporting context. When an Agent needs your answer,
+open its session to respond. Controls and generated descriptions follow the configured Chinese
+or English language; the navigation tabs keep their English names.
 
-This preview derives progress and suggestions from individual sessions. Cross-session work
-synthesis is planned. Follow-up delivery records currently last for the running server's lifetime;
-“sent” confirms delivery, while the outcome must still be verified.
-See [preview usage and API](https://github.com/wenhanweime/herduck/blob/041f35fc68f8a055f0fcfe427073496433112639/docs/project-overview.md).
+This preview reads progress and suggestions from individual sessions. Combining evidence into
+a work-wide account and assembling context across sessions are planned. Follow-up delivery
+records last for the running server's lifetime; “sent” confirms delivery, while the outcome
+must still be verified. [Preview usage and API](https://github.com/wenhanweime/herduck/blob/feat/topic-cover-alpha.3/docs/project-overview.md).
 
-### Give people and Agents access to the same workspace
+## For people and agents
 
-The CLI and JSON API can list Agents, read terminal output, send input, wait for state changes,
-and create or manage workspaces, tabs, and panes. For example:
+**Agents can manage work, too.** The CLI and JSON API can list Agents, read terminal output,
+send input, wait for state changes, and create or manage workspaces, tabs, and panes:
 
 ```sh
 herduck workspace create --cwd /path/to/project --label my-project
 herduck agent list
 ```
 
-The source preview also exposes Topic-plan updates, project overviews, and follow-up controls
-through the public API. Run `herduck agent --help` or see the [API schema](docs/api/herduck-api.schema.json)
-for the checked-out version; the preview contract is linked above.
+In the **source preview**, Agents can also read progress, update saved goals, next steps and
+blockers, and start or check a follow-up. The interface reads the same saved plan. For example,
+with the matching server running:
 
-## Toward persistent work state
+```sh
+herduck topic list
+herduck topic cover get TOPIC_KEY
+herduck topic overview get TOPIC_KEY
+herduck topic cover update TOPIC_KEY \
+  --next-step "Review the latest result" \
+  --blocked-note "Waiting for feedback"
+```
 
-Work often spans several sessions and Agents. The next step for Herduck is to maintain a shared
-account of that work, with each conclusion connected to its evidence:
+These commands return JSON. Replace `TOPIC_KEY` with a key from the list. **Work keeps the existing
+`herduck topic` commands and `topic.*` API names for compatibility.** See the
+[plan API and guarded updates](https://github.com/wenhanweime/herduck/blob/feat/topic-cover-alpha.3/docs/topic-covers.md)
+and [follow-up controls](https://github.com/wenhanweime/herduck/blob/feat/topic-cover-alpha.3/docs/project-overview.md#cli-and-socket-api).
 
-| Part of the work | What people and Agents should be able to understand |
-| --- | --- |
-| **Goal and completion criteria** | What are we trying to achieve, and how will we know it is done? |
-| **Current progress and blockers** | What is confirmed, what remains uncertain, and what needs attention? |
-| **Decisions and attempts** | Why did we choose this approach, and which dead ends should we avoid repeating? |
-| **Next actions** | What should happen next, why now, and does it need a person or an Agent? |
-| **Results and recent changes** | What changed since the last visit, and which files, outputs, or conversations support it? |
+## Where Work is going
 
-The intended loop is **observe → maintain work state → act → record the result**. Facts,
-decisions, and hypotheses must stay distinguishable as context is summarized and passed on.
-A new Agent should be able to take over with the goal, constraints, prior attempts, and next
-step already available. This work-level memory and action loop is the product direction;
-it is not yet implemented in full. Cross-device continuity is also future work.
+Work should outlast the session that started it. We are building toward a shared working context
+that a person or a different Agent can pick up and continue:
+
+- **Keep explicit state small:** a goal, lifecycle, blocker, and next steps that people and Agents can read and update.
+- **Understand progress from evidence:** connect relevant history to the current work, retain sources, and distinguish confirmed facts from uncertain conclusions.
+- **Continue with context:** carry the chosen next step, goal, constraints, and relevant history into execution, then make the result available for the next visit.
+
+This complete Work flow is planned. Today's source preview provides saved plans and session-level
+follow-ups as its foundation. Work identity across regrouping, work-wide synthesis, lifecycle
+updates, and context assembly are the next steps; cross-device continuity is future work.
 
 ## Use your Agents and choose your model sources
 
@@ -166,18 +172,18 @@ Herduck includes screen-state detection for **19 Agent CLIs**, including Claude 
 OpenCode, Pi, Gemini CLI, Cursor, GitHub Copilot, Kimi, Grok, and Hermes. Detection, history
 indexing, transcript reading, and resume have different coverage; history support is described above.
 
-For topic organization and session naming, configure **OpenCode, Pi, Codex, or Hermes CLI sources**,
+For work organization and session naming, configure **OpenCode, Pi, Codex, or Hermes CLI sources**,
 or an **OpenAI-compatible API**. Sources and their models are tried in your chosen order. Model
 rejection advances to the next model; startup or transport failure advances to the next source.
-If all sources fail, existing Topics remain available and session names fall back to local text.
+If all sources fail, existing Work groups remain available and session names fall back to local text.
 Manual names are preserved. [Configure sources and fallback](docs/configuration.md#summary-sources-and-fallback-order).
 
 ### Local data and opt-in generation
 
-Conversation indexing and saved plans use local storage. Model-based summaries, names, and Topics
-are **off by default**. When enabled, selected conversation content is sent to your configured
-Agent or API sources. Using an Agent CLI as a source can still call that Agent's remote model.
-Agent authentication stays with each Agent.
+Conversation indexing and saved plans use local storage. Model-based summaries, names, and work
+organization are **off by default**. When enabled, selected conversation content is sent to your
+configured Agent or API sources. Using an Agent CLI as a source can still call that Agent's
+remote model. Agent authentication stays with each Agent.
 
 Open **herduck · menu → settings**, or press **Ctrl+B, then S**. The Sessions, Summaries, and
 Session names pages show the loaded settings. Choose **Open config file**, edit and save, then

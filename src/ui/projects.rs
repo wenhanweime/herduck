@@ -388,7 +388,7 @@ pub(crate) fn project_tree_rows(app: &AppState) -> Vec<ProjectTreeRow> {
         } else if catalog_is_empty {
             match grouping {
                 crate::app::state::ProjectGrouping::Directories => "No indexed projects yet",
-                crate::app::state::ProjectGrouping::Topics => "No topics yet",
+                crate::app::state::ProjectGrouping::Topics => "No work yet",
             }
         } else {
             "No sessions in this filter"
@@ -511,7 +511,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
 
     let tab_gap = u16::from(content.width >= 31);
     let tab_inner = content.width.saturating_sub(tab_gap.saturating_mul(3));
-    // Full labels require 28 columns. Drop only the decorative gaps before truncating labels, then
+    // Keep the existing 28-column tab allocation. Drop decorative gaps before truncating labels, then
     // distribute spare width evenly so every tab keeps a generous click target.
     let (first_width, second_width, third_width, fourth_width) = if tab_inner >= 28 {
         let extra = tab_inner - 28;
@@ -635,7 +635,7 @@ pub(crate) fn render_sidebar_tabs(app: &AppState, frame: &mut Frame, tabs: [Rect
         );
     }
 
-    let labels = ["Agents", "Sessions", "Projects", "Topics"];
+    let labels = ["Agents", "Sessions", "Projects", "Work"];
     for (index, (label, rect)) in labels.into_iter().zip(tabs).enumerate() {
         if rect.width == 0 || rect.height == 0 {
             continue;
@@ -837,7 +837,7 @@ pub(crate) fn render_projects_sidebar(app: &AppState, frame: &mut Frame, area: R
             let placeholder = match app.sidebar_view {
                 crate::app::state::SidebarView::Sessions => "search sessions, agents, paths",
                 crate::app::state::SidebarView::Projects => "search projects, sessions, agents",
-                crate::app::state::SidebarView::Clusters => "search topics, sessions, agents",
+                crate::app::state::SidebarView::Clusters => "search work, sessions, agents",
                 crate::app::state::SidebarView::SpacesAgents => "search sessions",
             };
             (" / ", placeholder)
@@ -1535,7 +1535,7 @@ mod tests {
         assert_eq!(geometry.sidebar_tabs[3].right(), 39);
         assert!(
             geometry.sidebar_tabs[1].x > geometry.sidebar_tabs[0].right(),
-            "Sessions/Projects/Topics tabs must not abut"
+            "Sessions/Projects/Work tabs must not abut"
         );
         assert!(geometry.filter_tabs.iter().all(|rect| rect.height == 1));
         assert!(
@@ -1551,11 +1551,11 @@ mod tests {
     }
 
     #[test]
-    fn semantic_grouping_tab_is_named_topics() {
+    fn semantic_grouping_tab_is_named_work() {
         let mut state = AppState::test_new();
         state.projects.snapshot = snapshot();
         let text = rendered_text(&state, Rect::new(0, 0, 60, 8));
-        assert!(text.contains("Topics"));
+        assert!(text.contains("Work"));
         assert!(!text.contains("Clusters"));
     }
 
@@ -1592,7 +1592,7 @@ mod tests {
                     let line = (0..29).map(|x| buffer[(x, y)].symbol()).collect::<String>();
                     assert!(!line.to_lowercase().contains("spaces"));
                     if y == label_y {
-                        for label in ["Agents", "Sessions", "Projects", "Topics"] {
+                        for label in ["Agents", "Sessions", "Projects", "Work"] {
                             assert!(line.contains(label), "missing {label}: {line}");
                         }
                     } else {

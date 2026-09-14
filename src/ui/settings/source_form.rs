@@ -152,12 +152,13 @@ pub(super) fn source_form(app: &AppState, width: u16) -> SettingsForm {
     }
     form.section(if inactive { "Result" } else { "Fallback" }, app);
     match config.mode {
-        SummaryModeConfig::Pending => {
-            form.text("Existing topics and session names stay unchanged.", text)
-        }
+        SummaryModeConfig::Pending => form.text(
+            "Existing Work groups and session names stay unchanged.",
+            text,
+        ),
         SummaryModeConfig::Local => {
             form.text("Names use local session text.", value);
-            form.text("Existing topics stay unchanged.", text);
+            form.text("Existing Work groups stay unchanged.", text);
         }
         _ => {
             form.text("If every source fails", value);
@@ -165,7 +166,7 @@ pub(super) fn source_form(app: &AppState, width: u16) -> SettingsForm {
                 if titles {
                     "Use local session text for names."
                 } else {
-                    "Keep topics · use local text for names."
+                    "Keep Work groups · use local text for names."
                 },
                 text,
             );
