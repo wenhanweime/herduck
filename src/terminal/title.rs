@@ -1,4 +1,4 @@
-const CLAUDE_ACTIVITY_GLYPHS: &str = "·✢✳✶✻✽";
+const CLAUDE_ACTIVITY_GLYPHS: &str = "·✢✳✶✻✽◐◑◒◓";
 
 pub(crate) fn stripped_terminal_title(title: &str) -> Option<String> {
     let title = title.trim();
@@ -35,6 +35,16 @@ mod tests {
             stripped_terminal_title("⠋ ⠙ task").as_deref(),
             Some("⠙ task")
         );
+    }
+
+    #[test]
+    fn strips_claude_half_circle_activity_frames() {
+        for frame in ['◐', '◑', '◒', '◓'] {
+            assert_eq!(
+                stripped_terminal_title(&format!("{frame} Claude Code")).as_deref(),
+                Some("Claude Code")
+            );
+        }
     }
 
     #[test]

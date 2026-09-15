@@ -71,16 +71,6 @@ const LOW_SIGNAL_OPENERS: [&str; 12] = [
     "test",
 ];
 
-/// Continuation prompts are meaningful to the runtime but do not identify the work being resumed.
-const LOW_SIGNAL_CONTINUATIONS: [&str; 6] = [
-    "continue from where you left off",
-    "continue where you left off",
-    "continue from the previous session",
-    "继续上次",
-    "继续之前",
-    "恢复之前",
-];
-
 /// One session's cleaned input, as sent to the title model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TitleEnvelope {
@@ -196,10 +186,149 @@ pub(crate) fn is_low_signal(intent: &str) -> bool {
     // must survive, so this compares the entire trimmed turn rather than its prefix.
     LOW_SIGNAL_OPENERS.iter().any(|opener| {
         lowered == *opener || lowered.trim_end_matches(['。', '，', '?', '？']) == *opener
-    }) || LOW_SIGNAL_CONTINUATIONS
-        .iter()
-        .any(|phrase| lowered.trim_end_matches(['。', '.', '!', '?', '！', '？']) == *phrase)
+    }) || is_continuation_only(trimmed)
         || trimmed.chars().count() < 3
+}
+
+/// Match an entire continuation request, never a prefix of a concrete task.
+/// The small vocabulary deliberately leaves unknown words as task evidence.
+fn is_continuation_only(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .trim_end_matches(['。', '.', '!', '?', '！', '？'])
+        .to_lowercase();
+    if ["继续", "接着", "恢复"]
+        .iter()
+        .any(|verb| normalized.contains(verb))
+    {
+        // Restoring an interrupted session can itself be a concrete feature. Only treat
+        // "恢复" as conversational filler when it refers back to prior work.
+        if !normalized.contains("继续")
+            && !normalized.contains("接着")
+            && !["之前", "此前", "上次", "最新", "刚才", "上个", "上一个"]
+                .iter()
+                .any(|reference| normalized.contains(reference))
+        {
+            return false;
+        }
+        let words = [
+            "上一个",
+            "接下来",
+            "未完成",
+            "之前",
+            "此前",
+            "最新",
+            "当前",
+            "上次",
+            "这次",
+            "上个",
+            "中断",
+            "断点",
+            "停下",
+            "暂停",
+            "编码",
+            "工作",
+            "任务",
+            "会话",
+            "地方",
+            "开始",
+            "执行",
+            "进行",
+            "处理",
+            "请你",
+            "帮我",
+            "我们",
+            "我会",
+            "我将",
+            "我先",
+            "刚才",
+            "原来",
+            "好的",
+            "收到",
+            "继续",
+            "接着",
+            "恢复",
+            "从",
+            "的",
+            "处",
+            "请",
+        ];
+        let mut rest = normalized.as_str();
+        loop {
+            rest = rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '，' | ','));
+            if rest.is_empty() {
+                return true;
+            }
+            let Some(word) = words.iter().find(|word| rest.starts_with(**word)) else {
+                return false;
+            };
+            rest = &rest[word.len()..];
+        }
+    }
+    let words = normalized.split_whitespace().collect::<Vec<_>>();
+    words
+        .iter()
+        .any(|word| matches!(*word, "continue" | "resume"))
+        && words.iter().all(|word| {
+            matches!(
+                *word,
+                "please"
+                    | "will"
+                    | "continue"
+                    | "resume"
+                    | "from"
+                    | "where"
+                    | "you"
+                    | "we"
+                    | "i"
+                    | "left"
+                    | "off"
+                    | "the"
+                    | "this"
+                    | "previous"
+                    | "last"
+                    | "latest"
+                    | "current"
+                    | "interrupted"
+                    | "unfinished"
+                    | "session"
+                    | "sessions"
+                    | "task"
+                    | "tasks"
+                    | "work"
+                    | "working"
+                    | "coding"
+            )
+        })
+}
+
+pub(crate) fn is_continuation_title(title: &str) -> bool {
+    let task = title.split_once('】').map_or(title, |(_, task)| task);
+    is_continuation_only(task)
+}
+
+fn task_evidence(envelope: &TitleEnvelope) -> Vec<&str> {
+    if !envelope.intents.is_empty() {
+        return envelope.intents.iter().map(String::as_str).collect();
+    }
+    envelope
+        .outcome
+        .as_deref()
+        .into_iter()
+        .flat_map(task_clauses)
+        .filter(|clause| clause.chars().count() >= 6 && !is_low_signal(clause))
+        .collect()
+}
+
+fn task_clauses(text: &str) -> impl Iterator<Item = &str> {
+    // A period followed by whitespace ends prose without splitting filenames such as app.rs.
+    text.split(". ")
+        .flat_map(|part| part.split(['\n', '。', '！', '!', '？', '?', '；', ';']))
+        .map(str::trim)
+}
+
+fn has_task_evidence(envelope: &TitleEnvelope) -> bool {
+    !task_evidence(envelope).is_empty()
 }
 
 fn is_cjk(character: char) -> bool {
@@ -278,6 +407,8 @@ pub(crate) enum TitleRejection {
     MalformedShape,
     /// Subject names nothing, e.g. `【项目】`.
     BannedSubject(String),
+    /// A continuation instruction is not a description of the resumed work.
+    MissingTask,
     /// Claims work finished without evidence.
     UnsupportedCompletionClaim(String),
     /// Model machinery leaked into the answer.
@@ -290,6 +421,7 @@ impl TitleRejection {
             Self::Empty => "title was empty after cleaning".to_string(),
             Self::MalformedShape => "title is not 【subject】task".to_string(),
             Self::BannedSubject(subject) => format!("subject `{subject}` identifies nothing"),
+            Self::MissingTask => "title only describes resuming a session".to_string(),
             Self::UnsupportedCompletionClaim(word) => {
                 format!("title claims `{word}` without evidence")
             }
@@ -374,6 +506,9 @@ pub(crate) fn validate(cleaned: &str) -> Result<String, TitleRejection> {
             (*claim).to_string(),
         ));
     }
+    if is_continuation_only(task) {
+        return Err(TitleRejection::MissingTask);
+    }
 
     Ok(clip(&format!("【{subject}】{task}"), TITLE_MAX_CHARS))
 }
@@ -397,8 +532,8 @@ pub(crate) fn fallback_title(envelope: &TitleEnvelope) -> String {
     // deterministic fallback promised by the title spec: entity names, paths and identifiers
     // beat a generic continuation request. Ties retain transcript order, so a pasted answer
     // cannot win merely because it is longer or appears later.
-    let task = envelope
-        .intents
+    let evidence = task_evidence(envelope);
+    let task = evidence
         .iter()
         .enumerate()
         .filter_map(|(position, intent)| {
@@ -427,6 +562,7 @@ pub(crate) fn build_prompt(batch: &[TitleEnvelope]) -> String {
         "给下面每个编码会话起一个标题。\n格式必须是【具体对象】具体任务，对象 2-24 字，任务 6-42 字。\n\
          对象使用产品名、仓库名、模块名、文件名或错误码，禁止使用 Workspace、任务、会话、项目、Agent。\n\
          不要默认使用第一条请求或 native_title；优先选择能概括整体工作的高信息量请求，并综合多条请求。忽略复制的回答、推荐清单、执行日志等非任务内容。\n\
+         用户只说继续或恢复时，根据 outcome 中的实际任务命名，不要把继续会话、恢复上下文或继续编码当作具体任务。\n\
          没有明确证据不要写“已完成”“已修复”“已发布”“已上线”。\n\
          只输出 JSON：{\"items\":[{\"id\":1,\"title\":\"【对象】具体任务\"}]}，不要解释。\n\n",
     );
@@ -497,7 +633,7 @@ fn envelope_for_session(index: usize, session: &PendingTitleSession) -> TitleEnv
         session.transcript_ref.as_deref(),
     )
     .ok();
-    let (intents, outcome) = transcript
+    let (mut intents, mut outcome) = transcript
         .as_ref()
         .map(extract_transcript_evidence)
         .unwrap_or_else(|| {
@@ -507,6 +643,24 @@ fn envelope_for_session(index: usize, session: &PendingTitleSession) -> TitleEnv
                 (vec![session.native_title.clone()], None)
             }
         });
+    // A resumed task can appear after the opening scan window. Only supplement missing
+    // user intent, so later activity cannot change the subject of an established session.
+    if select_intents(&intents).is_empty() {
+        if let Ok(recent) = super::transcript::read_recent_transcript(
+            &session.backend,
+            session.transcript_ref.as_deref(),
+        ) {
+            let (recent_intents, recent_outcome) = extract_transcript_evidence(&recent);
+            for intent in recent_intents {
+                if !intents.contains(&intent) {
+                    intents.push(intent);
+                }
+            }
+            if recent_outcome.is_some() {
+                outcome = recent_outcome;
+            }
+        }
+    }
     let folder = session
         .cwd
         .as_deref()
@@ -534,8 +688,16 @@ fn extract_transcript_evidence(transcript: &Transcript) -> (Vec<String>, Option<
         .messages
         .iter()
         .rev()
-        .find(|message| message.role == TranscriptRole::Assistant)
-        .map(|message| message.text.clone());
+        .filter(|message| message.role == TranscriptRole::Assistant)
+        .find_map(|message| {
+            let (excerpt, _) =
+                super::transcript::preview_excerpt(&message.text, TranscriptRole::Assistant);
+            let evidence = task_clauses(&excerpt)
+                .filter(|line| !is_low_signal(line))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (evidence.chars().count() >= 6).then_some(evidence)
+        });
     (intents, outcome)
 }
 
@@ -603,7 +765,7 @@ pub(crate) fn run_title_generation_worker(
             // Revisit these placeholders only after new activity arrives.
             let ready_envelopes = envelopes
                 .iter()
-                .filter(|envelope| !envelope.intents.is_empty())
+                .filter(|envelope| has_task_evidence(envelope))
                 .cloned()
                 .collect::<Vec<_>>();
             let fingerprints = chunk
@@ -703,14 +865,14 @@ pub(crate) fn run_title_generation_worker(
                         } else {
                             "heuristic".to_string()
                         },
-                        status: if envelope.intents.is_empty() {
+                        status: if !has_task_evidence(envelope) {
                             "provisional".to_string()
                         } else if local_only {
                             "done".to_string()
                         } else {
                             "failed".to_string()
                         },
-                        error: (!local_only && !envelope.intents.is_empty())
+                        error: (!local_only && has_task_evidence(envelope))
                             .then(|| "all title backends failed".to_string()),
                         backend: None,
                         model: None,
@@ -720,7 +882,7 @@ pub(crate) fn run_title_generation_worker(
                 }
             }
             for (session, envelope) in chunk.iter().zip(&envelopes) {
-                if envelope.intents.is_empty()
+                if !has_task_evidence(envelope)
                     && !updates
                         .iter()
                         .any(|update| update.stable_key == session.stable_key)
@@ -950,6 +1112,137 @@ mod tests {
         );
         assert_eq!(envelope.intents.len(), 1);
         assert!(envelope.intents[0].contains("侧栏高亮"));
+    }
+
+    #[test]
+    fn continuation_titles_require_a_concrete_task() {
+        for request in [
+            "从最新的中断处继续",
+            "从之前中断的地方继续。",
+            "继续最新会话",
+            "继续此前中断的编码工作",
+            "从最新中断处继续编码工作",
+            "我会继续处理",
+            "好的，继续。",
+            "Continue from where you left off!",
+            "Resume the previous coding session",
+        ] {
+            assert!(is_low_signal(request), "{request}");
+            assert!(
+                validate(&format!("【herduck】{request}")).is_err(),
+                "{request}"
+            );
+        }
+        for request in [
+            "继续修复 herduck 的侧栏标题",
+            "修复断点续传失败",
+            "恢复数据库备份",
+            "恢复中断会话",
+            "恢复中断任务执行",
+            "Continue debugging the login redirect",
+        ] {
+            assert!(!is_low_signal(request), "{request}");
+            assert!(
+                validate(&format!("【herduck】{request}")).is_ok(),
+                "{request}"
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_uses_assistant_task_evidence_beyond_the_opening_scan() {
+        use std::io::Write;
+
+        for large in [false, true] {
+            let path = std::env::temp_dir().join(format!(
+                "herduck-title-evidence-{}-{large}.jsonl",
+                std::process::id()
+            ));
+            let mut file = std::fs::File::create(&path).expect("transcript");
+            writeln!(file, "{}", serde_json::json!({"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"从最新的中断处继续"}]}})).expect("user");
+            if large {
+                writeln!(file, "{}", serde_json::json!({"type":"response_item","payload":{"type":"function_call_output","output":"x".repeat(9 * 1024 * 1024)}})).expect("large tool output");
+            }
+            writeln!(file, "{}", serde_json::json!({"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"修复 Herduck 中 Claude 与 Codex 的会话标题关联，并验证原有历史保留。"}]}})).expect("task evidence");
+            writeln!(file, "{}", serde_json::json!({"type":"response_item","payload":{"role":"assistant","content":[{"type":"output_text","text":"好的，继续。"}]}})).expect("filler");
+            drop(file);
+            let envelope = envelope_for_session(
+                1,
+                &PendingTitleSession {
+                    stable_key: "fixture".into(),
+                    backend: "codex".into(),
+                    native_title: "继续最新会话".into(),
+                    cwd: Some("/work/herduck".into()),
+                    transcript_ref: Some(path.to_string_lossy().into_owned()),
+                    stored_fingerprint: None,
+                    status: "pending".into(),
+                },
+            );
+            assert!(envelope.intents.is_empty());
+            assert!(has_task_evidence(&envelope));
+            assert!(envelope
+                .outcome
+                .as_deref()
+                .expect("outcome")
+                .contains("会话标题关联"));
+            let fallback = localized_fallback(&envelope, crate::config::TitleLanguage::Chinese);
+            assert!(fallback.contains("会话标题关联"), "{fallback}");
+            assert!(!fallback.contains("等待"), "{fallback}");
+            std::fs::remove_file(path).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn continuation_without_task_evidence_remains_provisional() {
+        let empty = build_envelope(
+            1,
+            "codex",
+            Some("herduck"),
+            &intents(&["从最新的中断处继续"]),
+            Some("我会继续处理"),
+        );
+        assert!(!has_task_evidence(&empty));
+        assert!(fallback_title(&empty).contains("等待补充具体任务信息"));
+        let english = build_envelope(
+            1,
+            "codex",
+            Some("herduck"),
+            &intents(&["continue"]),
+            Some("I will continue."),
+        );
+        assert!(!has_task_evidence(&english));
+
+        let concrete = build_envelope(
+            1,
+            "codex",
+            Some("herduck"),
+            &intents(&["继续修复侧栏标题关联"]),
+            Some("随后讨论部署流程"),
+        );
+        assert!(has_task_evidence(&concrete));
+        assert!(fallback_title(&concrete).contains("修复侧栏标题关联"));
+        assert!(!fallback_title(&concrete).contains("部署"));
+
+        for outcome in [
+            "我会继续处理。修复 Herduck 会话标题关联。",
+            "好的。修复 Herduck 会话标题关联。",
+            "I will continue. Repair Herduck session title association.",
+        ] {
+            let resumed = build_envelope(
+                1,
+                "codex",
+                Some("herduck"),
+                &intents(&["继续"]),
+                Some(outcome),
+            );
+            assert!(has_task_evidence(&resumed));
+            let title = fallback_title(&resumed);
+            assert!(title.contains("Herduck"), "{title}");
+            assert!(
+                !title.contains("等待") && !is_continuation_title(&title),
+                "{title}"
+            );
+        }
     }
 
     #[test]

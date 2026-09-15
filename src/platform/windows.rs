@@ -1,3 +1,8 @@
+// Registry start markers have no verified contract on this platform yet.
+pub(crate) fn process_start_marker(_pid: u32) -> Option<String> {
+    None
+}
+
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     ffi::c_void,

@@ -64,6 +64,10 @@ impl ProjectServiceError {
 }
 
 pub(crate) enum ProjectCommand {
+    NativeTranscript {
+        session_key: String,
+        reply: mpsc::Sender<Result<Option<String>, ProjectServiceError>>,
+    },
     TopicCoverGet {
         topic_key: String,
         reply: mpsc::Sender<Result<TopicCover, ProjectServiceError>>,
@@ -387,6 +391,23 @@ impl ProjectService {
                 );
             }
         }
+    }
+
+    pub(crate) fn native_transcript(
+        &self,
+        session_key: String,
+    ) -> Result<Option<String>, ProjectServiceError> {
+        let sender = self
+            .sender
+            .as_ref()
+            .ok_or_else(ProjectServiceError::unavailable)?;
+        let (reply, receiver) = mpsc::channel();
+        sender
+            .send(ProjectCommand::NativeTranscript { session_key, reply })
+            .map_err(|_| ProjectServiceError::unavailable())?;
+        receiver
+            .recv()
+            .map_err(|_| ProjectServiceError::unavailable())?
     }
 
     pub(crate) fn snapshot(&self) -> ProjectsSnapshot {
@@ -944,6 +965,13 @@ fn process_command(
         } => finish_mutation(catalog, snapshot, event_hub, reply, |catalog| {
             catalog.assign_session(&session_key, &project_key, locked, observed_at)
         }),
+        ProjectCommand::NativeTranscript { session_key, reply } => {
+            let _ = reply.send(
+                catalog
+                    .native_transcript(&session_key)
+                    .map_err(ProjectServiceError::catalog),
+            );
+        }
         ProjectCommand::TitleLanguage { reply } => {
             let _ = reply.send(
                 catalog
@@ -1130,6 +1158,45 @@ mod tests {
             weight: Default::default(),
             session_class: Some(crate::projects::SessionClass::Interactive),
         }
+    }
+
+    #[test]
+    fn native_transcript_lookup_includes_history_outside_visible_page() {
+        let service = ProjectService::in_memory(crate::api::EventHub::default());
+        let mut entry = candidate("thin-native");
+        let key = entry.identity.stable_key.clone();
+        entry.weight = super::super::adapters::SessionWeight {
+            known: true,
+            ..Default::default()
+        };
+        entry.transcript_ref = Some(super::super::CandidateField {
+            value: "/history/thin.jsonl".into(),
+            observed_at: 2,
+            priority: super::super::SourcePriority::TranscriptFile,
+            source_key: "fixture".into(),
+        });
+        service.upsert_candidate(entry).expect("indexed");
+        for index in 0..=PROJECT_PAGE_SIZE {
+            let mut newer = candidate(&format!("newer-{index}"));
+            newer.last_activity_at = 10 + index as i64;
+            service.upsert_candidate(newer).expect("newer history");
+        }
+        assert!(!service
+            .snapshot()
+            .projects
+            .iter()
+            .flat_map(|p| &p.sessions)
+            .any(|s| s.stable_key == key));
+        assert_eq!(
+            service.native_transcript(key).expect("lookup").as_deref(),
+            Some("/history/thin.jsonl")
+        );
+        assert_eq!(
+            service
+                .native_transcript("missing".into())
+                .expect("missing"),
+            None
+        );
     }
 
     #[test]

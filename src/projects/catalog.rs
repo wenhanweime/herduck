@@ -1289,6 +1289,22 @@ impl ProjectCatalog {
         Ok(rows)
     }
 
+    /// Identity lookup is independent of presentation pagination and thin-session filtering.
+    pub(crate) fn native_transcript(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<String>, CatalogError> {
+        self.connection
+            .query_row(
+                "SELECT transcript_ref FROM sessions WHERE stable_key = ?1",
+                [session_key],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map(Option::flatten)
+            .map_err(CatalogError::from)
+    }
+
     /// Generate a stable name once; only provisional names follow later activity.
     pub(crate) fn pending_title_sessions(
         &self,
@@ -1423,13 +1439,40 @@ impl ProjectCatalog {
         Ok(revision)
     }
 
-    /// Marks in-flight title work as pending so an interrupted process can retry it safely.
+    /// Retry interrupted generation and legacy titles that only describe continuing a session.
     pub(crate) fn reset_running_titles(&mut self) -> Result<(), CatalogError> {
-        self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let weak_titles = {
+            let mut statement = transaction.prepare(
+                "SELECT stable_key, generated_title FROM sessions
+                 WHERE title_status = 'done' AND generated_title IS NOT NULL
+                   AND custom_title IS NULL AND session_class = 'interactive'
+                   AND ref_value NOT LIKE 'herduck-live:%'",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (key, title) in weak_titles {
+            if super::title::is_continuation_title(&title) {
+                transaction.execute(
+                    "UPDATE sessions SET title_status = 'pending', title_input_fingerprint = NULL
+                     WHERE stable_key = ?1",
+                    [key],
+                )?;
+            }
+        }
+        transaction.execute(
             "UPDATE sessions SET title_status = 'pending'
              WHERE title_status = 'running'",
             [],
         )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -3280,6 +3323,96 @@ mod tests {
         assert!(catalog
             .pending_title_sessions(10)
             .expect("pending titles")
+            .is_empty());
+    }
+
+    #[test]
+    fn title_reset_only_requeues_subjectless_generated_continuations() {
+        let mut catalog = ProjectCatalog::open_in_memory().expect("catalog");
+        let mut weak_key = String::new();
+        for (id, title, custom, class) in [
+            (
+                "weak",
+                "【herduck】从最新中断处继续编码工作",
+                None,
+                SessionClass::Interactive,
+            ),
+            (
+                "concrete",
+                "【herduck】继续修复侧栏标题关联",
+                None,
+                SessionClass::Interactive,
+            ),
+            (
+                "manual",
+                "【herduck】继续之前中断的任务",
+                Some("我的会话名称"),
+                SessionClass::Interactive,
+            ),
+            (
+                "automation",
+                "【herduck】继续之前中断的任务",
+                None,
+                SessionClass::Automation,
+            ),
+            (
+                "herduck-live:temporary",
+                "【herduck】继续之前中断的任务",
+                None,
+                SessionClass::Interactive,
+            ),
+        ] {
+            let mut session = candidate("codex", id, 20);
+            session.session_class = Some(class);
+            let key = session.identity.stable_key.clone();
+            if id == "weak" {
+                weak_key = key.clone();
+            }
+            catalog.upsert_candidate(&session).expect("session");
+            catalog
+                .apply_title_batch(&[SessionTitleUpdate {
+                    stable_key: key.clone(),
+                    title: title.into(),
+                    source: "model".into(),
+                    status: "done".into(),
+                    error: None,
+                    backend: Some("test".into()),
+                    model: None,
+                    fingerprint: "original".into(),
+                    generated_at: 30,
+                }])
+                .expect("stored title");
+            if let Some(custom) = custom {
+                catalog.rename_session(&key, custom).expect("manual title");
+            }
+        }
+        let before = catalog.snapshot(100).expect("before");
+        for _ in 0..2 {
+            catalog.reset_running_titles().expect("reset");
+            let pending = catalog.pending_title_sessions(100).expect("pending");
+            assert_eq!(pending.len(), 1);
+            assert_eq!(pending[0].stable_key, weak_key);
+            assert_eq!(pending[0].status, "pending");
+            assert_eq!(pending[0].stored_fingerprint, None);
+            assert_eq!(catalog.snapshot(100).expect("after"), before);
+        }
+        catalog
+            .apply_title_batch(&[SessionTitleUpdate {
+                stable_key: weak_key,
+                title: "【herduck】修复会话标题关联".into(),
+                source: "model".into(),
+                status: "done".into(),
+                error: None,
+                backend: Some("test".into()),
+                model: None,
+                fingerprint: "concrete".into(),
+                generated_at: 40,
+            }])
+            .expect("specific title");
+        catalog.reset_running_titles().expect("subsequent startup");
+        assert!(catalog
+            .pending_title_sessions(100)
+            .expect("pending")
             .is_empty());
     }
 

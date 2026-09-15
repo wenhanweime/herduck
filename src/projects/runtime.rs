@@ -1,3 +1,6 @@
+mod native;
+pub(crate) use native::session_from_process_evidence;
+
 use std::path::{Path, PathBuf};
 
 use super::adapters::AdapterRootSet;

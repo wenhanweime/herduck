@@ -63,6 +63,7 @@ impl App {
             return;
         };
         let mut discovered = None;
+        let mut native_identity = None;
         let identity = if let Some(session) = session.as_ref() {
             crate::projects::runtime::identity_from_report(
                 &self.project_roots,
@@ -93,9 +94,49 @@ impl App {
                     &title,
                 );
             }
-            discovered
-                .as_ref()
-                .map(|(identity, _, _)| identity.clone())
+            if matches!(agent, "claude" | "codex") {
+                let evidence = job
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|job| &job.processes)
+                    .filter(|process| {
+                        crate::detect::identify_agent(&crate::detect::normalized_process_name(
+                            process,
+                        ))
+                        .is_some_and(|detected| crate::detect::agent_label(detected) == agent)
+                    })
+                    .map(|process| {
+                        (
+                            process.pid,
+                            if agent == "codex" {
+                                crate::platform::process_open_files(process.pid)
+                            } else {
+                                Vec::new()
+                            },
+                            if agent == "claude" {
+                                crate::platform::process_start_marker(process.pid)
+                            } else {
+                                None
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                native_identity = crate::projects::runtime::session_from_process_evidence(
+                    &self.project_roots,
+                    |identity| {
+                        self.project_service
+                            .native_transcript(identity.stable_key.clone())
+                            .ok()
+                            .flatten()
+                            .map(std::path::PathBuf::from)
+                    },
+                    agent,
+                    &evidence,
+                );
+            }
+            native_identity
+                .clone()
+                .or_else(|| discovered.as_ref().map(|(identity, _, _)| identity.clone()))
                 .or_else(|| {
                     job.and_then(|_| {
                         crate::projects::SessionIdentity::id(
@@ -163,7 +204,7 @@ impl App {
                 priority: crate::projects::SourcePriority::RuntimeReport,
                 source_key,
             });
-        } else if session.is_none() {
+        } else if session.is_none() && native_identity.is_none() {
             candidate.title = Some(crate::projects::CandidateField {
                 value: if title.is_empty() {
                     format!("{} · 运行中", agent.as_deref().unwrap_or("agent"))
