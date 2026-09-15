@@ -128,10 +128,10 @@ next model; a startup or transport failure advances to the next source.
 
 Generation modes:
 
-- `mode = "pending"` — **Off**, the default: keep names and topics, without starting generation.
+- `mode = "pending"` — **Off**, the default: keep names and Work groups, without starting generation.
 - `mode = "auto"` — **Ordered fallback**: use the configured Summary and naming chains. If all
-  sources fail, keep existing topics and derive a basic name from local session text.
-- `mode = "local"` — **Offline names only**: generate basic names without model requests; keep topics.
+  sources fail, keep existing Work groups and derive a basic name from local session text.
+- `mode = "local"` — **Offline names only**: generate basic names without model requests; keep Work groups.
 
 `llm` is also accepted for ordered fallback. Off and Offline keep the source lists for later use.
 An explicit `providers = []` disables model attempts. Omit it when using `[[projects.summary.providers]]`
@@ -139,8 +139,8 @@ entries: defining the same list in both forms is invalid TOML. Older explicit au
 without a provider list retain their compatibility presets, which Settings shows in their active order.
 
 Reloading applies summary and naming changes without restarting the server. Results from the previous
-configuration cannot overwrite names or topics after the new configuration is applied. Existing names,
-manual names, topics, and live sessions are retained. Selected conversation content is sent to the
+configuration cannot overwrite names or Work groups after the new configuration is applied. Existing names,
+manual names, Work groups, and live sessions are retained. Selected conversation content is sent to the
 configured provider when model generation runs, including when using a local Agent CLI.
 
 ## Session names
@@ -165,7 +165,7 @@ See [Project overview](project-overview.md#language) for caching and source pres
 
 Titles and briefings default to English. Canonical language values are `en` and `zh`; `english`, `chinese`, and
 `zh-CN` are accepted aliases. Keep these options inside `[projects.summary]`, before any `[[...]]`
-provider entries. The shared `mode` governs both naming and topic generation: independent naming
+provider entries. The shared `mode` governs both naming and Work grouping: independent naming
 sources do not bypass Off or Offline. Save and reopen Settings to apply the new configuration.
 
 ## Disposable runner directories
@@ -188,7 +188,7 @@ catalog settings. On the next start, Herduck applies the new rules to existing a
 and future scans. Removing a prefix restores directory visibility unless a built-in scratch
 directory rule still applies. A missing working directory is grouped as Unclassified.
 
-Filtering changes directory membership only: sessions, semantic topics, titles, and live
+Filtering changes directory membership only: sessions, Work groups, titles, and live
 associations remain in the catalog. Manually locked assignments keep their chosen project.
 
 Additional agent history roots are configured under `[projects.adapters.<agent>]`. Standard

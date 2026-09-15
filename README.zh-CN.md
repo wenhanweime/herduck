@@ -10,58 +10,47 @@
   <a href="#安装">安装</a> ·
   <a href="#功能特点">功能特点</a> ·
   <a href="#人和-agent-共同管理工作">人和 Agent</a> ·
-  <a href="#work-接下来要做到什么">产品方向</a> ·
   <a href="README.md">English</a>
 </p>
 
 Herduck 是让**人和 Agent 一起组织、跟进和继续工作的终端工作台**。
-它融合**类似 tmux 的 Agent 窗口管理**、相关会话和项目上下文：运行自己的 Agent，
-找到它们参与的工作，再回到正确的会话继续推进。
+运行自己的 Agent，把跨目录的相关会话收在一起，找到工作该从哪里继续。
 
-它基于 [Herdr](https://github.com/ogulcancelik/herdr)，保留熟悉的工作区、标签页、分屏，
-以及退出客户端后仍然运行的终端。**人使用终端界面，Agent 使用 CLI 和 JSON API。**
-源码预览进一步提供双方都能更新的目标与下一步，以及近期进展和可以直接执行的跟进建议。
+Claude Code 调查问题，Codex 实现修改，另一个 Agent 发现了卡点。
+明天打开新会话时，请求、决策和未完成的步骤散落在这些对话里，仍要由你重新拼出工作的全貌。
 
-我们希望每次回到一件工作时，你都能知道：**要完成什么、现在做到哪里、哪里需要关注、下一步做什么。**
+**Work 把目标、卡点和下一步，与相关对话保存在一起。**
+打开一项工作，查看近期进展、核对证据，再交给相关 Agent 继续。
+计划会跨会话和服务重启保留。
+
+Herduck 基于 [Herdr](https://github.com/ogulcancelik/herdr)，保留类似 tmux 的工作区、标签页、分屏，
+以及退出客户端后仍然运行的终端。Herdr 回答“Agent 在哪里？”，Herduck 进一步回答
+“它们在参与哪些工作，我该从哪里继续？”。人使用终端界面，Agent 使用 CLI 和 JSON API。
 
 ## 安装
 
-macOS 或 Linux，安装 **Node.js 20+** 后运行：
+在 macOS 或 Linux 上准备[所需的 Rust 和 Zig 工具链](docs/installation.md#build-from-source)，然后运行：
 
 ```sh
-npm install -g herduck@alpha
+git clone https://github.com/wenhanweime/herduck.git
+cd herduck
+just install
 herduck
 ```
 
-也可以直接体验：
-
-```sh
-npx --yes herduck@alpha
-```
-
-**GitHub 源码中的 Topics 已更名为 Work。** npm alpha 当前仍安装 **0.1.0-alpha.2**，
-使用旧名称。请根据所需能力选择版本：
-
-| 版本 | 可用能力 |
-| --- | --- |
-| **npm alpha · 0.1.0-alpha.2** | Agent 窗口与状态、本机会话库、按目录组织的 Projects、以 Topics 命名的相关会话分组，以及 CLI/API 控制。 |
-| **源码预览 · 0.1.0-alpha.4** | Work 新名称、保存目标和下一步、描述近期进展、把跟进建议交给原 Agent 执行。[预览分支与使用说明](https://github.com/wenhanweime/herduck/pull/1)。 |
-
-首次启动会下载原生程序并校验 SHA-256，无需安装 Rust 或 Zig。各个 Agent CLI 需要自行安装和登录。
-预编译程序支持 Apple silicon / Intel Mac，以及 glibc 2.39+ 的 x64 / arm64 Linux
-（例如 Ubuntu 24.04）。暂不支持 Windows 和 Alpine/musl。
-[安装文档](docs/installation.md)包含源码构建、原生程序下载和升级说明。
+各个 Agent CLI 需要自行安装和登录，Herduck 使用它们已有的工具和账号。
+[安装文档](docs/installation.md)包含系统依赖、macOS 签名、PATH 设置、预编译包和升级说明。
 
 ## 功能特点
 
-四个视图把工作与执行过程、目录和历史连接起来：
+四个视图把工作与执行过程、目录和历史连接起来。
 
 | 视图 | 能帮你做什么 |
 | --- | --- |
 | **Agents** | 管理终端窗口，看清哪些 Agent 正在工作、哪些需要关注。 |
 | **Sessions** | 查找本机支持的 Agent 历史，回到正确的对话。 |
 | **Projects** | 按工作目录组织，主动创建项目目录和工作区，查看其中的会话。 |
-| **Work** | 把跨目录、跨 Agent 的相关会话归到一起；源码预览进一步提供共用的目标和下一步。 |
+| **Work** | 把跨目录、跨 Agent 的相关会话归到一起，共用目标和下一步。 |
 
 ### 看清工作在哪里执行
 
@@ -71,22 +60,13 @@ npx --yes herduck@alpha
 状态提示和可配置通知帮助你发现 Agent 正在工作、等待输入、已经空闲或不活跃。
 点击 Agent 即可回到对应终端。空闲表示 Agent 可以接收下一条指令；确认工作完成仍需检查结果。
 
-![Herduck v0.1.0-alpha.2 原生 Agents 截图：终端分屏与 Agent 活动](assets/screenshots/agents.png)
-
-*图片为 v0.1.0-alpha.2 在 Ghostty 中运行的原生窗口截图，使用预设示例历史。
-该版本仍将 Work 标为 Topics。[截图说明](assets/screenshots/README.md)。*
-
 ### 把相关会话组织在一起
 
 **Work** 按含义整理相关会话，可以跨越目录和 Agent。你可以同时跟进多件工作，展开分组查看历史。
 自动整理默认关闭；关闭生成或模型来源暂时不可用时，已有分组仍然保留。
 
-![Herduck v0.1.0-alpha.2 相关会话视图：该版本名称仍为 Topics](assets/screenshots/topics-zh.png)
-
 **Projects** 保留熟悉的目录视图，目录中可以是代码、文档或其他工作材料。
 你可以创建项目目录并为它新建工作区，该目录下支持的会话会归入项目分组。
-
-![Herduck v0.1.0-alpha.2 原生 Projects 截图：按工作目录组织会话](assets/screenshots/projects-zh.png)
 
 ### 回到正确的对话继续
 
@@ -96,9 +76,7 @@ npx --yes herduck@alpha
 选择继续后，Herduck 会使用原来的 Agent 恢复支持续接的会话；如果对应会话已经运行，就直接切回它。
 Work 和 Projects 为同一份会话历史提供另外两种查找方式。
 
-![Herduck v0.1.0-alpha.2 原生 Sessions 截图：会话历史与继续对话入口](assets/screenshots/sessions-zh.png)
-
-### 看近期进展，直接推进建议——源码预览
+### 看近期进展，直接推进建议
 
 打开一项 Work 或 Project，可看到根据近期请求和 Agent 回应整理的进展描述与下一步建议。
 Work 还可以编辑目标、最多三条下一步和卡点，保存的计划跨服务重启保留。
@@ -107,9 +85,8 @@ Work 还可以编辑目标、最多三条下一步和卡点，保存的计划跨
 Agent 忙碌时先排队，准备好后再发送。**查看会话** 可以追溯上下文；遇到等待你答复的 Agent，则打开它进行回应。
 控件和自动生成的描述跟随配置的中文或英文，导航标签保持英文。
 
-当前预览从各个会话提取进展和建议；综合整件工作的进展、组装跨会话上下文属于后续能力。
-跟进记录仅在本次服务运行期间保留；“已发送”表示指令送达，执行结果仍需验证。
-[预览版使用说明与 API](https://github.com/wenhanweime/herduck/blob/feat/topic-cover-alpha.3/docs/project-overview.md)。
+进展和建议来自近期的各个会话。跟进记录在本次服务运行期间保留；“已发送”表示指令送达，执行结果仍需验证。
+[使用说明与 API](docs/project-overview.md)。
 
 ## 人和 Agent 共同管理工作
 
@@ -121,33 +98,28 @@ herduck workspace create --cwd /path/to/project --label my-project
 herduck agent list
 ```
 
-在**源码预览**中，Agent 还可以读取进展，更新已保存的目标、下一步和卡点，发起跟进并查询投递状态。
+Agent 还可以读取进展，更新已保存的目标、下一步和卡点，发起跟进并查询投递状态。
 界面读取同一份已保存计划。例如，在匹配版本的服务运行时：
 
 ```sh
-herduck topic list
-herduck topic cover get TOPIC_KEY
-herduck topic overview get TOPIC_KEY
-herduck topic cover update TOPIC_KEY \
+herduck work list
+herduck work plan get WORK_KEY
+herduck work overview get WORK_KEY
+herduck work plan update WORK_KEY \
+  --goal "在干净机器上验证 npm 安装器" \
   --next-step "审核最新结果" \
   --blocked-note "等待反馈"
 ```
 
-这些命令返回 JSON。将 `TOPIC_KEY` 替换为列表中的标识。
-**Work 继续兼容现有的 `herduck topic` 命令和 `topic.*` API 名称。**
-详见[计划接口与并发修改保护](https://github.com/wenhanweime/herduck/blob/feat/topic-cover-alpha.3/docs/topic-covers.md)
-及[跟进控制](https://github.com/wenhanweime/herduck/blob/feat/topic-cover-alpha.3/docs/project-overview.md#cli-and-socket-api)。
+这些命令返回 JSON。将列表中的 `canonical_key` 填入 `WORK_KEY`。
+先读计划和进展，再决定下一步动作。
+详见[计划接口与并发修改保护](docs/topic-covers.md)及[跟进控制](docs/project-overview.md#cli-and-socket-api)。
 
-## Work 接下来要做到什么
+## Herduck 处于哪一层
 
-一件工作应该在最初的会话结束后继续存在。Herduck 正在向人或其他 Agent 都能接手的共同工作上下文发展：
-
-- **保留少量明确状态：**目标、生命周期、阻塞和下一步，由人和 Agent 共同读取和更新。
-- **根据证据理解进展：**把相关历史与当前工作连接起来，保留来源，区分已确认事实和待验证判断。
-- **带着上下文继续：**把选定的下一步、目标、约束和相关历史带入执行，让结果可供下次接手时使用。
-
-完整流程仍在规划中，当前源码预览以已保存计划和会话跟进为基础。
-重新归类后仍稳定的工作身份、整件工作的综合进展、生命周期更新和上下文组装是接下来的方向；跨设备连续性属于未来能力。
+运行环境执行 Agent，Sessions 保留对话，Projects 按目录组织。
+Work 跨越这些边界关联对话，把共用计划放到证据旁边。
+它与 Agent 已有的记忆和知识工具配合使用。当前进展视图读取近期会话证据，尚不能重建所有历史决策。
 
 ## 使用自己的 Agent，选择模型来源
 
@@ -177,7 +149,7 @@ Sessions、Summaries 和 Session names 展示当前配置。点击 **Open config
 
 空闲 Agent 在一段时间没有活动后会被标为 **inactive**，默认一小时，可配置。
 正在工作或等待用户响应、操作确认的 Agent 不参与此标记。标记后终端与进程仍然保留。
-**规划中：自动结束不活跃的后台进程，释放内存并保留已保存的历史。**
+需要释放资源时，可以结束不再需要的进程。
 [不活跃 Agent 设置](docs/configuration.md#inactive-agents)。
 
 ## 开发

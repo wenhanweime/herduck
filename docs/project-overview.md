@@ -1,6 +1,6 @@
 # Project overview and follow-ups
 
-Available in the **0.1.0-alpha.4 source preview**. Open a Work group or folder Project to read what its
+Open a Work group or folder Project to read what its
 Agents are doing and choose a next action. No plan has to be filled in first. The selected group
 stays highlighted when viewing its detail, editing its plan, or opening a child session.
 
@@ -82,8 +82,8 @@ or live handoff. Saved Work plans and native conversation histories retain their
 With the matching server running, obtain a canonical key and read the overview:
 
 ```sh
-herduck topic list
-herduck topic overview get TOPIC_KEY
+herduck work list
+herduck work overview get WORK_KEY
 herduck project list
 herduck project overview get PROJECT_KEY --refresh
 ```
@@ -111,9 +111,9 @@ Catalog revision, or running processes.
 After choosing a suggestion, use its exact `id` from the overview:
 
 ```sh
-herduck topic followup start TOPIC_KEY SUGGESTION_ID
-herduck topic followup get FOLLOWUP_ID
-herduck topic followup cancel FOLLOWUP_ID
+herduck work followup start WORK_KEY SUGGESTION_ID
+herduck work followup get FOLLOWUP_ID
+herduck work followup cancel FOLLOWUP_ID
 ```
 
 The same commands work under `herduck project followup`. Public methods are:

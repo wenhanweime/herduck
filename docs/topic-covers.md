@@ -1,14 +1,10 @@
 # Work plans
 
-Work was previously labelled Topics. The existing `herduck topic` commands and `topic.*` API
-names remain compatible; this name change does not migrate saved plans or conversation identities.
-
-Introduced in the **0.1.0-alpha.3 source preview**. A saved Work plan contains this week's goal,
-up to three next steps, and what's blocked. In **0.1.0-alpha.4**, the [project overview](project-overview.md)
-shows each conversation's progress and next action together. The saved goal and blocker stay at the
-top as context, while the complete plan is available through **edit plan**. An empty plan takes no
-space. Agent follow-ups have a separate **Continue with this** action and take precedence over saved
-plan items in the overview's suggestion list.
+A Work plan saves a goal, up to three next steps, and a blocker note. The
+[project overview](project-overview.md) shows each conversation's progress and next action together.
+The saved goal and blocker stay at the top as context, while the complete plan is available through
+**edit plan**. An empty plan takes no space. Agent follow-ups have a separate **Continue with this**
+action and take precedence over saved plan items in the overview's suggestion list.
 
 Click **edit plan** or press **e** in the Work detail view. Use Tab / Shift-Tab to move between
 fields, Shift-Enter for a new line, and Enter or the **save** button to save. Esc cancels the
@@ -17,23 +13,24 @@ On smaller terminals, it scrolls the form to the focused field while keeping the
 
 The goal and blocker stay fixed while the conversation sections below them scroll. Click a conversation or select it
 with the arrow keys and press Enter to use the existing history-preview or live-session controls.
-Esc returns to the Work list. Editing a cover does not start an Agent.
+Esc returns to the Work list. Editing a plan does not start an Agent.
 
 ## CLI
 
 With the matching Herduck server running, list Work groups and copy the desired `canonical_key`:
 
 ```sh
-herduck topic list
-herduck topic cover get TOPIC_KEY
-herduck topic cover update TOPIC_KEY \
+herduck work list
+herduck work plan get WORK_KEY
+herduck work plan update WORK_KEY \
   --goal "Agree on a testable outcome this week" \
   --next-step "Review the current progress" \
   --next-step "Decide who handles the next step" \
   --blocked-note "Waiting for feedback"
 ```
 
-All commands return JSON. Replace `TOPIC_KEY` with the stable key from the list. Named sessions
+All commands return JSON. The list contains a `topics` array; replace `WORK_KEY` with a
+`canonical_key` from it. Use the exact returned key. Named sessions
 use the existing `--session NAME` option. The CLI uses the same socket API and Catalog writer as
 the editor.
 
@@ -41,8 +38,8 @@ Updates affect only the fields you supply. Repeated `--next-step` options replac
 list; they do not append to it. To clear values explicitly:
 
 ```sh
-herduck topic cover update TOPIC_KEY --goal ""
-herduck topic cover update TOPIC_KEY --clear-next-steps --blocked-note ""
+herduck work plan update WORK_KEY --goal ""
+herduck work plan update WORK_KEY --clear-next-steps --blocked-note ""
 ```
 
 For a guarded update, pass `--expected-updated-at N`, using `updated_at` from the last read
@@ -55,7 +52,7 @@ on conflict, the draft stays open so you can review it and reopen the latest cov
 `topic.cover.get` reads a cover:
 
 ```json
-{"id":"cover-read","method":"topic.cover.get","params":{"topic_key":"TOPIC_KEY"}}
+{"id":"cover-read","method":"topic.cover.get","params":{"topic_key":"WORK_KEY"}}
 ```
 
 The result has `type: "topic_cover"`, `topic_key`, and `cover`. A cover contains `goal`,
@@ -68,7 +65,7 @@ The result has `type: "topic_cover"`, `topic_key`, and `cover`. A cover contains
   "id": "cover-write",
   "method": "topic.cover.update",
   "params": {
-    "topic_key": "TOPIC_KEY",
+    "topic_key": "WORK_KEY",
     "patch": {
       "goal": "A revised goal",
       "expected_updated_at": 0

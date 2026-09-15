@@ -4,7 +4,7 @@ use crate::api::schema::{
     TopicCoverPatch, TopicCoverUpdateParams,
 };
 
-pub(super) fn run_topic_command(args: &[String]) -> std::io::Result<i32> {
+pub(super) fn run_work_command(args: &[String]) -> std::io::Result<i32> {
     run_group_command(args, true)
 }
 
@@ -12,18 +12,22 @@ pub(super) fn run_project_command(args: &[String]) -> std::io::Result<i32> {
     run_group_command(args, false)
 }
 
-fn run_group_command(args: &[String], topics: bool) -> std::io::Result<i32> {
+fn run_group_command(args: &[String], work: bool) -> std::io::Result<i32> {
     if args.is_empty()
         || args
             .iter()
             .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
         || args == ["help"]
     {
-        print_help(topics);
+        print_help(work);
         return Ok(if args.is_empty() { 2 } else { 0 });
     }
-    let parsed = if !topics && args.first().is_some_and(|arg| arg == "cover") {
-        Err("Saved plans belong to Work; use herduck topic cover".into())
+    let parsed = if !work
+        && args
+            .first()
+            .is_some_and(|arg| matches!(arg.as_str(), "plan" | "cover"))
+    {
+        Err("Saved plans belong to Work; use herduck work plan".into())
     } else {
         parse_method(args)
     };
@@ -31,13 +35,13 @@ fn run_group_command(args: &[String], topics: bool) -> std::io::Result<i32> {
         Ok(method) => method,
         Err(message) => {
             eprintln!("{message}");
-            print_help(topics);
+            print_help(work);
             return Ok(2);
         }
     };
     let list = matches!(method, Method::ProjectSnapshot(_));
     let response = super::send_request(&Request {
-        id: if topics { "cli:topic" } else { "cli:project" }.into(),
+        id: if work { "cli:work" } else { "cli:project" }.into(),
         method,
     })?;
     if list && response.get("error").is_none() {
@@ -45,7 +49,7 @@ fn run_group_command(args: &[String], topics: bool) -> std::io::Result<i32> {
         let ResponseResult::ProjectSnapshot { snapshot } = response.result else {
             return Err(std::io::Error::other("Unexpected response to group list"));
         };
-        let groups = if topics {
+        let groups = if work {
             serde_json::json!({"topics": snapshot.topics, "revision": snapshot.revision})
         } else {
             serde_json::json!({"projects": snapshot.projects, "revision": snapshot.revision})
@@ -76,7 +80,7 @@ fn parse_method(args: &[String]) -> Result<Method, String> {
                 refresh: true,
             }))
         }
-        [cover, get, key] if cover == "cover" && get == "get" => {
+        [cover, get, key] if matches!(cover.as_str(), "plan" | "cover") && get == "get" => {
             Ok(Method::TopicCoverGet(TopicCoverGetParams {
                 topic_key: key.clone(),
             }))
@@ -97,7 +101,9 @@ fn parse_method(args: &[String]) -> Result<Method, String> {
                 followup_id: id.clone(),
             }))
         }
-        [cover, update, key, flags @ ..] if cover == "cover" && update == "update" => {
+        [cover, update, key, flags @ ..]
+            if matches!(cover.as_str(), "plan" | "cover") && update == "update" =>
+        {
             Ok(Method::TopicCoverUpdate(TopicCoverUpdateParams {
                 topic_key: key.clone(),
                 patch: parse_patch(flags)?,
@@ -152,19 +158,19 @@ fn parse_patch(args: &[String]) -> Result<TopicCoverPatch, String> {
     Ok(patch)
 }
 
-fn print_help(topics: bool) {
-    if !topics {
+fn print_help(work: bool) {
+    if !work {
         eprintln!("herduck project commands (JSON output):\n  herduck project list\n  herduck project overview get <project-key> [--refresh]\n  herduck project followup start <project-key> <suggestion-id>\n  herduck project followup get <followup-id>\n  herduck project followup cancel <followup-id>");
         return;
     }
-    eprintln!("herduck topic commands for Work (JSON output):");
-    eprintln!("  herduck topic list");
-    eprintln!("  herduck topic overview get <topic-key> [--refresh]");
-    eprintln!("  herduck topic followup start <topic-key> <suggestion-id>");
-    eprintln!("  herduck topic followup get <followup-id>");
-    eprintln!("  herduck topic followup cancel <followup-id>");
-    eprintln!("  herduck topic cover get <topic-key>");
-    eprintln!("  herduck topic cover update <topic-key> [--goal TEXT] [--next-step TEXT ... | --clear-next-steps] [--blocked-note TEXT] [--expected-updated-at N]");
+    eprintln!("herduck work commands (JSON output):");
+    eprintln!("  herduck work list");
+    eprintln!("  herduck work overview get <work-key> [--refresh]");
+    eprintln!("  herduck work followup start <work-key> <suggestion-id>");
+    eprintln!("  herduck work followup get <followup-id>");
+    eprintln!("  herduck work followup cancel <followup-id>");
+    eprintln!("  herduck work plan get <work-key>");
+    eprintln!("  herduck work plan update <work-key> [--goal TEXT] [--next-step TEXT ... | --clear-next-steps] [--blocked-note TEXT] [--expected-updated-at N]");
     eprintln!(
         "Omitted fields stay unchanged. Use empty text or --clear-next-steps to clear a field."
     );
@@ -179,6 +185,69 @@ mod tests {
     }
 
     #[test]
+    fn work_plan_and_legacy_topic_cover_preserve_the_same_guarded_request() {
+        let mut expected = None;
+        for group in ["work", "topic"] {
+            for plan in ["plan", "cover"] {
+                let values = args(&[
+                    plan,
+                    "update",
+                    "topic-existing-key",
+                    "--goal",
+                    "目标",
+                    "--next-step",
+                    "Review evidence",
+                    "--expected-updated-at",
+                    "42",
+                ]);
+                let mut command = args(&["herduck", group]);
+                command.extend(values.clone());
+                assert!(super::super::spec::command()
+                    .try_get_matches_from(command)
+                    .is_ok());
+                let request = parse_method(&values).unwrap();
+                if let Some(expected) = &expected {
+                    assert_eq!(&request, expected);
+                } else {
+                    expected = Some(request);
+                }
+            }
+        }
+        let Method::TopicCoverUpdate(params) = expected.unwrap() else {
+            panic!("expected the existing shared runtime writer");
+        };
+        assert_eq!(params.topic_key, "topic-existing-key");
+        assert_eq!(params.patch.expected_updated_at, Some(42));
+        assert_eq!(params.patch.blocked_note, None);
+    }
+
+    #[test]
+    fn work_and_legacy_topic_dispatch_help_and_reject_bad_edits_without_a_server() {
+        for group in ["work", "topic"] {
+            assert!(matches!(
+                super::super::maybe_run(&args(&["herduck", group, "--help"])).unwrap(),
+                super::super::CommandOutcome::Handled(0)
+            ));
+            for plan in ["plan", "cover"] {
+                assert!(matches!(
+                    super::super::maybe_run(&args(&[
+                        "herduck", group, plan, "update", "key", "--goal",
+                    ]))
+                    .unwrap(),
+                    super::super::CommandOutcome::Handled(2)
+                ));
+            }
+        }
+        for plan in ["plan", "cover"] {
+            assert!(matches!(
+                super::super::maybe_run(&args(&["herduck", "project", plan, "get", "key"]))
+                    .unwrap(),
+                super::super::CommandOutcome::Handled(2)
+            ));
+        }
+    }
+
+    #[test]
     fn overview_cli_preserves_the_key_and_refresh_is_opt_in() {
         for refresh in [false, true] {
             let mut values = args(&["overview", "get", "folder with spaces"]);
@@ -190,7 +259,7 @@ mod tests {
             };
             assert_eq!(params.project_key, "folder with spaces");
             assert_eq!(params.refresh, refresh);
-            for group in ["topic", "project"] {
+            for group in ["work", "topic", "project"] {
                 let mut command = vec!["herduck".to_string(), group.to_string()];
                 command.extend(values.clone());
                 assert!(super::super::spec::command()

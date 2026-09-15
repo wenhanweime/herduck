@@ -191,7 +191,7 @@ const DEFAULT_CONFIG: &str = r##"# HERDUCK configuration
 
 # "pending" (default) keeps summaries off until you enable them in this file.
 # "auto" and "llm" try only configured providers; titles fall back locally on failure.
-# "local" generates basic offline titles, retaining existing topics without model calls.
+# "local" generates basic offline titles, retaining existing Work groups without model calls.
 # mode = "pending"
 
 # Settings only displays current priorities and details; Open config file edits this file.
@@ -605,7 +605,7 @@ fn main() -> io::Result<()> {
         println!("       herduck workspace <subcommand> ...");
         println!("       herduck worktree <subcommand> ...");
         println!("       herduck tab <subcommand> ...");
-        println!("       herduck topic <subcommand> ...");
+        println!("       herduck work <subcommand> ...");
         println!("       herduck notification <subcommand> ...");
         println!("       herduck agent <subcommand> ...");
         println!("       herduck pane <subcommand> ...");
@@ -662,7 +662,7 @@ fn main() -> io::Result<()> {
                 "Tab helpers over the socket API",
             ),
             (
-                "herduck topic <subcommand>",
+                "herduck work <subcommand>",
                 "List Work groups and read or edit their plans",
             ),
             (

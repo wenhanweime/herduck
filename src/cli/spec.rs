@@ -30,7 +30,7 @@ pub(super) fn command() -> Command {
         .subcommand(channel_command())
         .subcommand(server_command())
         .subcommand(api_command())
-        .subcommand(topic_command())
+        .subcommand(work_command())
         .subcommand(project_command())
         .subcommand(workspace_command())
         .subcommand(worktree_command())
@@ -141,20 +141,22 @@ fn api_command() -> Command {
         )
 }
 
-fn topic_command() -> Command {
-    Command::new("topic")
+fn work_command() -> Command {
+    Command::new("work")
+        .alias("topic")
         .about("Read Work progress and edit saved plans over the socket API")
         .subcommand(Command::new("list").about("List Work keys, plans, and conversations as JSON"))
         .subcommand(overview_command())
         .subcommand(followup_command())
         .subcommand(
-            Command::new("cover")
+            Command::new("plan")
+                .alias("cover")
                 .about("Read or update a Work plan")
-                .subcommand(id_command("get", "topic_key", "Read a Work plan"))
+                .subcommand(id_command("get", "work_key", "Read a Work plan"))
                 .subcommand(
                     Command::new("update")
-                        .about("Update only the supplied cover fields")
-                        .arg(required("topic_key", "TOPIC_KEY"))
+                        .about("Update only the supplied plan fields")
+                        .arg(required("work_key", "WORK_KEY"))
                         .arg(option("goal", "TEXT"))
                         .arg(repeatable_option("next-step", "TEXT"))
                         .arg(flag("clear-next-steps").conflicts_with("next-step"))
@@ -1038,6 +1040,8 @@ mod tests {
         assert!(script.contains("'completion:Generate shell completion scripts'"));
         assert!(script.contains("bash elvish fish powershell zsh"));
         assert!(script.contains("'pane:Control terminal panes'"));
+        assert!(script.contains("'work:Read Work progress"));
+        assert!(script.contains("'plan:Read or update a Work plan'"));
         assert!(script.contains("idle working blocked done unknown"));
         assert!(!script.contains("live-handoff"));
     }

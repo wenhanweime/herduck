@@ -3,9 +3,9 @@
 Herduck is an alpha preview for macOS and Linux. Install your coding-agent CLIs and complete their
 login separately; Herduck does not supply an Agent subscription or credentials.
 
-This source branch targets **0.1.0-alpha.4**. The version-pinned npm packages, release URLs, and
-Git tag below become available when that release is published. Until then, `herduck@alpha` installs
-the latest published alpha; use this checkout's source build to try the [project overview](project-overview.md).
+For the Work plans, progress overview, and commands described in this repository, use
+[Build from source](#build-from-source). The published npm package provides the terminal and
+conversation-library features; its current version is **0.1.0-alpha.2**.
 
 ## npm and npx
 
@@ -23,8 +23,8 @@ To try the same release without a global npm installation:
 npx --yes herduck@alpha
 ```
 
-The `alpha` tag follows alpha releases. To pin this release, use
-`npm install -g herduck@0.1.0-alpha.4` or `npx --yes herduck@0.1.0-alpha.4`.
+The `alpha` tag selects the published alpha. To pin the available package, use
+`npm install -g herduck@0.1.0-alpha.2` or `npx --yes herduck@0.1.0-alpha.2`.
 
 The first launch downloads the matching binary from the exact GitHub release and checks its SHA-256
 against the package's embedded manifest. Subsequent launches reuse the verified binary and can work offline. Agent
@@ -36,17 +36,17 @@ your user. Do not run Herduck with `sudo`.
 
 ### Install from GitHub
 
-The identical npm archive is also attached to the GitHub release. These URLs pin version `0.1.0-alpha.4`:
+The identical npm archive is also attached to the GitHub release. These URLs pin version `0.1.0-alpha.2`:
 
 ```sh
-npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.4/herduck-0.1.0-alpha.4.tgz
+npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz
 herduck
 ```
 
 Or use npx:
 
 ```sh
-npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.4/herduck-0.1.0-alpha.4.tgz herduck
+npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.2/herduck-0.1.0-alpha.2.tgz herduck
 ```
 
 ## Supported prebuilt platforms
@@ -65,7 +65,7 @@ have not been validated. macOS binaries use ad hoc signing, not Apple notarizati
 ## Direct binaries
 
 Download the asset for your CPU and `SHA256SUMS` from the
-[release](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.4). In the download directory,
+[release](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.2). In the download directory,
 verify that asset before installation. For example, on Apple silicon:
 
 ```sh
@@ -129,8 +129,7 @@ and `xz`. An unversioned package-manager install may select an incompatible newe
 ### Compile and install
 
 ```sh
-# Source preview branch; the alpha.4 release tag is not available yet.
-git clone --branch feat/topic-cover-alpha.3 https://github.com/wenhanweime/herduck.git
+git clone https://github.com/wenhanweime/herduck.git
 cd herduck
 cargo install --path . --locked
 ```
