@@ -80,7 +80,9 @@ pub(crate) fn session_label(title: &str, topic_label: Option<&str>) -> SessionLa
     let task = if cleaned.is_empty() {
         // Everything was noise. The raw title is still better than an empty row, so fall back to
         // it rather than inventing a placeholder that hides which session this is.
-        truncate_end(title.trim(), TITLE_MAX_WIDTH)
+        crate::terminal::stripped_terminal_title(title)
+            .map(|title| truncate_end(&title, TITLE_MAX_WIDTH))
+            .unwrap_or_default()
     } else {
         truncate_end(&first_sentence(task_text), TITLE_MAX_WIDTH)
     };
@@ -188,7 +190,10 @@ pub(crate) fn clean_title(value: &str) -> String {
     let cleaned = strip_shell_noise(&cleaned);
     let cleaned = strip_bare_uuids(&cleaned);
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-    collapse_immediate_repeat(collapsed.trim())
+    // Older runtime Catalog entries can contain a captured OSC activity frame.
+    // Clean only the display label; retain stored history and the raw detection title.
+    let collapsed = crate::terminal::stripped_terminal_title(&collapsed).unwrap_or_default();
+    collapse_immediate_repeat(&collapsed)
 }
 
 /// Whether a title says so little that showing it teaches the user nothing.
@@ -300,6 +305,22 @@ fn first_sentence(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_activity_frames_do_not_become_session_names() {
+        for frame in ['⠁', '⠈', '⠄', '⠋', '⠧', '✳'] {
+            let title = format!("{frame} 继续最新会话 | project");
+            assert_eq!(session_label(&title, None).task, "继续最新会话 | project");
+            let title = format!("{frame} 【产品】修复标题");
+            let label = session_label(&title, None);
+            assert_eq!(label.subject.as_deref(), Some("产品"));
+            assert_eq!(label.task, "修复标题");
+            assert!(session_label(&frame.to_string(), None).task.is_empty());
+        }
+        for title in ["修复 ⠁ 点阵显示", "✨ 新功能", "★ production", "⠁attached"] {
+            assert_eq!(session_label(title, None).task, title);
+        }
+    }
 
     #[test]
     fn resume_command_and_uuid_are_stripped() {

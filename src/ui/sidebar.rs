@@ -2120,6 +2120,16 @@ mod tests {
             agent_panel_entries(&app)[0].session_title.as_deref(),
             Some("继续修复标题一致性")
         );
+        // A previously indexed OSC spinner must not leak into the Agents panel.
+        for frame in ['⠁', '⠈', '⠄'] {
+            let raw = format!("{frame} 继续修复标题一致性");
+            app.projects.snapshot.projects[0].sessions[0].title = raw.clone();
+            assert_eq!(
+                agent_panel_entries(&app)[0].session_title.as_deref(),
+                Some("继续修复标题一致性")
+            );
+            assert_eq!(app.projects.snapshot.projects[0].sessions[0].title, raw);
+        }
     }
 
     #[test]

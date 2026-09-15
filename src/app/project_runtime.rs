@@ -53,7 +53,7 @@ impl App {
                 self.public_workspace_id(ws_idx),
                 self.public_pane_id(ws_idx, pane_id)?,
                 terminal.effective_agent_label().map(str::to_string),
-                terminal.terminal_title.clone().unwrap_or_default(),
+                terminal.terminal_title_stripped().unwrap_or_default(),
                 pane.attached_terminal_id.clone(),
             ))
         });
