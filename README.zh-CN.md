@@ -2,9 +2,9 @@
   <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. 白色兜帽小鸭坐在电脑前。" width="880">
 </p>
 
-<h1 align="center">会话会结束，工作要接得上。</h1>
+<h1 align="center">面向 Agent 的持续工作层。</h1>
 
-<p align="center">Herduck：人和 Agent 共用的持续工作管理层。</p>
+<p align="center">Agent 负责执行，Herduck 让工作持续推进。</p>
 
 <p align="center">
   <a href="#安装">安装</a> ·
