@@ -918,8 +918,8 @@ fn render_empty(app: &AppState, frame: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(p.surface_dim));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let art_height = if inner.width >= 32 && inner.height >= 20 {
-        11
+    let art_height = if inner.width >= 24 && inner.height >= 17 {
+        super::brand::MASCOT_HEIGHT
     } else if inner.width >= 24 && inner.height >= 13 {
         4
     } else {

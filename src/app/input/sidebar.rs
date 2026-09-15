@@ -166,18 +166,20 @@ impl AppState {
     }
 
     pub(crate) fn sidebar_footer_rect(&self) -> Rect {
-        let ws_area = self.workspace_list_rect();
-        if ws_area == Rect::default() {
-            return Rect::default();
-        }
-        let y = ws_area.y + ws_area.height.saturating_sub(1);
-        Rect::new(ws_area.x, y, ws_area.width, 1)
+        crate::ui::brand_footer_rect(self.workspace_list_rect())
     }
 
     pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
         let footer = self.sidebar_footer_rect();
-        let width = 5u16.min(footer.width.max(1));
-        Rect::new(footer.x, footer.y, width, footer.height)
+        if footer.is_empty() || footer.width < crate::ui::MIN_FOOTER_ACTIONS_WIDTH {
+            return Rect::default();
+        }
+        Rect::new(
+            footer.x,
+            footer.y + u16::from(footer.height > 1),
+            5.min(footer.width),
+            1,
+        )
     }
 
     pub(crate) fn global_launcher_rect(&self) -> Rect {
@@ -187,23 +189,16 @@ impl AppState {
 
         let footer = if self.sidebar_view.is_project_browser() {
             let area = self.view.sidebar_rect;
-            Rect::new(
+            crate::ui::brand_footer_rect(Rect::new(
                 area.x,
-                area.bottom().saturating_sub(1),
+                area.y,
                 area.width.saturating_sub(1),
-                area.height.min(1),
-            )
+                area.height,
+            ))
         } else {
             self.sidebar_footer_rect()
         };
-        let width = if self.global_menu_attention_badge_visible() {
-            17
-        } else {
-            15
-        }
-        .min(footer.width.max(1));
-        let x = footer.x + footer.width.saturating_sub(width);
-        Rect::new(x, footer.y, width, footer.height)
+        crate::ui::brand_menu_rect(footer, self.global_menu_attention_badge_visible())
     }
 
     pub(crate) fn global_menu_labels(&self) -> Vec<&'static str> {
@@ -257,6 +252,8 @@ impl AppState {
         let divider_col = sidebar.x + sidebar.width.saturating_sub(1);
         sidebar.width > 0
             && !on_toggle
+            // The menu owns its full footprint, including the cell next to the divider.
+            && !self.global_launcher_rect().contains((col, row).into())
             // A one-cell divider is too easy to miss with a mouse. Extend its resize handle one
             // cell into the sidebar, without stealing the terminal's first content column.
             && (col == divider_col || col.checked_add(1) == Some(divider_col))
@@ -507,6 +504,49 @@ mod tests {
         ));
 
         assert_eq!(app.state.mode, Mode::GlobalMenu);
+    }
+
+    #[test]
+    fn clicking_any_part_of_the_brand_menu_keeps_new_separate() {
+        for width in [18, 25, 26, 34] {
+            for view in [
+                crate::app::state::SidebarView::SpacesAgents,
+                crate::app::state::SidebarView::Sessions,
+                crate::app::state::SidebarView::Projects,
+                crate::app::state::SidebarView::Clusters,
+            ] {
+                let mut app = app_for_mouse_test();
+                app.state.sidebar_width = width;
+                app.state.sidebar_view = view;
+                app.state.update_available = Some("0.2.0".into());
+                crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 30));
+                let menu = app.state.global_launcher_rect();
+                for (x, y) in [
+                    (menu.x, menu.y),
+                    (menu.x, menu.bottom() - 1),
+                    (menu.right() - 1, menu.y),
+                    (menu.right() - 1, menu.bottom() - 1),
+                ] {
+                    app.state.mode = Mode::Terminal;
+                    app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), x, y));
+                    assert_eq!(app.state.mode, Mode::GlobalMenu, "{view:?}, width {width}");
+                    assert!(!app.state.request_new_workspace);
+                }
+                if view == crate::app::state::SidebarView::SpacesAgents {
+                    let new_button = app.state.sidebar_new_button_rect();
+                    assert_eq!(new_button.height, 1);
+                    assert!(!menu.intersects(new_button));
+                    app.state.mode = Mode::Terminal;
+                    app.handle_mouse(mouse(
+                        MouseEventKind::Down(MouseButton::Left),
+                        new_button.x + 1,
+                        new_button.y,
+                    ));
+                    assert!(app.state.request_new_workspace);
+                    assert_ne!(app.state.mode, Mode::GlobalMenu);
+                }
+            }
+        }
     }
 
     #[test]

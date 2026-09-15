@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. A duck in a white hood, working at a laptop." width="880">
+  <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. A white duck with black glasses and a golden bill on blue." width="880">
 </p>
 
 <h1 align="center">The persistent work layer for agents.</h1>

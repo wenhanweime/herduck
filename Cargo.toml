@@ -13,6 +13,7 @@ categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/sounds/*",
+    "assets/brand/*.txt",
     "docs/api/herduck-api.schema.json",
     "README.md",
     "LICENSE",

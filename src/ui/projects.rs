@@ -630,7 +630,9 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
         content.x,
         tree_y,
         content.width,
-        content.height.saturating_sub(tree_offset).saturating_sub(1),
+        super::brand::brand_footer_rect(content)
+            .y
+            .saturating_sub(tree_y),
     );
 
     let rows = project_tree_rows(app);
@@ -1615,42 +1617,109 @@ mod tests {
     #[test]
     fn sidebar_headers_and_menu_remain_visible_in_every_view() {
         use crate::app::state::SidebarView;
+        let mut state = AppState::test_new();
+        state.workspaces = (0..12)
+            .map(|index| crate::workspace::Workspace::test_new(&format!("project-{index}")))
+            .collect();
         for view in [
             SidebarView::SpacesAgents,
             SidebarView::Sessions,
             SidebarView::Projects,
             SidebarView::Clusters,
         ] {
-            let mut state = AppState::test_new();
-            state.sidebar_view = view;
-            state.sidebar_collapsed = false;
-            let area = Rect::new(0, 0, 120, 30);
-            crate::ui::compute_view(&mut state, area);
-            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30))
-                .expect("terminal");
-            terminal
-                .draw(|frame| crate::ui::render(&state, frame))
-                .expect("render");
-            let buffer = terminal.backend().buffer();
-            let menu = state.global_launcher_rect();
-            let text = (menu.x..menu.right())
-                .map(|x| buffer[(x, menu.y)].symbol())
-                .collect::<String>();
-            assert!(text.contains("herduck · menu"), "{view:?}: {text}");
-            if view == SidebarView::SpacesAgents {
-                let y = state
-                    .view
-                    .project_sidebar_tabs
-                    .iter()
-                    .map(|rect| rect.bottom())
-                    .max()
-                    .unwrap();
-                let text = (0..state.view.sidebar_rect.width)
-                    .map(|x| buffer[(x, y)].symbol())
-                    .collect::<String>();
-                assert!(text.contains("spaces"), "{text}");
-            } else {
-                assert!(state.view.project_tree_rect.bottom() <= menu.y);
+            for (width, height) in [
+                (7, 24),
+                (18, 24),
+                (25, 24),
+                (26, 21),
+                (26, 22),
+                (26, 30),
+                (34, 30),
+            ] {
+                for attention in [false, true] {
+                    state.sidebar_view = view;
+                    state.sidebar_collapsed = false;
+                    state.sidebar_min_width = 7;
+                    state.sidebar_width = width;
+                    state.sidebar_spaces.rows =
+                        vec![vec![crate::config::SpaceSidebarToken::Workspace]];
+                    state.sidebar_spaces.row_gap = 0;
+                    state.projects.snapshot = snapshot();
+                    state.update_available = attention.then(|| "0.2.0".into());
+                    let area = Rect::new(0, 0, 120, height);
+                    crate::ui::compute_view(&mut state, area);
+                    let mut terminal =
+                        ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, height))
+                            .expect("terminal");
+                    terminal
+                        .draw(|frame| crate::ui::render(&state, frame))
+                        .expect("render");
+                    let buffer = terminal.backend().buffer();
+                    let menu = state.global_launcher_rect();
+                    let text = (menu.y..menu.bottom())
+                        .map(|y| {
+                            (menu.x..menu.right())
+                                .map(|x| buffer[(x, y)].symbol())
+                                .collect::<String>()
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    assert!(text.contains("menu"), "{view:?} {width}×{height}: {text}");
+                    if width >= 25 {
+                        assert!(
+                            text.contains("herduck"),
+                            "{view:?} {width}×{height}: {text}"
+                        );
+                    }
+                    if menu.height == 4 {
+                        assert!(text.contains('⡠'), "{view:?}: missing duck outline");
+                    }
+                    if width == 26 && height == 30 {
+                        assert_eq!(menu.height, 4, "default sidebar must display the duck");
+                    }
+                    if view == SidebarView::SpacesAgents && width == 26 && height == 21 {
+                        assert_eq!(
+                            menu.height, 1,
+                            "short workspace section must keep its content"
+                        );
+                    }
+                    if attention {
+                        assert!(text.contains('●'), "{view:?}: missing attention badge");
+                    }
+                    if view == SidebarView::SpacesAgents {
+                        let new_button = state.sidebar_new_button_rect();
+                        assert_eq!(new_button.height, u16::from(width > 7));
+                        assert!(!menu.intersects(new_button));
+                        assert!(!state.view.workspace_card_areas.is_empty());
+                        assert!(state
+                            .view
+                            .workspace_card_areas
+                            .iter()
+                            .all(|card| card.rect.bottom() <= menu.y));
+                        let list = crate::ui::workspace_list_rect(
+                            state.view.sidebar_rect,
+                            state.sidebar_section_split,
+                        );
+                        let scrollbar = crate::ui::workspace_list_scrollbar_rect(&state, list)
+                            .expect("populated list must scroll");
+                        assert!(scrollbar.bottom() <= menu.y);
+                        let y = state
+                            .view
+                            .project_sidebar_tabs
+                            .iter()
+                            .map(|rect| rect.bottom())
+                            .max()
+                            .unwrap();
+                        let text = (0..state.view.sidebar_rect.width)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect::<String>();
+                        if width >= 18 {
+                            assert!(text.contains("spaces"), "{text}");
+                        }
+                    } else {
+                        assert!(state.view.project_tree_rect.bottom() <= menu.y);
+                    }
+                }
             }
         }
     }

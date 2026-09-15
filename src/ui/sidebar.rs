@@ -542,7 +542,7 @@ pub(crate) fn workspace_list_body_rect(area: Rect, has_scrollbar: bool) -> Rect 
     }
 
     let body_y = area.y.saturating_add(WORKSPACE_SECTION_HEADER_ROWS);
-    let footer_y = area.y + area.height.saturating_sub(1);
+    let footer_y = super::brand::brand_footer_rect(area).y;
     let body_height = footer_y.saturating_sub(body_y);
     let body_width = area.width.saturating_sub(u16::from(has_scrollbar));
     Rect::new(area.x, body_y, body_width, body_height)
@@ -956,7 +956,7 @@ pub(crate) fn workspace_drop_indicator_row(
     if area.height == 0 {
         return None;
     }
-    let list_bottom = area.y + area.height.saturating_sub(1);
+    let list_bottom = super::brand::brand_footer_rect(area).y;
 
     let first = cards.first()?;
     if insert_idx == first.ws_idx {
@@ -1238,7 +1238,7 @@ fn render_workspace_list(
         _ => None,
     };
 
-    let list_bottom = area.y + area.height.saturating_sub(1);
+    let list_bottom = super::brand::brand_footer_rect(area).y;
     if area.height > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
@@ -1402,28 +1402,11 @@ fn render_workspace_list(
 }
 
 pub(super) fn render_sidebar_menu(app: &AppState, frame: &mut Frame) {
-    let p = &app.palette;
-    let menu_rect = app.global_launcher_rect();
-    let menu_line = if app.global_menu_attention_badge_visible() {
-        Line::from(vec![
-            Span::styled(
-                "● ",
-                Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("her", Style::default().fg(p.text)),
-            Span::styled("duck", Style::default().fg(p.yellow)),
-            Span::styled(" · menu", Style::default().fg(p.overlay0)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("her", Style::default().fg(p.text)),
-            Span::styled("duck", Style::default().fg(p.yellow)),
-            Span::styled(" · menu", Style::default().fg(p.overlay0)),
-        ])
-    };
-    frame.render_widget(
-        Paragraph::new(menu_line).alignment(Alignment::Right),
-        menu_rect,
+    super::brand::render_menu(
+        frame,
+        app.global_launcher_rect(),
+        &app.palette,
+        app.global_menu_attention_badge_visible(),
     );
 }
 

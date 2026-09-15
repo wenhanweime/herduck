@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. 白色兜帽小鸭坐在电脑前。" width="880">
+  <img src="assets/herduck-logo.png" alt="Herduck — Make AI work for you. 蓝底上戴黑框眼镜、长着金黄色扁嘴的白色小鸭。" width="880">
 </p>
 
 <h1 align="center">面向 Agent 的持续工作层。</h1>
