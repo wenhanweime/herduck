@@ -114,7 +114,7 @@ impl std::fmt::Display for CatalogError {
             }
             Self::InvalidTopicMerge => f.write_str("invalid semantic topic merge"),
             Self::InvalidTopicCover(message) => f.write_str(message),
-            Self::TopicCoverConflict => f.write_str("Topic cover changed; reopen it before saving"),
+            Self::TopicCoverConflict => f.write_str("Work plan changed; reopen it before saving"),
             Self::NotFound => f.write_str("catalog record not found"),
         }
     }
