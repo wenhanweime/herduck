@@ -16,22 +16,33 @@ pub(super) const TAGLINE: &str = "Make AI work for you.";
 const MASCOT: &str = include_str!("../../assets/brand/herduck-32-braille.txt");
 const MINI: &str = include_str!("../../assets/brand/herduck-16-braille.txt");
 pub(super) const MASCOT_HEIGHT: u16 = 8;
-const MINI_WIDTH: u16 = 8;
-const MINI_HEIGHT: u16 = 4;
 const MENU_GAP: u16 = 2;
-const STACKED_MENU_WIDTH: u16 = MINI_WIDTH + MENU_GAP + 9;
-const INLINE_MENU_WIDTH: u16 = MINI_WIDTH + MENU_GAP + 16;
+const MIN_LABEL_WIDTH: u16 = 9;
+const INLINE_LABEL_WIDTH: u16 = 16;
 const NEW_BUTTON_SPACE: u16 = 6;
 pub(crate) const MIN_FOOTER_ACTIONS_WIDTH: u16 = NEW_BUTTON_SPACE + 4;
+
+fn mini_size() -> (u16, u16) {
+    (
+        MINI.lines()
+            .map(super::text::display_width_u16)
+            .max()
+            .unwrap_or(0),
+        MINI.lines().count() as u16,
+    )
+}
 
 /// Both list clipping and mouse hit testing use this footer, including the compact fallback.
 pub(crate) fn brand_footer_rect(area: Rect) -> Rect {
     if area.is_empty() {
         return Rect::default();
     }
+    let (icon_width, icon_height) = mini_size();
     // Leave two header rows and at least four content rows in the workspace section.
-    let height = if area.width >= STACKED_MENU_WIDTH + NEW_BUTTON_SPACE && area.height >= 10 {
-        MINI_HEIGHT
+    let height = if area.width >= icon_width + MENU_GAP + MIN_LABEL_WIDTH + NEW_BUTTON_SPACE
+        && area.height >= icon_height + 6
+    {
+        icon_height
     } else {
         1
     };
@@ -48,11 +59,13 @@ pub(crate) fn brand_menu_rect(footer: Rect, attention: bool) -> Rect {
     } else {
         footer.width
     };
-    let width = if footer.height >= MINI_HEIGHT {
-        if footer.width.saturating_sub(NEW_BUTTON_SPACE) >= INLINE_MENU_WIDTH {
-            INLINE_MENU_WIDTH
+    let (icon_width, icon_height) = mini_size();
+    let icon_space = icon_width + MENU_GAP;
+    let width = if footer.height >= icon_height {
+        if available >= icon_space + INLINE_LABEL_WIDTH {
+            icon_space + INLINE_LABEL_WIDTH
         } else {
-            STACKED_MENU_WIDTH
+            icon_space + MIN_LABEL_WIDTH
         }
     } else if attention {
         17
@@ -100,20 +113,24 @@ pub(super) fn render_menu(frame: &mut Frame, area: Rect, p: &Palette, attention:
         Span::styled("duck", Style::default().fg(p.yellow)),
     ]);
 
-    if area.height >= MINI_HEIGHT && area.width >= STACKED_MENU_WIDTH {
+    let (icon_width, icon_height) = mini_size();
+    let icon_space = icon_width + MENU_GAP;
+    if area.height >= icon_height && area.width >= icon_space + MIN_LABEL_WIDTH {
         render_mascot(
             frame,
-            Rect::new(area.x, area.y, MINI_WIDTH, MINI_HEIGHT),
+            Rect::new(area.x, area.bottom() - icon_height, icon_width, icon_height),
             p,
             true,
         );
+        let inline = area.width >= icon_space + INLINE_LABEL_WIDTH;
+        let label_height = if inline { 1 } else { 2 };
         let label = Rect::new(
-            area.x + MINI_WIDTH + MENU_GAP,
-            area.y + 1,
-            area.width - MINI_WIDTH - MENU_GAP,
-            2,
+            area.x + icon_space,
+            area.bottom() - label_height,
+            area.width.saturating_sub(icon_space),
+            label_height,
         );
-        let lines = if area.width >= INLINE_MENU_WIDTH {
+        let lines = if inline {
             wordmark.push(Span::styled(" · menu", Style::default().fg(p.overlay0)));
             vec![Line::from(wordmark)]
         } else {
@@ -152,4 +169,55 @@ pub(super) fn render_wordmark(frame: &mut Frame, area: Rect, p: &Palette) {
         .alignment(Alignment::Center),
         area,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn menu_wordmark_clears_art_and_aligns_with_footer_bottom() {
+        let (icon_width, icon_height) = mini_size();
+        for attention in [false, true] {
+            for label_width in [MIN_LABEL_WIDTH, INLINE_LABEL_WIDTH] {
+                let width = icon_width + MENU_GAP + label_width;
+                let area = Rect::new(2, 1, width, icon_height + 1);
+                let mut terminal =
+                    Terminal::new(TestBackend::new(width + 4, icon_height + 3)).unwrap();
+                terminal
+                    .draw(|frame| render_menu(frame, area, &Palette::catppuccin(), attention))
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let label_y = area.bottom()
+                    - if label_width == INLINE_LABEL_WIDTH {
+                        1
+                    } else {
+                        2
+                    };
+                let label_x = area.x + icon_width + MENU_GAP;
+                let wordmark_x = label_x + if attention { 2 } else { 0 };
+                for (offset, ch) in "herduck".chars().enumerate() {
+                    assert_eq!(
+                        buffer[(wordmark_x + offset as u16, label_y)].symbol(),
+                        ch.to_string()
+                    );
+                }
+                for y in area.y..area.bottom() {
+                    for x in area.x + icon_width..label_x {
+                        assert_eq!(buffer[(x, y)].symbol(), " ");
+                    }
+                }
+                for (dy, line) in MINI.lines().enumerate() {
+                    for (dx, ch) in line.chars().enumerate() {
+                        assert_eq!(
+                            buffer[(area.x + dx as u16, area.bottom() - icon_height + dy as u16)]
+                                .symbol(),
+                            ch.to_string()
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
