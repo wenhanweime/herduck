@@ -545,7 +545,7 @@ pub(super) fn sidebar_tab_height(width: u16, available_height: u16) -> u16 {
 }
 
 pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSidebarGeometry {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    let content = super::brand::sidebar_content_rect(area);
     if content.width == 0 || content.height == 0 {
         return ProjectSidebarGeometry {
             sidebar_tabs: [Rect::default(); 4],
@@ -630,9 +630,7 @@ pub(crate) fn project_sidebar_geometry(app: &AppState, area: Rect) -> ProjectSid
         content.x,
         tree_y,
         content.width,
-        super::brand::brand_footer_rect(content)
-            .y
-            .saturating_sub(tree_y),
+        content.bottom().saturating_sub(tree_y),
     );
 
     let rows = project_tree_rows(app);
@@ -1631,10 +1629,15 @@ mod tests {
                 (7, 24),
                 (18, 24),
                 (25, 24),
+                (26, 20),
                 (26, 21),
                 (26, 22),
                 (26, 30),
+                (30, 30),
+                (31, 30),
                 (34, 30),
+                (37, 30),
+                (38, 30),
             ] {
                 for attention in [false, true] {
                     state.sidebar_view = view;
@@ -1656,6 +1659,26 @@ mod tests {
                         .expect("render");
                     let buffer = terminal.backend().buffer();
                     let menu = state.global_launcher_rect();
+                    assert_eq!(
+                        menu.x,
+                        state.view.sidebar_rect.x + if width >= 8 { 2 } else { 0 },
+                        "brand must keep its left inset"
+                    );
+                    assert_eq!(
+                        menu.bottom(),
+                        state.view.sidebar_rect.bottom() - u16::from(menu.height == 2),
+                        "brand must keep its bottom inset"
+                    );
+                    assert!(!menu.intersects(crate::ui::expanded_sidebar_toggle_rect(
+                        state.view.sidebar_rect
+                    )));
+                    if view == SidebarView::SpacesAgents {
+                        let (_, agents) = crate::ui::expanded_sidebar_sections(
+                            state.view.sidebar_rect,
+                            state.sidebar_section_split,
+                        );
+                        assert!(agents.bottom() <= menu.y, "agents must not cover brand");
+                    }
                     let text = (menu.y..menu.bottom())
                         .map(|y| {
                             (menu.x..menu.right())
@@ -1671,19 +1694,14 @@ mod tests {
                             "{view:?} {width}×{height}: {text}"
                         );
                     }
-                    if menu.height == 4 {
-                        assert!(text.contains('⡠'), "{view:?}: missing duck outline");
-                    }
+                    assert!(
+                        !text.contains('▄'),
+                        "bitmap must not be approximated with text"
+                    );
                     if width == 26 && height == 30 {
-                        assert_eq!(menu.height, 4, "default sidebar must display the duck");
+                        assert_eq!(menu.height, 2, "default sidebar reserves a compact bitmap");
                     }
-                    if view == SidebarView::SpacesAgents && width == 26 && height == 21 {
-                        assert_eq!(
-                            menu.height, 1,
-                            "short workspace section must keep its content"
-                        );
-                    }
-                    if attention {
+                    if attention && menu.width >= 6 {
                         assert!(text.contains('●'), "{view:?}: missing attention badge");
                     }
                     if view == SidebarView::SpacesAgents {
@@ -1718,6 +1736,43 @@ mod tests {
                         }
                     } else {
                         assert!(state.view.project_tree_rect.bottom() <= menu.y);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_controls_leave_brand_footer_clear_in_short_windows() {
+        use crate::app::state::SidebarView;
+
+        let mut state = AppState::test_new();
+        state.projects.snapshot = snapshot();
+        for view in [
+            SidebarView::SpacesAgents,
+            SidebarView::Sessions,
+            SidebarView::Projects,
+            SidebarView::Clusters,
+        ] {
+            state.sidebar_view = view;
+            for width in [7, 16, 18, 26, 34] {
+                for height in [1, 2, 3, 4, 5, 6, 15, 16, 30] {
+                    let area = Rect::new(3, 2, width, height);
+                    let geometry = project_sidebar_geometry(&state, area);
+                    let footer = super::super::brand::sidebar_brand_footer_rect(area);
+                    for rect in geometry
+                        .sidebar_tabs
+                        .iter()
+                        .chain(geometry.filter_tabs.iter())
+                        .chain([&geometry.search, &geometry.tree])
+                        .chain(geometry.row_hits.iter().map(|hit| &hit.rect))
+                    {
+                        if !rect.is_empty() {
+                            assert!(
+                                rect.y >= area.y && rect.bottom() <= footer.y,
+                                "{view:?} {width}x{height}: {rect:?} overlaps {footer:?}"
+                            );
+                        }
                     }
                 }
             }

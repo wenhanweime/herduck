@@ -166,7 +166,7 @@ impl AppState {
     }
 
     pub(crate) fn sidebar_footer_rect(&self) -> Rect {
-        crate::ui::brand_footer_rect(self.workspace_list_rect())
+        crate::ui::workspace_footer_rect(self.workspace_list_rect())
     }
 
     pub(crate) fn sidebar_new_button_rect(&self) -> Rect {
@@ -187,17 +187,7 @@ impl AppState {
             return self.view.mobile_menu_hit_area;
         }
 
-        let footer = if self.sidebar_view.is_project_browser() {
-            let area = self.view.sidebar_rect;
-            crate::ui::brand_footer_rect(Rect::new(
-                area.x,
-                area.y,
-                area.width.saturating_sub(1),
-                area.height,
-            ))
-        } else {
-            self.sidebar_footer_rect()
-        };
+        let footer = crate::ui::sidebar_brand_footer_rect(self.view.sidebar_rect);
         crate::ui::brand_menu_rect(footer, self.global_menu_attention_badge_visible())
     }
 
@@ -299,11 +289,21 @@ impl AppState {
 
     pub(super) fn set_sidebar_section_split(&mut self, row: u16) {
         let sidebar = self.view.sidebar_rect;
-        let content_height = sidebar.height;
+        let content = crate::ui::sidebar_content_rect(sidebar);
+        let extra_tabs = self
+            .view
+            .project_sidebar_tabs
+            .iter()
+            .map(|rect| rect.bottom())
+            .max()
+            .unwrap_or(sidebar.y)
+            .saturating_sub(sidebar.y)
+            .saturating_sub(1);
+        let content_height = content.height.saturating_sub(extra_tabs);
         if content_height < 6 {
             return;
         }
-        let relative_y = row.saturating_sub(sidebar.y);
+        let relative_y = row.saturating_sub(sidebar.y).saturating_sub(extra_tabs);
         let ratio = (relative_y as f32) / (content_height as f32);
         self.sidebar_section_split = ratio.clamp(0.1, 0.9);
         self.mark_session_dirty();
@@ -504,6 +504,37 @@ mod tests {
         ));
 
         assert_eq!(app.state.mode, Mode::GlobalMenu);
+    }
+
+    #[test]
+    fn brand_stays_bottom_left_when_sidebar_sections_resize() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_min_width = 7;
+        for width in [7, 16, 18, 26, 34] {
+            for split in [0.1, 0.5, 0.9] {
+                app.state.sidebar_width = width;
+                app.state.sidebar_section_split = split;
+                let screen = Rect::new(3, 2, 120, 30);
+                crate::ui::compute_view(&mut app.state, screen);
+                let menu = app.state.global_launcher_rect();
+                assert_eq!(menu.x, screen.x + if width >= 8 { 2 } else { 0 });
+                assert_eq!(menu.bottom(), screen.bottom() - u16::from(menu.height == 2));
+                assert!(app.state.workspace_list_rect().bottom() <= menu.y);
+                assert!(app.state.agent_panel_rect().bottom() <= menu.y);
+                assert!(!menu.intersects(app.state.sidebar_new_button_rect()));
+            }
+            let row = 17;
+            app.state.set_sidebar_section_split(row);
+            crate::ui::compute_view(&mut app.state, Rect::new(3, 2, 120, 30));
+            let divider = crate::ui::sidebar_section_divider_rect(
+                app.state.view.sidebar_rect,
+                app.state.sidebar_section_split,
+            );
+            assert_eq!(
+                divider.y, row,
+                "divider should follow the drag at width {width}"
+            );
+        }
     }
 
     #[test]
@@ -728,7 +759,12 @@ mod tests {
         app.state.selected = 0;
         app.state.mode = Mode::Terminal;
 
-        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, 16));
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 30));
+        let panel = app.state.agent_panel_rect();
+        let row = (panel.y..panel.bottom())
+            .find(|row| app.state.agent_detail_target_at(*row) == Some((0, first_tab, second_pane)))
+            .expect("second agent must have a visible click target");
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 2, row));
 
         assert_eq!(app.state.workspaces[0].active_tab, 1);
         assert_eq!(
@@ -1146,7 +1182,9 @@ mod tests {
         app.state.workspaces = vec![Workspace::test_new("a"), Workspace::test_new("b")];
         app.state.active = Some(0);
         app.state.selected = 0;
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        // Leave room for both workspace cards above the brand footer.
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 32));
+        assert_eq!(app.state.view.workspace_card_areas.len(), 2);
         let target_row = app.state.view.workspace_card_areas[1].rect.y;
 
         app.handle_mouse(mouse(
@@ -1550,10 +1588,11 @@ mod tests {
             Workspace::test_new("b"),
             Workspace::test_new("c"),
         ];
-        // Leave spare space below the cards even with the taller navigation header.
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 32));
+        // Leave spare space below all three cards above the fixed brand footer.
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 40));
 
         let cards = &app.state.view.workspace_card_areas;
+        assert_eq!(cards.len(), 3);
         let bottom_slot = crate::ui::workspace_drop_indicator_row(
             cards,
             app.state.workspace_list_rect(),

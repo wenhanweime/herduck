@@ -11,25 +11,40 @@ use crate::app::state::Palette;
 
 pub(super) const TAGLINE: &str = "Make AI work for you.";
 
-// The approved pixel outlines use single-cell Braille glyphs: 2 × 4 pixels per cell.
-// Keep these in the theme's foreground so the glasses remain legible on light and dark terminals.
+// Welcome art remains a text asset; the sidebar uses a real 32px PNG via Kitty.
 const MASCOT: &str = include_str!("../../assets/brand/herduck-32-braille.txt");
-const MINI: &str = include_str!("../../assets/brand/herduck-16-braille.txt");
+const MINI: &str = include_str!("../../assets/brand/herduck-16-blocks.txt");
 pub(super) const MASCOT_HEIGHT: u16 = 8;
 const MENU_GAP: u16 = 2;
+// A terminal cell is roughly twice as tall as it is wide: 2 columns ≈ 1 row.
+const MENU_LEFT_INSET: u16 = 2;
+const MENU_BOTTOM_INSET: u16 = 1;
 const MIN_LABEL_WIDTH: u16 = 9;
 const INLINE_LABEL_WIDTH: u16 = 16;
 const NEW_BUTTON_SPACE: u16 = 6;
 pub(crate) const MIN_FOOTER_ACTIONS_WIDTH: u16 = NEW_BUTTON_SPACE + 4;
 
 fn mini_size() -> (u16, u16) {
-    (
-        MINI.lines()
-            .map(super::text::display_width_u16)
-            .max()
-            .unwrap_or(0),
-        MINI.lines().count() as u16,
-    )
+    (4, 2)
+}
+
+/// Presentation-only placement, shared with the host graphics encoder.
+pub(crate) fn sidebar_logo_rect(app: &crate::app::state::AppState) -> Option<Rect> {
+    if !app.kitty_graphics_enabled
+        || !matches!(
+            app.mode,
+            crate::app::Mode::Terminal | crate::app::Mode::Navigate | crate::app::Mode::GlobalMenu
+        )
+        || app.sidebar_collapsed
+        || app.view.layout == crate::app::state::ViewLayout::Mobile
+        || app.popup_pane.is_some()
+    {
+        return None;
+    }
+    let menu = app.global_launcher_rect();
+    let (width, height) = mini_size();
+    (menu.height >= height && menu.width >= width + MENU_GAP + 4)
+        .then(|| Rect::new(menu.x, menu.bottom() - height, width, height))
 }
 
 /// Both list clipping and mouse hit testing use this footer, including the compact fallback.
@@ -38,30 +53,66 @@ pub(crate) fn brand_footer_rect(area: Rect) -> Rect {
         return Rect::default();
     }
     let (icon_width, icon_height) = mini_size();
-    // Leave two header rows and at least four content rows in the workspace section.
-    let height = if area.width >= icon_width + MENU_GAP + MIN_LABEL_WIDTH + NEW_BUTTON_SPACE
-        && area.height >= icon_height + 6
+    // Keep room for navigation, both section headers, and list content in short windows.
+    let height = if area.width >= MENU_LEFT_INSET + icon_width + MENU_GAP + 4
+        && area.height >= icon_height + MENU_BOTTOM_INSET + 12
     {
-        icon_height
+        icon_height + MENU_BOTTOM_INSET
     } else {
         1
     };
     Rect::new(area.x, area.bottom() - height, area.width, height)
 }
 
+/// Reserve the brand and its visual inset, with room for the collapse toggle.
+pub(crate) fn sidebar_brand_footer_rect(sidebar: Rect) -> Rect {
+    brand_footer_rect(Rect::new(
+        sidebar.x,
+        sidebar.y,
+        sidebar.width.saturating_sub(2),
+        sidebar.height,
+    ))
+}
+
+/// Both sidebar sections stop above the fixed brand footer.
+pub(crate) fn sidebar_content_rect(sidebar: Rect) -> Rect {
+    let footer = sidebar_brand_footer_rect(sidebar);
+    Rect::new(
+        sidebar.x,
+        sidebar.y,
+        sidebar.width.saturating_sub(1),
+        sidebar.height.saturating_sub(footer.height),
+    )
+}
+
+/// Only the new-workspace button stays under the workspace list.
+pub(crate) fn workspace_footer_rect(area: Rect) -> Rect {
+    if area.is_empty() {
+        return Rect::default();
+    }
+    Rect::new(area.x, area.bottom() - 1, area.width, 1)
+}
+
 pub(crate) fn brand_menu_rect(footer: Rect, attention: bool) -> Rect {
     if footer.is_empty() {
         return Rect::default();
     }
-    // A very narrow sidebar prioritizes the menu; the separate new button is then hidden.
-    let available = if footer.width >= MIN_FOOTER_ACTIONS_WIDTH {
-        footer.width - NEW_BUTTON_SPACE
+    // Preserve the complete menu label in exceptionally narrow sidebars.
+    let left_inset = if footer.width >= MENU_LEFT_INSET + 4 {
+        MENU_LEFT_INSET
     } else {
-        footer.width
+        0
     };
+    let available = footer.width.saturating_sub(left_inset);
     let (icon_width, icon_height) = mini_size();
     let icon_space = icon_width + MENU_GAP;
-    let width = if footer.height >= icon_height {
+    let bottom_inset = if footer.height >= icon_height + MENU_BOTTOM_INSET {
+        MENU_BOTTOM_INSET
+    } else {
+        0
+    };
+    let height = footer.height.saturating_sub(bottom_inset);
+    let width = if height >= icon_height {
         if available >= icon_space + INLINE_LABEL_WIDTH {
             icon_space + INLINE_LABEL_WIDTH
         } else {
@@ -73,7 +124,7 @@ pub(crate) fn brand_menu_rect(footer: Rect, attention: bool) -> Rect {
         15
     }
     .min(available);
-    Rect::new(footer.right() - width, footer.y, width, footer.height)
+    Rect::new(footer.x + left_inset, footer.y, width, height)
 }
 
 pub(super) fn render_mascot(frame: &mut Frame, area: Rect, p: &Palette, compact: bool) {
@@ -115,13 +166,9 @@ pub(super) fn render_menu(frame: &mut Frame, area: Rect, p: &Palette, attention:
 
     let (icon_width, icon_height) = mini_size();
     let icon_space = icon_width + MENU_GAP;
-    if area.height >= icon_height && area.width >= icon_space + MIN_LABEL_WIDTH {
-        render_mascot(
-            frame,
-            Rect::new(area.x, area.bottom() - icon_height, icon_width, icon_height),
-            p,
-            true,
-        );
+    if area.height >= icon_height && area.width >= icon_space + 4 {
+        // The bitmap is emitted after the text frame, outside all agent PTYs.
+        // Keep these cells empty; unsupported terminals still have the wordmark/menu.
         let inline = area.width >= icon_space + INLINE_LABEL_WIDTH;
         let label_height = if inline { 1 } else { 2 };
         let label = Rect::new(
@@ -133,6 +180,14 @@ pub(super) fn render_menu(frame: &mut Frame, area: Rect, p: &Palette, attention:
         let lines = if inline {
             wordmark.push(Span::styled(" · menu", Style::default().fg(p.overlay0)));
             vec![Line::from(wordmark)]
+        } else if area.width < icon_space + MIN_LABEL_WIDTH {
+            vec![
+                Line::styled(
+                    if attention { "●" } else { "" },
+                    Style::default().fg(p.accent),
+                ),
+                Line::styled("menu", Style::default().fg(p.overlay0)),
+            ]
         } else {
             vec![
                 Line::from(wordmark),
@@ -147,13 +202,13 @@ pub(super) fn render_menu(frame: &mut Frame, area: Rect, p: &Palette, attention:
         }
         menu.push(Span::styled("menu", Style::default().fg(p.overlay1)));
         frame.render_widget(
-            Paragraph::new(Line::from(menu)).alignment(Alignment::Right),
+            Paragraph::new(Line::from(menu)).alignment(Alignment::Left),
             area,
         );
     } else {
         wordmark.push(Span::styled(" · menu", Style::default().fg(p.overlay0)));
         frame.render_widget(
-            Paragraph::new(Line::from(wordmark)).alignment(Alignment::Right),
+            Paragraph::new(Line::from(wordmark)).alignment(Alignment::Left),
             area,
         );
     }
@@ -175,6 +230,33 @@ pub(super) fn render_wordmark(frame: &mut Frame, area: Rect, p: &Palette) {
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn compact_mark_has_balanced_insets_and_reserved_content_space() {
+        assert_eq!(mini_size(), (4, 2));
+        for width in [26, 34] {
+            let sidebar = Rect::new(3, 2, width, 30);
+            let footer = sidebar_brand_footer_rect(sidebar);
+            let menu = brand_menu_rect(footer, false);
+            assert_eq!(footer.height, 3, "reserve the mark and bottom inset");
+            assert_eq!(menu.x - sidebar.x, 2);
+            assert_eq!(sidebar.bottom() - menu.bottom(), 1);
+            assert_eq!(menu.height, 2);
+            let mut terminal = Terminal::new(TestBackend::new(width + 6, 34)).unwrap();
+            terminal
+                .draw(|frame| render_menu(frame, menu, &Palette::catppuccin(), false))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            for y in footer.y..footer.bottom() {
+                for x in sidebar.x..menu.x {
+                    assert_eq!(buffer[(x, y)].symbol(), " ");
+                }
+            }
+            for x in sidebar.x..sidebar.right() {
+                assert_eq!(buffer[(x, sidebar.bottom() - 1)].symbol(), " ");
+            }
+        }
+    }
 
     #[test]
     fn menu_wordmark_clears_art_and_aligns_with_footer_bottom() {
@@ -208,12 +290,11 @@ mod tests {
                         assert_eq!(buffer[(x, y)].symbol(), " ");
                     }
                 }
-                for (dy, line) in MINI.lines().enumerate() {
-                    for (dx, ch) in line.chars().enumerate() {
+                for dy in 0..icon_height {
+                    for dx in 0..icon_width {
                         assert_eq!(
-                            buffer[(area.x + dx as u16, area.bottom() - icon_height + dy as u16)]
-                                .symbol(),
-                            ch.to_string()
+                            buffer[(area.x + dx, area.bottom() - icon_height + dy)].symbol(),
+                            " "
                         );
                     }
                 }

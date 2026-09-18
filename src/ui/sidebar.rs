@@ -90,11 +90,20 @@ fn expanded_section_heights(content: Rect, split_ratio: f32) -> (u16, u16) {
         super::projects::sidebar_tab_height(content.width, content.height).saturating_sub(1);
     let (workspace, agents) =
         sidebar_section_heights(content.height.saturating_sub(extra_tabs), split_ratio);
-    (workspace + extra_tabs, agents)
+    let workspace = workspace + extra_tabs;
+    // Preserve at least one workspace row below the tabs, heading, and new button.
+    let minimum_workspace = extra_tabs + 1 + WORKSPACE_SECTION_HEADER_ROWS + 2;
+    if content.height >= minimum_workspace + AGENT_PANEL_HEADER_ROWS {
+        let workspace =
+            workspace.clamp(minimum_workspace, content.height - AGENT_PANEL_HEADER_ROWS);
+        (workspace, content.height - workspace)
+    } else {
+        (workspace, agents)
+    }
 }
 
 pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, Rect) {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    let content = super::brand::sidebar_content_rect(area);
     if content.width == 0 || content.height == 0 {
         return (Rect::default(), Rect::default());
     }
@@ -113,7 +122,7 @@ pub(crate) fn expanded_sidebar_sections(area: Rect, split_ratio: f32) -> (Rect, 
 }
 
 pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect {
-    let content = Rect::new(area.x, area.y, area.width.saturating_sub(1), area.height);
+    let content = super::brand::sidebar_content_rect(area);
     if content.width == 0 || content.height < 6 {
         return Rect::default();
     }
@@ -542,7 +551,7 @@ pub(crate) fn workspace_list_body_rect(area: Rect, has_scrollbar: bool) -> Rect 
     }
 
     let body_y = area.y.saturating_add(WORKSPACE_SECTION_HEADER_ROWS);
-    let footer_y = super::brand::brand_footer_rect(area).y;
+    let footer_y = super::brand::workspace_footer_rect(area).y;
     let body_height = footer_y.saturating_sub(body_y);
     let body_width = area.width.saturating_sub(u16::from(has_scrollbar));
     Rect::new(area.x, body_y, body_width, body_height)
@@ -956,7 +965,7 @@ pub(crate) fn workspace_drop_indicator_row(
     if area.height == 0 {
         return None;
     }
-    let list_bottom = super::brand::brand_footer_rect(area).y;
+    let list_bottom = super::brand::workspace_footer_rect(area).y;
 
     let first = cards.first()?;
     if insert_idx == first.ws_idx {
@@ -1238,7 +1247,7 @@ fn render_workspace_list(
         _ => None,
     };
 
-    let list_bottom = super::brand::brand_footer_rect(area).y;
+    let list_bottom = super::brand::workspace_footer_rect(area).y;
     if area.height > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
@@ -1793,13 +1802,15 @@ mod tests {
             crate::config::AgentSidebarToken::TerminalTitleStripped,
         ]];
 
-        let area = Rect::new(0, 0, 10, 12);
-        let mut renderer = Terminal::new(TestBackend::new(10, 12)).unwrap();
+        // Four navigation rows plus the fixed footer need enough height for an agent row.
+        let area = Rect::new(0, 0, 10, 14);
+        let mut renderer = Terminal::new(TestBackend::new(10, 14)).unwrap();
         renderer
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
         let body = agent_panel_body_rect(agent_area, false);
+        assert!(body.height > 0, "the title fixture must have a visible row");
         let rendered = row_text(renderer.backend().buffer(), body.y, 9);
 
         assert!(!rendered.contains('⠋'));
@@ -2323,7 +2334,7 @@ mod tests {
         let (ws_area, detail_area) = expanded_sidebar_sections(Rect::new(0, 0, 20, 5), 0.9);
 
         assert_eq!(ws_area, Rect::new(0, 2, 19, 1));
-        assert_eq!(detail_area, Rect::new(0, 3, 19, 2));
+        assert_eq!(detail_area, Rect::new(0, 3, 19, 1));
     }
 
     #[test]
@@ -2413,9 +2424,11 @@ mod tests {
         ];
         app.sidebar_spaces.row_gap = 1;
 
-        let (cards, headers) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 20));
+        // Both grouped rows must fit above the brand footer for this hit-area check.
+        let (cards, headers) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 32));
 
         assert!(headers.is_empty());
+        assert_eq!(cards.len(), 2);
         assert_eq!(cards[0].ws_idx, 0);
         assert!(!cards[0].indented);
         assert_eq!(cards[1].ws_idx, 1);
@@ -2435,7 +2448,10 @@ mod tests {
         app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
         app.sidebar_spaces.row_gap = 2;
 
-        let (spacious, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
+        // Show all four entries, including the gaps, above the fixed brand footer.
+        let area = Rect::new(0, 0, 30, 38);
+        let (spacious, _) = compute_workspace_list_areas(&app, area);
+        assert_eq!(spacious.len(), 4);
         assert_eq!(
             spacious[1].rect.y,
             spacious[0].rect.y + spacious[0].rect.height + 2
@@ -2453,7 +2469,8 @@ mod tests {
         assert_eq!(spacious_metrics.max_offset_from_bottom, 2);
 
         app.sidebar_spaces.row_gap = 0;
-        let (packed, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 30));
+        let (packed, _) = compute_workspace_list_areas(&app, area);
+        assert_eq!(packed.len(), 4);
         assert!(packed
             .windows(2)
             .all(|pair| pair[1].rect.y == pair[0].rect.y + pair[0].rect.height));
@@ -2537,7 +2554,8 @@ mod tests {
             workspace_with_worktree_space("one", Some("repo-key"), "/repo/herdr-one"),
             workspace_with_worktree_space("two", Some("repo-key"), "/repo/herdr-two"),
         ];
-        let area = Rect::new(0, 0, 30, 20);
+        // Keep this an all-entries-fit fixture with the reserved brand footer.
+        let area = Rect::new(0, 0, 30, 32);
         app.workspace_scroll = normalized_workspace_scroll(&app, area, 2);
 
         let (cards, headers) = compute_workspace_list_areas(&app, area);

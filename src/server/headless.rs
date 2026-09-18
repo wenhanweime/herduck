@@ -3380,7 +3380,7 @@ impl HeadlessServer {
         if client.deferred_render() != DeferredRender::None {
             retained_fallback!("render_pending");
         }
-        if self.app.state.kitty_graphics_enabled && !client.graphics_cache.is_empty() {
+        if self.app.state.kitty_graphics_enabled && client.graphics_cache.has_pane_graphics() {
             retained_fallback!("graphics_cache_active");
         }
         if client.graphics_surface_reset_pending {
@@ -8370,6 +8370,14 @@ next_tab = ""
         let _ = client_rx
             .recv_timeout(Duration::from_millis(100))
             .expect("initial frame");
+
+        assert!(!server.clients.get(&1).unwrap().graphics_cache.is_empty());
+        assert!(!server
+            .clients
+            .get(&1)
+            .unwrap()
+            .graphics_cache
+            .has_pane_graphics());
 
         let runtime = server
             .app

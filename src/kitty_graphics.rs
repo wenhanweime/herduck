@@ -17,6 +17,8 @@ use crate::ghostty::{
 use crate::layout::{PaneId, PaneInfo};
 use crate::terminal::TerminalRuntimeRegistry;
 
+mod brand;
+
 const KITTY_CHUNK_BYTES: usize = 3072;
 const HOST_IMAGE_ID_BASE: u32 = 10_000;
 const PANE_GRAPHICS_IMAGE_ID_BIT: u32 = 1 << 31;
@@ -127,6 +129,7 @@ struct ClippedPlacement {
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct HostGraphicsCache {
+    brand: brand::BrandGraphicsCache,
     images: HashMap<u32, ImageSignature>,
     placements: HashMap<(u32, u32), PlacementSignature>,
     /// Host image currently backing each (pane, source image id) pair.
@@ -195,7 +198,16 @@ pub(crate) fn encode_local_pane_graphics(
             },
             "paint_local_pane_graphics early return"
         );
-        return cache.clear_bytes();
+        if !cell_ok {
+            return cache.clear_bytes();
+        }
+        // Navigation and the launcher menu leave the sidebar brand visible.
+        // Keep the existing pane-image cleanup policy independent of the brand.
+        let mut bytes = cache.clear_pane_bytes();
+        cache
+            .brand
+            .encode(&mut bytes, crate::ui::sidebar_logo_rect(app));
+        return bytes;
     }
 
     let view_key = active_view_key(app);
@@ -215,6 +227,9 @@ pub(crate) fn encode_local_pane_graphics(
         &mut cache.placements,
         &mut cache.sources,
     );
+    cache
+        .brand
+        .encode(&mut bytes, crate::ui::sidebar_logo_rect(app));
     tracing::debug!(
         placements = placements.len(),
         bytes = bytes.len(),
@@ -464,8 +479,15 @@ pub(crate) fn clear_all_host_graphics() -> io::Result<()> {
 }
 
 impl HostGraphicsCache {
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.images.is_empty() && self.placements.is_empty()
+        self.images.is_empty() && self.placements.is_empty() && self.brand.is_empty()
+    }
+
+    /// Static sidebar art does not intersect pane cells, so PTY-only updates
+    /// can retain it without rebuilding the entire UI frame.
+    pub(crate) fn has_pane_graphics(&self) -> bool {
+        !self.images.is_empty() || !self.placements.is_empty()
     }
 
     #[cfg(test)]
@@ -483,6 +505,13 @@ impl HostGraphicsCache {
     }
 
     pub(crate) fn clear_bytes(&mut self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        self.brand.encode(&mut bytes, None);
+        bytes.extend(self.clear_pane_bytes());
+        bytes
+    }
+
+    fn clear_pane_bytes(&mut self) -> Vec<u8> {
         let mut bytes = Vec::new();
         for id in self.images.keys().copied().collect::<Vec<_>>() {
             encode_delete_image(&mut bytes, id);

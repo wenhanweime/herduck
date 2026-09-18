@@ -27,7 +27,10 @@ mod text;
 mod topic_cover;
 mod widgets;
 
-pub(crate) use self::brand::{brand_footer_rect, brand_menu_rect, MIN_FOOTER_ACTIONS_WIDTH};
+pub(crate) use self::brand::{
+    brand_menu_rect, sidebar_brand_footer_rect, sidebar_content_rect, sidebar_logo_rect,
+    workspace_footer_rect, MIN_FOOTER_ACTIONS_WIDTH,
+};
 use self::topic_cover::{render_topic_cover_editor, render_topic_detail};
 pub(crate) use self::topic_cover::{
     topic_cover_editor_geometry, topic_detail_geometry, topic_detail_rows,
