@@ -1,7 +1,7 @@
 mod tokens;
 
 use ratatui::{
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -11,8 +11,8 @@ use ratatui::{
 use self::tokens::{ResolvedToken, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
 use super::status::{agent_icon, state_dot, state_label, state_label_color};
-use super::text::{display_width, display_width_u16, truncate_end};
-use crate::app::state::{AgentPanelSort, Palette};
+use super::text::{display_width, truncate_end};
+use crate::app::state::Palette;
 use crate::app::{AppState, Mode};
 use crate::detect::AgentState;
 use crate::terminal::TerminalRuntimeRegistry;
@@ -35,7 +35,6 @@ pub(crate) struct AgentPanelEntry {
     pub state: AgentState,
     pub agent_inactive: bool,
     pub seen: bool,
-    pub last_agent_state_change_seq: Option<u64>,
     pub state_labels: std::collections::HashMap<String, String>,
     pub tokens: std::collections::HashMap<String, String>,
 }
@@ -131,28 +130,6 @@ pub(crate) fn sidebar_section_divider_rect(area: Rect, split_ratio: f32) -> Rect
     Rect::new(content.x, content.y + ws_h, content.width, 1)
 }
 
-fn agent_panel_sort_label(sort: AgentPanelSort) -> &'static str {
-    match sort {
-        AgentPanelSort::Spaces => "grouped",
-        AgentPanelSort::Priority => "priority",
-    }
-}
-
-pub(crate) fn agent_panel_toggle_rect(area: Rect, sort: AgentPanelSort) -> Rect {
-    if area.width == 0 || area.height < 2 {
-        return Rect::default();
-    }
-
-    let label = agent_panel_sort_label(sort);
-    let width = display_width_u16(label);
-    Rect::new(
-        area.x + area.width.saturating_sub(width),
-        area.y + 1,
-        width,
-        1,
-    )
-}
-
 pub(crate) fn agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
     agent_panel_entries_with_runtimes(app, None)
 }
@@ -177,8 +154,8 @@ fn agent_panel_entries_with_runtimes(
         }
     };
 
-    let mut entries: Vec<_> = app
-        .workspaces
+    // Preserve workspace/tab/pane order, including when legacy config requests priority.
+    app.workspaces
         .iter()
         .enumerate()
         .flat_map(|(ws_idx, ws)| {
@@ -210,24 +187,12 @@ fn agent_panel_entries_with_runtimes(
                         state: detail.state,
                         agent_inactive: detail.agent_inactive,
                         seen: detail.seen,
-                        last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         state_labels: detail.state_labels,
                         tokens: detail.tokens,
                     }
                 })
         })
-        .collect();
-
-    if matches!(app.agent_panel_sort, AgentPanelSort::Priority) {
-        entries.sort_by_key(|entry| {
-            (
-                std::cmp::Reverse(workspace_attention_priority(entry.state, entry.seen)),
-                std::cmp::Reverse(entry.last_agent_state_change_seq),
-            )
-        });
-    }
-
-    entries
+        .collect()
 }
 
 /// Finds the Catalog title belonging to the native session currently attached to a pane.
@@ -1444,18 +1409,6 @@ fn render_agent_detail(
         )])),
         Rect::new(area.x, area.y + 1, area.width, 1),
     );
-    let toggle_rect = agent_panel_toggle_rect(area, app.agent_panel_sort);
-    if toggle_rect != Rect::default() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                agent_panel_sort_label(app.agent_panel_sort),
-                Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
-            ))
-            .alignment(Alignment::Right),
-            toggle_rect,
-        );
-    }
-
     let details = agent_panel_entries_from(app, terminal_runtimes);
     let metrics = agent_panel_scroll_metrics(app, area);
     let scrollbar_rect = agent_panel_scrollbar_rect(app, area);
@@ -1999,7 +1952,7 @@ mod tests {
     }
 
     #[test]
-    fn priority_agent_panel_sort_uses_attention_then_space_order() {
+    fn legacy_priority_setting_keeps_workspace_order() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![
             Workspace::test_new("one"),
@@ -2038,7 +1991,7 @@ mod tests {
             .map(|entry| entry.primary_label)
             .collect();
 
-        assert_eq!(labels, ["four", "two", "one", "three"]);
+        assert_eq!(labels, ["one", "two", "three", "four"]);
     }
 
     #[test]
@@ -2187,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_sidebar_numbers_priority_agents_by_list_position() {
+    fn collapsed_sidebar_keeps_blocked_agents_at_their_fixed_position() {
         let first = Workspace::test_new("one");
         let first_pane = first.tabs[0].root_pane;
         let mut second = Workspace::test_new("two");
@@ -2212,7 +2165,7 @@ mod tests {
         set_state(&mut app, 1, urgent_pane, AgentState::Blocked);
 
         assert_eq!(app.workspaces[1].public_pane_number(urgent_pane), Some(2));
-        assert_eq!(agent_panel_entries(&app)[0].pane_id, urgent_pane);
+        assert_eq!(agent_panel_entries(&app)[2].pane_id, urgent_pane);
 
         let area = Rect::new(0, 0, 4, 16);
         let (_, _, detail_area) = collapsed_sidebar_sections(area);
@@ -2227,9 +2180,9 @@ mod tests {
         assert_eq!(buffer[(detail_area.x, detail_area.y)].symbol(), "1");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 1)].symbol(), "2");
         assert_eq!(buffer[(detail_area.x, detail_area.y + 2)].symbol(), "3");
-        assert_eq!(buffer[(detail_area.x + 2, detail_area.y)].symbol(), "◉");
+        assert_eq!(buffer[(detail_area.x + 2, detail_area.y + 2)].symbol(), "◉");
         assert_eq!(
-            buffer[(detail_area.x + 2, detail_area.y)].style().fg,
+            buffer[(detail_area.x + 2, detail_area.y + 2)].style().fg,
             Some(app.palette.red)
         );
     }

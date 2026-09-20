@@ -767,7 +767,7 @@
               ]
             },
             "agent_inactive": {
-              "description": "Idle timeout reached without terminating the running conversation.",
+              "description": "Idle timeout reached; a positively identified Agent job is being reclaimed.",
               "type": "boolean"
             },
             "agent_session": {
@@ -6114,7 +6114,7 @@
               ]
             },
             "agent_inactive": {
-              "description": "Idle timeout reached without terminating the running conversation.",
+              "description": "Idle timeout reached; a positively identified Agent job is being reclaimed.",
               "type": "boolean"
             },
             "agent_session": {
@@ -7486,7 +7486,7 @@
               ]
             },
             "agent_inactive": {
-              "description": "Idle timeout reached without terminating the running conversation.",
+              "description": "Idle timeout reached; a positively identified Agent job is being reclaimed.",
               "type": "boolean"
             },
             "agent_session": {

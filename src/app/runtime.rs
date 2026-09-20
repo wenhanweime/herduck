@@ -583,13 +583,65 @@ impl App {
         self.state
             .terminals
             .values()
-            // Once marked inactive, an expired deadline must not keep waking the loop.
-            .filter(|terminal| !terminal.agent_inactive)
-            .filter_map(|terminal| self.agent_inactivity_deadline(terminal))
+            .filter_map(|terminal| {
+                let deadline = self.agent_inactivity_deadline(terminal)?;
+                if let Some(retry) = self.idle_agent_stop_retries.get(&terminal.id) {
+                    Some(deadline.max(*retry))
+                } else {
+                    (!terminal.agent_inactive).then_some(deadline)
+                }
+            })
             .min()
     }
 
+    fn reclaim_idle_agent_processes(&mut self, now: Instant) {
+        let eligible: Vec<_> = self
+            .state
+            .terminals
+            .values()
+            .filter_map(|terminal| {
+                let deadline = self.agent_inactivity_deadline(terminal)?;
+                let agent = terminal.effective_known_agent()?;
+                self.terminal_runtimes.get(&terminal.id)?.child_pid()?;
+                (deadline <= now).then_some((terminal.id.clone(), agent, terminal.agent_inactive))
+            })
+            .collect();
+        self.idle_agent_stop_retries
+            .retain(|id, _| eligible.iter().any(|(eligible_id, _, _)| id == eligible_id));
+        for (id, agent, inactive) in eligible {
+            match self.idle_agent_stop_retries.get(&id) {
+                Some(retry) if *retry > now => continue,
+                None if inactive => continue,
+                _ => {}
+            }
+            let target = self
+                .agent_idle_timeout
+                .and_then(|timeout| now.checked_sub(timeout))
+                .and_then(|cutoff| {
+                    self.terminal_runtimes
+                        .get(&id)?
+                        .idle_agent_stop(agent, cutoff)
+                });
+            if let Some(target) = target {
+                if target.includes_pty_child {
+                    if let Some(terminal) = self.state.terminals.get_mut(&id) {
+                        terminal.respawn_shell_on_exit = true;
+                    }
+                }
+                tracing::info!(terminal = %id, "stopping idle agent processes");
+                target.start();
+                self.idle_agent_stop_retries.remove(&id);
+            } else {
+                // A disappearing wrapper or temporarily unavailable process metadata must not
+                // disable reclamation forever, nor keep the loop spinning on an expired deadline.
+                self.idle_agent_stop_retries
+                    .insert(id, now + Duration::from_secs(5));
+            }
+        }
+    }
+
     pub(crate) fn refresh_agent_inactivity(&mut self, now: Instant) -> bool {
+        self.reclaim_idle_agent_processes(now);
         let changes: Vec<_> = self
             .state
             .terminals
@@ -614,7 +666,8 @@ impl App {
         }
 
         // Inactivity belongs to the terminal, independent of any particular pane attachment.
-        // Publish every attached pane while retaining its runtime, session ref, and Catalog lease.
+        // Publish every attachment. Normal process-exit handling releases the Catalog lease;
+        // idle termination itself never removes a pane, Work, or saved conversation.
         let mut pane_updates = Vec::new();
         for (ws_idx, workspace) in self.state.workspaces.iter().enumerate() {
             for tab in &workspace.tabs {
@@ -867,6 +920,221 @@ mod tests {
             crate::api::EventHub::default(),
         );
         assert_eq!(app.agent_idle_timeout, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_timeout_terminates_codex_and_grok_but_preserves_shell_and_other_jobs() {
+        for (agent, executable, ignore_term) in [
+            (crate::detect::Agent::Codex, "codex", false),
+            (
+                crate::detect::Agent::Grok,
+                "grok-1.0.30-macos-aarch64",
+                true,
+            ),
+        ] {
+            let (mut app, pane_id) =
+                idle_agent_test_app(Some(agent), crate::detect::AgentState::Idle);
+            let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+            let runtime = crate::terminal::TerminalRuntime::spawn_argv_command(
+                pane_id,
+                24,
+                80,
+                std::env::temp_dir(),
+                &["zsh".into(), "-f".into(), "-i".into()],
+                &crate::pane::PaneLaunchEnv::default(),
+                crate::pane::AgentDetection::Disabled,
+                1024 * 1024,
+                crate::terminal_theme::TerminalTheme::default(),
+                app.event_tx.clone(),
+                app.render_notify.clone(),
+                app.render_dirty.clone(),
+            )
+            .unwrap();
+            let shell_pid = runtime.child_pid().unwrap();
+            app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+            app.terminal_runtimes
+                .get(&terminal_id)
+                .unwrap()
+                .try_send_bytes(bytes::Bytes::from_static(b"sleep 300 &\n"))
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let other_jobs = loop {
+                let pids = crate::platform::session_processes(shell_pid);
+                if pids.len() >= 2 {
+                    break pids;
+                }
+                assert!(Instant::now() < deadline, "background job did not start");
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            };
+            let trap = if ignore_term { "trap \"\" TERM; " } else { "" };
+            app.terminal_runtimes
+                .get(&terminal_id)
+                .unwrap()
+                .try_send_bytes(bytes::Bytes::from(format!(
+                    "zsh -fc '{trap}exec -a {executable} sleep 300'\n"
+                )))
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let agent_pids = loop {
+                if let Some(job) = crate::platform::foreground_job(shell_pid) {
+                    if crate::detect::identify_agent_in_job(&job)
+                        .is_some_and(|(found, _)| found == agent)
+                    {
+                        break job
+                            .processes
+                            .iter()
+                            .map(|process| process.pid)
+                            .collect::<Vec<_>>();
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "agent job did not start: {executable}"
+                );
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            };
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let now = Instant::now();
+            let runtime = app.terminal_runtimes.get(&terminal_id).unwrap();
+            // A recent input/output prevents termination even with an expired older observation.
+            runtime.test_set_last_activity_at(now);
+            assert!(!app.refresh_agent_inactivity(now));
+            app.terminal_runtimes
+                .get(&terminal_id)
+                .unwrap()
+                .test_set_last_activity_at(now - Duration::from_secs(7200));
+            app.agent_idle_timeout = None;
+            assert!(!app.refresh_agent_inactivity(now));
+            app.agent_idle_timeout = Some(Duration::from_secs(3600));
+            for state in [
+                crate::detect::AgentState::Working,
+                crate::detect::AgentState::Blocked,
+            ] {
+                app.state.terminals.get_mut(&terminal_id).unwrap().state = state;
+                assert!(!app.refresh_agent_inactivity(now));
+                assert!(agent_pids
+                    .iter()
+                    .all(|pid| crate::platform::process_exists(*pid)));
+            }
+            app.state.terminals.get_mut(&terminal_id).unwrap().state =
+                crate::detect::AgentState::Idle;
+            // A transient identity mismatch gets a bounded retry, not a busy loop or
+            // permanent exemption from cleanup once the inactive marker has been set.
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .detected_agent = Some(crate::detect::Agent::Claude);
+            assert!(app.refresh_agent_inactivity(now));
+            assert_eq!(
+                app.next_agent_inactivity_deadline(),
+                Some(now + Duration::from_secs(5))
+            );
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .detected_agent = Some(agent);
+            assert!(!app.refresh_agent_inactivity(now + Duration::from_secs(4)));
+            assert!(agent_pids
+                .iter()
+                .all(|pid| crate::platform::process_exists(*pid)));
+            app.refresh_agent_inactivity(now + Duration::from_secs(5));
+            assert!(app.next_agent_inactivity_deadline().is_none());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while agent_pids
+                .iter()
+                .any(|pid| crate::platform::process_exists(*pid))
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "idle agent survived termination: {executable}"
+                );
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            assert!(
+                other_jobs
+                    .iter()
+                    .all(|pid| crate::platform::process_exists(*pid)),
+                "shell or unrelated background job was terminated"
+            );
+            assert!(app.state.terminals.contains_key(&terminal_id));
+            assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+            app.terminal_runtimes
+                .remove(&terminal_id)
+                .unwrap()
+                .shutdown();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_timeout_replaces_direct_agent_with_shell_without_switching_focus() {
+        let agent = crate::detect::Agent::Codex;
+        let (mut app, pane_id) = idle_agent_test_app(Some(agent), crate::detect::AgentState::Idle);
+        let terminal_id = app.state.terminal_id_for_pane(0, pane_id).unwrap();
+        let runtime = crate::terminal::TerminalRuntime::spawn_argv_command(
+            pane_id,
+            24,
+            80,
+            std::env::temp_dir(),
+            &["zsh".into(), "-fc".into(), "exec -a codex sleep 300".into()],
+            &crate::pane::PaneLaunchEnv::default(),
+            crate::pane::AgentDetection::Disabled,
+            1024 * 1024,
+            crate::terminal_theme::TerminalTheme::default(),
+            app.event_tx.clone(),
+            app.render_notify.clone(),
+            app.render_dirty.clone(),
+        )
+        .unwrap();
+        let agent_pid = runtime.child_pid().unwrap();
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !crate::platform::foreground_job(agent_pid).is_some_and(|job| {
+            crate::detect::identify_agent_in_job(&job).is_some_and(|(found, _)| found == agent)
+        }) {
+            assert!(Instant::now() < deadline, "direct agent did not start");
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        app.state.workspaces.push(Workspace::test_new("foreground"));
+        app.state.ensure_test_terminals();
+        app.state.active = Some(1);
+        app.state.selected = 1;
+        let now = Instant::now();
+        app.terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_set_last_activity_at(now - Duration::from_secs(7200));
+        assert!(app.refresh_agent_inactivity(now));
+        assert!(app.state.terminals[&terminal_id].respawn_shell_on_exit);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            app.drain_all_internal_events();
+            if app
+                .terminal_runtimes
+                .get(&terminal_id)
+                .and_then(|runtime| runtime.child_pid())
+                .is_some_and(|pid| pid != agent_pid)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "direct agent was not replaced with a shell"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(!crate::platform::process_exists(agent_pid));
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.selected, 1);
+        app.state.assert_invariants_for_test();
+        app.terminal_runtimes
+            .remove(&terminal_id)
+            .unwrap()
+            .shutdown();
     }
 
     #[tokio::test]

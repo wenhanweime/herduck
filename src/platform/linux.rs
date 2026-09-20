@@ -1,3 +1,10 @@
+/// Kernel start ticks distinguish process instances without wall-clock rounding.
+pub(crate) fn process_instance_id(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat.get(stat.rfind(')')? + 1..)?;
+    fields.split_whitespace().nth(19).map(str::to_owned)
+}
+
 /// Process birth marker in the format used by Claude's PID registry.
 pub(crate) fn process_start_marker(pid: u32) -> Option<String> {
     let output = std::process::Command::new("ps")

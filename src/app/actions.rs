@@ -3852,7 +3852,7 @@ mod tests {
     }
 
     #[test]
-    fn next_agent_cycles_priority_sorted_agent_panel_entries() {
+    fn next_agent_uses_fixed_order_with_legacy_priority_setting() {
         let mut first = Workspace::test_new("one");
         let first_root = first.tabs[0].root_pane;
         let first_second = first.test_split(Direction::Horizontal);
@@ -3873,13 +3873,13 @@ mod tests {
 
         state.next_agent();
 
-        assert_eq!(state.active, Some(1));
-        assert_eq!(state.workspaces[1].focused_pane_id(), Some(second_root));
+        assert_eq!(state.active, Some(0));
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(first_second));
         state.assert_invariants_for_test();
     }
 
     #[test]
-    fn priority_sort_keeps_recently_changed_idle_agent_above_older_idle_agent() {
+    fn agent_state_changes_keep_fixed_sidebar_positions() {
         let mut workspace = Workspace::test_new("one");
         let first = workspace.tabs[0].root_pane;
         let second = workspace.test_split(Direction::Horizontal);
@@ -3894,12 +3894,18 @@ mod tests {
         state.agent_panel_sort = crate::app::state::AgentPanelSort::Priority;
 
         transition_agent_state(&mut state, first, AgentState::Idle);
-        transition_agent_state(&mut state, second, AgentState::Working);
-        assert_eq!(crate::ui::agent_panel_entries(&state)[0].pane_id, second);
-
-        transition_agent_state(&mut state, second, AgentState::Idle);
-
-        assert_eq!(crate::ui::agent_panel_entries(&state)[0].pane_id, second);
+        for status in [AgentState::Working, AgentState::Blocked, AgentState::Idle] {
+            transition_agent_state(&mut state, second, status);
+            let pane_ids: Vec<_> = crate::ui::agent_panel_entries(&state)
+                .into_iter()
+                .map(|entry| entry.pane_id)
+                .collect();
+            assert_eq!(pane_ids, [first, second]);
+        }
+        state.next_agent();
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(second));
+        state.previous_agent();
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(first));
         state.assert_invariants_for_test();
     }
 

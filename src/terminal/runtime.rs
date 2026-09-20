@@ -15,6 +15,20 @@ use crate::layout::PaneId;
 pub struct TerminalRuntime(crate::pane::PaneRuntime);
 
 impl TerminalRuntime {
+    pub(crate) fn idle_agent_stop(
+        &self,
+        agent: crate::detect::Agent,
+        activity_cutoff: std::time::Instant,
+    ) -> Option<super::idle::IdleAgentStop> {
+        let activity = self.last_activity_at();
+        if activity > activity_cutoff {
+            return None;
+        }
+        let target = super::idle::IdleAgentStop::capture(self.child_pid()?, agent)?;
+        // Reading OS process metadata takes time; cancel if input/output arrived meanwhile.
+        (self.last_activity_at() == activity).then_some(target)
+    }
+
     pub fn shutdown(self) {
         self.0.shutdown();
     }

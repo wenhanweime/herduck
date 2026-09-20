@@ -1,3 +1,8 @@
+// Idle reclamation needs a verified process identity; unsupported hosts fail closed.
+pub(crate) fn process_instance_id(_pid: u32) -> Option<String> {
+    None
+}
+
 // Registry start markers have no verified contract on this platform yet.
 pub(crate) fn process_start_marker(_pid: u32) -> Option<String> {
     None

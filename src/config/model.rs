@@ -250,9 +250,9 @@ pub struct SessionConfig {
     /// Resume supported AI-agent panes into their native conversation sessions
     /// when restoring a Herdr session. Default: true.
     pub resume_agents_on_restore: bool,
-    /// Mark an idle Agent inactive after this many seconds without terminal
-    /// input, output, or state changes. Its process and conversation stay alive.
-    /// Set to 0 to disable inactivity marking. Default: 3600.
+    /// Stop a positively identified idle Agent after this many seconds without terminal
+    /// input, output, or state changes. Saved conversation history is retained.
+    /// Set to 0 to disable idle process reclamation. Default: 3600.
     pub agent_idle_timeout_secs: u64,
 }
 
@@ -1101,7 +1101,7 @@ pub struct UiConfig {
     pub show_agent_labels_on_pane_borders: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
-    /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
+    /// Legacy setting, retained for config compatibility. Agents now always keep fixed order.
     pub agent_panel_sort: AgentPanelSortConfig,
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,

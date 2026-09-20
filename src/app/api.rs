@@ -633,7 +633,7 @@ impl App {
         if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
             terminal.clear_agent_runtime_identity_after_respawn();
         }
-        self.state.focus_pane_in_workspace(ws_idx, pane_id);
+        // Replacing a background Agent with a shell must not steal the user's focus.
         self.schedule_session_save();
         true
     }
@@ -2292,7 +2292,12 @@ mod tests {
         let workspace = crate::workspace::Workspace::test_new("restored");
         let pane_id = workspace.tabs[0].root_pane;
         let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
-        app.state.workspaces = vec![workspace];
+        app.state.workspaces = vec![
+            workspace,
+            crate::workspace::Workspace::test_new("foreground"),
+        ];
+        app.state.active = Some(1);
+        app.state.selected = 1;
         app.state.ensure_test_terminals();
         let terminal = app
             .state
@@ -2322,6 +2327,12 @@ mod tests {
         assert!(!terminal.respawn_shell_on_exit);
         assert!(terminal.persisted_agent_session.is_none());
         assert!(terminal.agent_name.is_none());
+        assert_eq!(
+            app.state.active,
+            Some(1),
+            "respawning a shell must not steal focus"
+        );
+        assert_eq!(app.state.selected, 1);
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();

@@ -95,7 +95,7 @@ pub struct TerminalState {
     metadata_report_sequences: HashMap<String, u64>,
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
-    /// Idle timeout is a runtime status only; the process and conversation stay alive.
+    /// Idle timeout reached; a positively identified Agent job is being reclaimed.
     pub agent_inactive: bool,
     pub last_agent_state_change_seq: Option<u64>,
     pub revision: u64,

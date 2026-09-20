@@ -69,20 +69,34 @@ resuming a history entry uses its original Agent. Detecting an installed Agent d
 the default. The value is a single executable, without shell arguments. Its login and model
 configuration remain with that Agent. Summary and naming models are configured separately below.
 
+## Agent sidebar order
+
+Agents keep workspace, tab, and pane order. Working, blocked, completed, and inactive status
+changes do not move entries. Mouse selection and next/previous Agent navigation use the same
+fixed order in both expanded and collapsed sidebars. The old `ui.agent_panel_sort` setting is
+accepted for configuration compatibility but no longer changes ordering.
+
 ## Inactive Agents
 
-Herduck marks an idle Agent **inactive** after a period without terminal input, output, or state
-changes. The default is one hour:
+Herduck marks an idle Agent **inactive** and stops its positively identified foreground job after
+a period without terminal input, output, or state changes. The default is one hour:
 
 ```toml
 [session]
-agent_idle_timeout_secs = 3600 # 0 disables inactivity marking
+agent_idle_timeout_secs = 3600 # 0 disables idle process reclamation
 ```
 
-The Agent remains visible with a muted status. Working Agents and Agents blocked on a response or
-approval are excluded; new activity clears the inactive marker. This setting does not terminate the process,
-close the terminal, or discard its conversation. Automatic idle-process reclamation is not
-implemented in the current alpha.
+Working Agents and Agents blocked on a response or approval are excluded. Input, output, or state
+changes reset the timeout. This includes Codex, its Node launcher, and native Grok builds with
+versioned executable names. Herduck checks the current foreground job before sending TERM; only
+the same process instances can receive KILL after a two-second grace period. An ambiguous job is
+left inactive without being killed. The outer shell and unrelated background shell jobs are retained.
+An Agent launched directly as the terminal process is replaced with a shell without changing focus.
+
+Saved native conversation history and Work plans are not deleted. After reclamation, continue the
+conversation from Sessions or Work using its original Agent; typing in the remaining shell does
+not automatically resume it. The inactive marker is transient while normal exit detection updates
+the terminal. Unsaved input in the Agent is not a saved conversation and is not preserved.
 
 Saved history can be browsed without launching an Agent. Continuing a supported conversation
 reuses a matching running session or starts its original Agent. If you manually end an Agent,

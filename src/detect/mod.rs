@@ -147,8 +147,27 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "maki" => Some(Agent::Maki),
+        _ if is_versioned_grok_binary(name) => Some(Agent::Grok),
         _ => None,
     }
+}
+
+fn is_versioned_grok_binary(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("grok-") else {
+        return false;
+    };
+    let Some((version, platform)) = rest.split_once('-') else {
+        return false;
+    };
+    let parts: Vec<_> = version.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+        && matches!(
+            platform,
+            "macos-aarch64" | "macos-x86_64" | "linux-aarch64" | "linux-x86_64"
+        )
 }
 
 /// Identify which agent is running from the process name.

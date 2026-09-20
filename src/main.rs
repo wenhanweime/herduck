@@ -364,9 +364,8 @@ const DEFAULT_CONFIG: &str = r##"# HERDUCK configuration
 # New tabs can still be created with the configured keybinding.
 # hide_tab_bar_when_single_tab = false
 
-# Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
-# "workspaces" is accepted as an alias for "spaces".
-# agent_panel_sort = "spaces"
+# Agents keep workspace/tab/pane order; activity never moves rows to the top.
+# The legacy agent_panel_sort setting is accepted but no longer changes ordering.
 
 # Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent, session_title,
 # terminal_title, and terminal_title_stripped.
@@ -428,9 +427,9 @@ const DEFAULT_CONFIG: &str = r##"# HERDUCK configuration
 # a HERDUCK server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
 
-# Mark an idle Agent inactive after this many seconds without input, output, or
-# state changes. Its process stays alive; new activity restores its active status.
-# Set to 0 to disable inactivity marking. Sessions are never closed by this timeout.
+# Stop an idle Agent after this many seconds without input, output, or state changes.
+# Working/blocked Agents are excluded. Saved conversation history is retained.
+# Set to 0 to disable idle process reclamation.
 # agent_idle_timeout_secs = 3600
 
 [remote]

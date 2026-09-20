@@ -1,3 +1,12 @@
+/// High-resolution process identity for delayed signals (distinct from registry timestamps).
+pub(crate) fn process_instance_id(pid: u32) -> Option<String> {
+    let info = process_bsdinfo(pid)?;
+    Some(format!(
+        "{}:{}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
+}
+
 /// Process birth marker in the format used by Claude's PID registry.
 pub(crate) fn process_start_marker(pid: u32) -> Option<String> {
     let output = std::process::Command::new("ps")

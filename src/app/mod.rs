@@ -138,6 +138,7 @@ pub struct App {
     pub(crate) next_auto_update_check: Option<Instant>,
     pub(crate) next_agent_manifest_update_check: Option<Instant>,
     pub(crate) agent_idle_timeout: Option<Duration>,
+    pub(crate) idle_agent_stop_retries: HashMap<crate::terminal::TerminalId, Instant>,
     pub(crate) update_version_check_enabled: bool,
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
@@ -800,6 +801,7 @@ impl App {
             next_agent_manifest_update_check: manifest_check_enabled
                 .then_some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL),
             agent_idle_timeout: agent_idle_timeout(config.session.agent_idle_timeout_secs),
+            idle_agent_stop_retries: HashMap::new(),
             update_version_check_enabled: config.update.version_check,
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
