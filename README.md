@@ -7,6 +7,10 @@
 <p align="center"><strong>Agents execute. Herduck keeps the Work continuous.</strong></p>
 
 <p align="center">
+  <a href="https://linux.do" alt="LINUX DO"><img src="https://shorturl.at/ggSqS" /></a>
+</p>
+
+<p align="center">
   <a href="#install">Install</a> ·
   <a href="#one-work-four-views">Four views</a> ·
   <a href="#work-continue-the-work-not-just-the-conversation">Work</a> ·

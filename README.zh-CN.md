@@ -7,6 +7,10 @@
 <p align="center"><strong>Agent 负责执行，Herduck 维护 Work 的连续性。</strong></p>
 
 <p align="center">
+  <a href="https://linux.do" alt="LINUX DO"><img src="https://shorturl.at/ggSqS" /></a>
+</p>
+
+<p align="center">
   <a href="#安装">安装</a> ·
   <a href="#一个-work四个视图">四个视图</a> ·
   <a href="#work继续的是工作不只是对话">Work</a> ·
