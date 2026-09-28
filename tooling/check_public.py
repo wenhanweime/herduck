@@ -30,6 +30,11 @@ RULES = (
     ("machine-provider-alias", re.compile(r"\bNewAPIConn\b", re.I)),
     ("personal-identifier", re.compile(r"\bwenhanwei(?!me/herduck\b)[\w-]*\b", re.I)),
 )
+# The published contact address is a deliberate exception to the personal-identifier rule. It is
+# how sponsorship, business cooperation, and private vulnerability reports reach the maintainer, so
+# it has to appear in public files. Only this exact address is exempt; every other use of the bare
+# identifier still fails.
+PUBLISHED_CONTACT = re.compile(r"wenhanwei\.me@gmail\.com", re.I)
 
 
 def inspect_text(path, text):
@@ -41,8 +46,10 @@ def inspect_text(path, text):
             violations.append((path, number, "personal-home-path"))
         if any(match[1].lower() not in EXAMPLE_USERS for match in CLAUDE_PROJECT_PATH.finditer(decoded)):
             violations.append((path, number, "claude-project-home-path"))
+        # Blank the deliberately published contact before rule matching.
+        reported = PUBLISHED_CONTACT.sub("published-contact", decoded)
         for rule, pattern in RULES:
-            if pattern.search(decoded):
+            if pattern.search(reported):
                 violations.append((path, number, rule))
     return violations
 

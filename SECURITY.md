@@ -8,9 +8,9 @@ source; automatic update checks and self-update are disabled by default.
 
 Do not publish credentials, exploit details, private session logs, or conversation contents in
 an issue or discussion. Use this repository's **Security → Report a vulnerability** action if
-private vulnerability reporting is enabled. If the action is unavailable, ask the repository
-owner for a private reporting channel without including vulnerability details. A verified private
-channel must be established before public release.
+private vulnerability reporting is enabled. If the action is unavailable, email
+**wenhanwei.me@gmail.com** asking for a private channel; do not include vulnerability details in
+that first message. A verified private channel must be established before public release.
 
 Include the affected commit/version and platform, a minimal reproduction using synthetic data,
 the impact, and any safe workaround. Do not test against another person's sessions or systems.

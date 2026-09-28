@@ -1,10 +1,13 @@
-Herdr is dual-licensed:
+Herduck is distributed under the GNU Affero General Public License v3.0 or later
+(AGPL-3.0-or-later). See the full text below.
 
-1. Open source: GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later).
-   See the full text below.
+Herduck is an independent project derived from Herdr v0.7.4. Upstream copyright and
+license notices are preserved in the source files. The dual-licensing offer in the
+upstream Herdr LICENSE belongs to Herdr and its original rights holder; it is not an
+offer made by Herduck, and Herduck does not sell a commercial license for this work.
+See docs/UPSTREAM.md for provenance.
 
-2. Commercial: commercial licenses are available for organizations that cannot comply
-   with AGPL. Contact hey@herdr.dev for details.
+Sponsorship and business cooperation: wenhanwei.me@gmail.com
 
 --------------------------------------------------------------------------------
 

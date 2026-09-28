@@ -46,6 +46,21 @@ class PublicPolicyTests(unittest.TestCase):
         ):
             self.assertEqual(inspect_text("docs/sample.md", value), [])
 
+    def test_allows_only_the_deliberately_published_contact_address(self):
+        for value in (
+            "Report privately to wenhanwei.me@gmail.com",
+            "Sponsorship and business cooperation: WENHANWEI.ME@GMAIL.COM",
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(inspect_text("SECURITY.md", value), [])
+        # The exemption is the exact address, not the identifier it is built from.
+        for value in ("wenhanwei-private", "github.com/wenhanweime", "wenhanwei.me@gmail.co"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    inspect_text("SECURITY.md", value),
+                    [("SECURITY.md", 1, "personal-identifier")],
+                )
+
     def test_private_defaults_report_locations_without_echoing_contents(self):
         text = "\n".join((
             "paseo-multica-agent-private", "ork-direct-accept.private",

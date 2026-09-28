@@ -272,4 +272,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for review and [SECURITY.md](SECURITY.md)
 
 Herduck is an independent project derived from **Herdr v0.7.4**, distributed under
 **AGPL-3.0-or-later**. It installs its own executable and needs no separate Herdr installation.
-Original notices are preserved. See [LICENSE](LICENSE) and [upstream provenance](docs/UPSTREAM.md).
+Original notices are preserved. Herduck does not sell a commercial license. See [LICENSE](LICENSE)
+and [upstream provenance](docs/UPSTREAM.md); sponsorship and business cooperation are described in
+[SPONSORS.md](SPONSORS.md).
+
+Sponsorship, business cooperation, and private security reports: **wenhanwei.me@gmail.com**

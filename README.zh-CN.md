@@ -237,4 +237,7 @@ just check
 ## 许可与来源
 
 Herduck 是基于 **Herdr v0.7.4** 的独立项目，采用 **AGPL-3.0-or-later**，保留上游版权和许可声明。
-安装后直接运行 `herduck`，无需额外安装 Herdr。参见 [LICENSE](LICENSE) 和[上游来源](docs/UPSTREAM.md)。
+安装后直接运行 `herduck`，无需额外安装 Herdr。Herduck 不销售商业授权。参见 [LICENSE](LICENSE)
+和[上游来源](docs/UPSTREAM.md)；打赏与商业合作见 [SPONSORS.md](SPONSORS.md)。
+
+打赏、商业合作、安全问题私密上报：**wenhanwei.me@gmail.com**
