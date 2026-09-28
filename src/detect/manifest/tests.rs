@@ -579,6 +579,36 @@ fn claude_osc_title_braille_prefix_is_working() {
 }
 
 #[test]
+fn claude_osc_title_geometric_spinner_is_working() {
+    // Live Claude Code 2026-09-21: OSC title uses ◑ (U+25D1), not braille.
+    let result = osc_explain(Agent::Claude, "", "◑ Claude Code", "");
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_working")
+    );
+    assert!(result.visible_working);
+}
+
+#[test]
+fn claude_esc_to_interrupt_outranks_empty_prompt_box() {
+    let screen = "\
+· Warping… (19m 17s · ↓ 10.3k tokens)
+────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for agents
+";
+    let result = osc_explain(Agent::Claude, screen, "◑ Claude Code", "");
+    assert_eq!(result.state, AgentState::Working);
+    assert!(result.visible_working);
+    assert_ne!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("live_prompt_box")
+    );
+}
+
+#[test]
 fn claude_osc_title_static_prefix_is_idle() {
     // "✳" is U+2733, static prefix when Claude is not working
     let result = osc_explain(Agent::Claude, "", "✳ Claude Code", "");

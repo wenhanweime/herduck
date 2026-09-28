@@ -488,7 +488,12 @@ fn restore_tab(
         let saved_label = saved_pane.and_then(|p| p.label.clone());
         let saved_agent_name = saved_pane.and_then(|p| p.agent_name.clone());
         let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
-        let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
+        let saved_dormant_agent_session = saved_pane.and_then(|p| p.dormant_agent_session.as_ref());
+        // Dormant rows must never enter the automatic native-resume queue. They retain the
+        // original session reference and are activated only by an explicit user action.
+        let saved_agent_session = saved_pane
+            .and_then(|p| p.agent_session.as_ref())
+            .filter(|_| saved_dormant_agent_session.is_none());
         let saved_history =
             old_id.and_then(|old_id| history.and_then(|history| history.panes.get(old_id)));
         let startup = {
@@ -549,6 +554,9 @@ fn restore_tab(
                 startup.duplicate_agent_session,
             ) {
                 terminal.set_persisted_agent_session(session);
+            }
+            if let Some(session) = restored_dormant_agent_session(saved_dormant_agent_session) {
+                terminal.mark_agent_dormant(session);
             }
             panes.insert(*id, PaneState::new(terminal_id));
             terminals.push(terminal);
@@ -642,6 +650,9 @@ fn restore_tab(
                     startup.duplicate_agent_session,
                 ) {
                     terminal.set_persisted_agent_session(session);
+                }
+                if let Some(session) = restored_dormant_agent_session(saved_dormant_agent_session) {
+                    terminal.mark_agent_dormant(session);
                 }
                 panes.insert(*id, PaneState::new(terminal_id.clone()));
                 terminal_runtimes.insert(terminal_id, runtime);
@@ -793,6 +804,12 @@ fn restored_terminal_agent_session(
     if duplicate_agent_session {
         return None;
     }
+    session.and_then(persisted_agent_session_from_snapshot)
+}
+
+fn restored_dormant_agent_session(
+    session: Option<&PaneAgentSessionSnapshot>,
+) -> Option<crate::agent_resume::PersistedAgentSession> {
     session.and_then(persisted_agent_session_from_snapshot)
 }
 
@@ -1136,6 +1153,28 @@ mod tests {
     }
 
     #[test]
+    fn restore_rehydrates_dormant_session_without_an_auto_resume_plan() {
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "codex-dormant-session".into(),
+        };
+        let dormant = restored_dormant_agent_session(Some(&session))
+            .expect("valid dormant session should survive restore");
+        assert_eq!(dormant.agent, "codex");
+        assert_eq!(dormant.session_ref.value, "codex-dormant-session");
+        let mut resumed = HashSet::new();
+        let mut agent_restore = AgentRestoreState {
+            enabled: true,
+            resumed_sessions: &mut resumed,
+        };
+        let startup = pane_restore_startup(None, None, &mut agent_restore);
+        assert!(startup.restore_plan.is_none());
+        assert!(resumed.is_empty());
+    }
+
+    #[test]
     fn restore_does_not_rehydrate_duplicate_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
             source: "herdr:pi".into(),
@@ -1179,6 +1218,7 @@ mod tests {
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "opencode-session".into(),
                             }),
+                            dormant_agent_session: None,
                             launch_argv: None,
                         },
                     )]),
@@ -1259,6 +1299,7 @@ mod tests {
                                 label: None,
                                 agent_name: None,
                                 agent_session: None,
+                                dormant_agent_session: None,
                                 launch_argv: None,
                             },
                         ),
@@ -1269,6 +1310,7 @@ mod tests {
                                 label: None,
                                 agent_name: None,
                                 agent_session: None,
+                                dormant_agent_session: None,
                                 launch_argv: None,
                             },
                         ),
@@ -1323,6 +1365,7 @@ mod tests {
                     label: None,
                     agent_name: None,
                     agent_session: None,
+                    dormant_agent_session: None,
                     launch_argv: None,
                 },
             )
@@ -1337,6 +1380,7 @@ mod tests {
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "codex-session".into(),
             }),
+            dormant_agent_session: None,
             launch_argv: None,
         };
         let snapshot = SessionSnapshot {
@@ -1490,6 +1534,7 @@ mod tests {
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "codex-session".into(),
                             }),
+                            dormant_agent_session: None,
                             launch_argv: None,
                         },
                     )]),
@@ -1653,6 +1698,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 agent_session: None,
+                dormant_agent_session: None,
                 launch_argv: None,
             },
         );

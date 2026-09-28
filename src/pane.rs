@@ -971,6 +971,7 @@ pub struct PaneRuntime {
     io: PaneRuntimeIo,
     current_size: Cell<(u16, u16, u32, u32)>,
     last_activity_at: Arc<Mutex<std::time::Instant>>,
+    output_counts_as_activity: Arc<AtomicBool>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
     child_wait_completed: Option<Arc<AtomicBool>>,
@@ -998,6 +999,16 @@ fn mark_runtime_activity(activity: &Mutex<std::time::Instant>, observed_at: std:
     };
     if observed_at > *activity {
         *activity = observed_at;
+    }
+}
+
+fn mark_output_activity(
+    activity: &Mutex<std::time::Instant>,
+    output_counts_as_activity: &AtomicBool,
+    bytes: &[u8],
+) {
+    if !bytes.is_empty() && output_counts_as_activity.load(Ordering::Acquire) {
+        mark_runtime_activity(activity, std::time::Instant::now());
     }
 }
 
@@ -1803,6 +1814,7 @@ impl PaneRuntime {
         let kitty_keyboard_flags = Arc::new(AtomicU16::new(keyboard_protocol_flags));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
         let last_activity_at = Arc::new(Mutex::new(std::time::Instant::now()));
+        let output_counts_as_activity = Arc::new(AtomicBool::new(true));
 
         let io = {
             let terminal = terminal.clone();
@@ -1814,12 +1826,11 @@ impl PaneRuntime {
             let read_events = events.clone();
             let reported_cwd = reported_cwd.clone();
             let last_activity_at = last_activity_at.clone();
+            let output_counts_as_activity = output_counts_as_activity.clone();
             let rt = tokio::runtime::Handle::current();
             let delay_rt = rt.clone();
             let on_read = Box::new(move |bytes: &[u8]| {
-                if !bytes.is_empty() {
-                    mark_runtime_activity(&last_activity_at, std::time::Instant::now());
-                }
+                mark_output_activity(&last_activity_at, &output_counts_as_activity, bytes);
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
@@ -1883,6 +1894,7 @@ impl PaneRuntime {
             io,
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             last_activity_at,
+            output_counts_as_activity,
             child_pid,
             reported_cwd,
             child_wait_completed: None,
@@ -1946,6 +1958,7 @@ impl PaneRuntime {
         let detection_content_seq = Arc::new(AtomicU64::new(0));
         let full_lifecycle_authority_active = Arc::new(AtomicBool::new(false));
         let last_activity_at = Arc::new(Mutex::new(std::time::Instant::now()));
+        let output_counts_as_activity = Arc::new(AtomicBool::new(true));
         {
             let child_pid = child_pid.clone();
             let child_wait_completed = child_wait_completed.clone();
@@ -1982,11 +1995,10 @@ impl PaneRuntime {
             let events = events.clone();
             let reported_cwd = reported_cwd.clone();
             let last_activity_at = last_activity_at.clone();
+            let output_counts_as_activity = output_counts_as_activity.clone();
             let rt = tokio::runtime::Handle::current();
             let on_read = Box::new(move |bytes: &[u8]| {
-                if !bytes.is_empty() {
-                    mark_runtime_activity(&last_activity_at, std::time::Instant::now());
-                }
+                mark_output_activity(&last_activity_at, &output_counts_as_activity, bytes);
                 let shell_pid = child_pid.load(Ordering::Acquire);
                 let result =
                     terminal.process_pty_bytes(pane_id, shell_pid, bytes, &response_writer);
@@ -2410,6 +2422,7 @@ impl PaneRuntime {
             io,
             current_size: Cell::new((rows, cols, 0, 0)),
             last_activity_at,
+            output_counts_as_activity,
             child_pid,
             reported_cwd,
             child_wait_completed: Some(child_wait_completed),
@@ -2454,6 +2467,11 @@ impl PaneRuntime {
         if active && !previous {
             self.detect_reset_notify.notify_one();
         }
+    }
+
+    pub(crate) fn set_output_counts_as_activity(&self, counts: bool) {
+        self.output_counts_as_activity
+            .store(counts, Ordering::Release);
     }
 
     pub(crate) fn current_size(&self) -> (u16, u16) {
@@ -2848,9 +2866,11 @@ impl PaneRuntime {
     }
 
     pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
-        if !bytes.is_empty() {
-            self.mark_activity_at(std::time::Instant::now());
-        }
+        mark_output_activity(
+            &self.last_activity_at,
+            &self.output_counts_as_activity,
+            bytes,
+        );
         let (tx, _rx) = mpsc::channel(1);
         let _ = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
     }
@@ -2897,6 +2917,7 @@ impl PaneRuntime {
                 },
                 current_size: Cell::new((rows, cols, 0, 0)),
                 last_activity_at: Arc::new(Mutex::new(std::time::Instant::now())),
+                output_counts_as_activity: Arc::new(AtomicBool::new(true)),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
                 child_wait_completed: None,
@@ -3445,6 +3466,7 @@ mod tests {
             },
             current_size: Cell::new((80, 24, 0, 0)),
             last_activity_at: Arc::new(Mutex::new(std::time::Instant::now())),
+            output_counts_as_activity: Arc::new(AtomicBool::new(true)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,
@@ -3516,6 +3538,7 @@ mod tests {
             },
             current_size: Cell::new((80, 24, 0, 0)),
             last_activity_at: Arc::new(Mutex::new(std::time::Instant::now())),
+            output_counts_as_activity: Arc::new(AtomicBool::new(true)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
             child_wait_completed: None,

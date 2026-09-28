@@ -116,9 +116,15 @@ impl App {
         let ws_idx = self.state.active?;
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_id = ws.focused_pane_id()?;
-        let rt =
-            self.state
-                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)?;
+        let intercept_wake = self.pane_intercepts_dormant_wake(ws_idx, pane_id);
+        let page_keys_use_host_scrollback =
+            matches!(key_event.code, KeyCode::PageUp | KeyCode::PageDown)
+                && key_event.modifiers.is_empty()
+                && self
+                    .state
+                    .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+                    .and_then(crate::terminal::TerminalRuntime::input_state)
+                    .is_some_and(crate::pane::InputState::plain_page_keys_use_host_scrollback);
 
         // Intercept plain PageUp/PageDown presses for pane scrollback only
         // when the focused pane looks like a shell transcript. Normal-screen
@@ -128,43 +134,44 @@ impl App {
         // produce a second host-scroll action.
         // Only intercept when we know the pane state; if input_state is unknown,
         // fail-open and forward the key to the pane.
-        if matches!(key_event.code, KeyCode::PageUp | KeyCode::PageDown)
-            && key_event.modifiers.is_empty()
-        {
-            if let Some(input_state) = rt.input_state() {
-                if input_state.plain_page_keys_use_host_scrollback() {
-                    if key_event.kind == crossterm::event::KeyEventKind::Release {
-                        return None;
-                    }
-                    if matches!(
-                        key_event.kind,
-                        crossterm::event::KeyEventKind::Press
-                            | crossterm::event::KeyEventKind::Repeat
-                    ) {
-                        let lines = self
-                            .state
-                            .pane_info_by_id(pane_id)
-                            .map(|info| info.inner_rect.height as usize)
-                            .unwrap_or(10)
-                            .max(1);
-                        if key_event.code == KeyCode::PageUp {
-                            self.state
-                                .scroll_pane_up(&self.terminal_runtimes, pane_id, lines);
-                        } else {
-                            self.state
-                                .scroll_pane_down(&self.terminal_runtimes, pane_id, lines);
-                        }
-                        debug!(
-                            code = ?key_event.code,
-                            lines,
-                            "intercepted page key for pane scrollback"
-                        );
-                        return None;
-                    }
+        if page_keys_use_host_scrollback {
+            if key_event.kind == crossterm::event::KeyEventKind::Release {
+                return None;
+            }
+            if matches!(
+                key_event.kind,
+                crossterm::event::KeyEventKind::Press | crossterm::event::KeyEventKind::Repeat
+            ) {
+                let lines = self
+                    .state
+                    .pane_info_by_id(pane_id)
+                    .map(|info| info.inner_rect.height as usize)
+                    .unwrap_or(10)
+                    .max(1);
+                if key_event.code == KeyCode::PageUp {
+                    self.state
+                        .scroll_pane_up(&self.terminal_runtimes, pane_id, lines);
+                } else {
+                    self.state
+                        .scroll_pane_down(&self.terminal_runtimes, pane_id, lines);
                 }
+                debug!(
+                    code = ?key_event.code,
+                    lines,
+                    "intercepted page key for pane scrollback"
+                );
+                return None;
             }
         }
 
+        if intercept_wake {
+            self.handle_dormant_wake_key(ws_idx, pane_id, key);
+            return None;
+        }
+
+        let rt =
+            self.state
+                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)?;
         rt.scroll_reset();
         let protocol = rt.keyboard_protocol();
         let bytes = rt.encode_terminal_key(key);

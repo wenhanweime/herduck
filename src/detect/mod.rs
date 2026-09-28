@@ -164,10 +164,18 @@ fn is_versioned_grok_binary(name: &str) -> bool {
         && parts
             .iter()
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-        && matches!(
+        && (matches!(
             platform,
             "macos-aarch64" | "macos-x86_64" | "linux-aarch64" | "linux-x86_64"
-        )
+        ) || grok_platform_is_truncated_macos_or_linux(platform))
+}
+
+fn grok_platform_is_truncated_macos_or_linux(platform: &str) -> bool {
+    // macOS `comm` is 15 bytes, so `grok-1.0.30-macos-aarch64` shows up as `grok-1.0.30-mac`.
+    "macos-aarch64".starts_with(platform)
+        || "macos-x86_64".starts_with(platform)
+        || "linux-aarch64".starts_with(platform)
+        || "linux-x86_64".starts_with(platform)
 }
 
 /// Identify which agent is running from the process name.
@@ -646,11 +654,52 @@ mod tests {
         assert_eq!(identify_agent("ghcs"), Some(Agent::GithubCopilot));
         assert_eq!(identify_agent("grok"), Some(Agent::Grok));
         assert_eq!(identify_agent("grok-build"), Some(Agent::Grok));
+        assert_eq!(identify_agent("grok-1.0.30-mac"), Some(Agent::Grok));
+        assert_eq!(
+            identify_agent("grok-1.0.30-macos-aarch64"),
+            Some(Agent::Grok)
+        );
         assert_eq!(identify_agent("hermes"), Some(Agent::Hermes));
         assert_eq!(identify_agent("hermes-agent"), Some(Agent::Hermes));
         assert_eq!(identify_agent("kilo"), Some(Agent::Kilo));
         assert_eq!(identify_agent("kilo-code"), Some(Agent::Kilo));
         assert_eq!(identify_agent("maki"), Some(Agent::Maki));
+    }
+
+    #[test]
+    fn grok_idle_footer_with_ctrl_c_cancel_is_idle() {
+        let screen = "\
+  ╭──────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                │
+  ╰─────────────────────────────────────────────── Grok 4.6 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+b:send to bg  │  Ctrl+.:shortcuts
+";
+        let explain = crate::detect::manifest::explain(Agent::Grok, screen);
+        assert_eq!(explain.state, AgentState::Idle);
+        assert_eq!(
+            explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("prompt_hints_idle")
+        );
+    }
+
+    #[test]
+    fn grok_live_stop_chip_near_prompt_is_working() {
+        let screen = "\
+    ⠋ Read Codex/Grok detection buffers and pa… 0.2s                                 3m10s ⇣246k [↓][stop]
+
+  ╭──────────────────────────────────────────────────────────────────╮
+  │ ❯                                                                │
+  ╰─────────────────────────────────────────────── Grok 4.6 (high) ─╯
+
+  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+b:send to bg  │  Ctrl+.:shortcuts
+";
+        let explain = crate::detect::manifest::explain(Agent::Grok, screen);
+        assert_eq!(explain.state, AgentState::Working);
+        assert_eq!(
+            explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("spinner_status_working")
+        );
     }
 
     #[test]

@@ -568,6 +568,9 @@ impl App {
         terminal: &crate::terminal::TerminalState,
     ) -> Option<Instant> {
         let timeout = self.agent_idle_timeout?;
+        if terminal.dormant_agent_session.is_some() {
+            return None;
+        }
         if terminal.state != crate::detect::AgentState::Idle
             || terminal.effective_agent_label().is_none()
         {
@@ -594,7 +597,11 @@ impl App {
             .min()
     }
 
-    fn reclaim_idle_agent_processes(&mut self, now: Instant) {
+    fn reclaim_idle_agent_processes(
+        &mut self,
+        now: Instant,
+    ) -> std::collections::HashSet<crate::terminal::TerminalId> {
+        let mut changed = std::collections::HashSet::new();
         let eligible: Vec<_> = self
             .state
             .terminals
@@ -623,6 +630,37 @@ impl App {
                         .idle_agent_stop(agent, cutoff)
                 });
             if let Some(target) = target {
+                let session = self.state.terminals.get(&id).and_then(|terminal| {
+                    terminal
+                        .hook_authority
+                        .as_ref()
+                        .and_then(|authority| {
+                            authority.session_ref.as_ref().map(|session_ref| {
+                                crate::agent_resume::PersistedAgentSession {
+                                    source: authority.source.clone(),
+                                    agent: authority.agent_label.clone(),
+                                    session_ref: session_ref.clone(),
+                                }
+                            })
+                        })
+                        .or_else(|| terminal.persisted_agent_session.clone())
+                });
+                if let Some(session) = session {
+                    if let Some(terminal) = self.state.terminals.get_mut(&id) {
+                        if terminal.agent_name.is_none() {
+                            terminal.set_agent_name(session.agent.clone());
+                        }
+                        terminal.mark_agent_dormant(session);
+                    }
+                } else if let Some(terminal) = self.state.terminals.get_mut(&id) {
+                    // Even without a native resume handle, keep the Agents row grey.
+                    if terminal.agent_name.is_none() {
+                        if let Some(label) = terminal.effective_agent_label() {
+                            terminal.set_agent_name(label.to_string());
+                        }
+                    }
+                    terminal.set_agent_inactive(true);
+                }
                 if target.includes_pty_child {
                     if let Some(terminal) = self.state.terminals.get_mut(&id) {
                         terminal.respawn_shell_on_exit = true;
@@ -631,6 +669,7 @@ impl App {
                 tracing::info!(terminal = %id, "stopping idle agent processes");
                 target.start();
                 self.idle_agent_stop_retries.remove(&id);
+                changed.insert(id);
             } else {
                 // A disappearing wrapper or temporarily unavailable process metadata must not
                 // disable reclamation forever, nor keep the loop spinning on an expired deadline.
@@ -638,31 +677,38 @@ impl App {
                     .insert(id, now + Duration::from_secs(5));
             }
         }
+        changed
     }
 
     pub(crate) fn refresh_agent_inactivity(&mut self, now: Instant) -> bool {
-        self.reclaim_idle_agent_processes(now);
+        for terminal in self.state.terminals.values() {
+            if let Some(runtime) = self.terminal_runtimes.get(&terminal.id) {
+                runtime.set_output_counts_as_activity(
+                    terminal.state != crate::detect::AgentState::Idle,
+                );
+            }
+        }
+        let mut changed_terminals = self.reclaim_idle_agent_processes(now);
         let changes: Vec<_> = self
             .state
             .terminals
             .values()
             .filter_map(|terminal| {
-                let inactive = self
-                    .agent_inactivity_deadline(terminal)
-                    .is_some_and(|deadline| now >= deadline);
+                let inactive = terminal.dormant_agent_session.is_some()
+                    || self
+                        .agent_inactivity_deadline(terminal)
+                        .is_some_and(|deadline| now >= deadline);
                 (terminal.agent_inactive != inactive).then_some((terminal.id.clone(), inactive))
             })
             .collect();
-        if changes.is_empty() {
-            return false;
-        }
-
-        let mut changed_terminals = std::collections::HashSet::new();
         for (terminal_id, inactive) in changes {
             if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
                 terminal.set_agent_inactive(inactive);
                 changed_terminals.insert(terminal_id);
             }
+        }
+        if changed_terminals.is_empty() {
+            return false;
         }
 
         // Inactivity belongs to the terminal, independent of any particular pane attachment.
@@ -1278,8 +1324,21 @@ mod tests {
         app.terminal_runtimes
             .get(&terminal_id)
             .unwrap()
-            .test_process_pty_bytes(b"agent output");
-        assert!(app.refresh_agent_inactivity(Instant::now()));
+            .test_process_pty_bytes(b"idle sparkles");
+        assert!(
+            !app.refresh_agent_inactivity(Instant::now()),
+            "idle TUI redraws must not reset the inactivity clock"
+        );
+        assert!(app.state.terminals[&terminal_id].agent_inactive);
+        app.handle_internal_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(crate::detect::Agent::Codex),
+            state: crate::detect::AgentState::Working,
+            visible_blocker: false,
+            visible_working: true,
+            process_exited: false,
+            observed_at: Instant::now(),
+        });
         assert!(!app.state.terminals[&terminal_id].agent_inactive);
     }
 

@@ -404,6 +404,9 @@ impl App {
                     return None;
                 }
                 let terminal = self.state.terminals.get(&terminal_id)?;
+                if terminal.dormant_agent_session.is_some() {
+                    return None;
+                }
                 let identity_matches = self
                     .project_runtime_leases
                     .get(&pane_id)

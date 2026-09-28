@@ -1,8 +1,8 @@
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Borders, Clear, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
@@ -313,10 +313,14 @@ pub(super) fn render_panes(
 
     for info in &app.view.pane_infos {
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
+            let wake_composer = info.is_focused
+                && terminal_active
+                && app.dormant_wake_composer_visible(ws_idx, info.id);
             let show_cursor = info.is_focused
                 && terminal_active
                 && !pane_is_scrolled_back(rt)
-                && app.pane_exposes_host_cursor(ws_idx, info.id);
+                && app.pane_exposes_host_cursor(ws_idx, info.id)
+                && !wake_composer;
             rt.render(frame, info.inner_rect, show_cursor);
             render_pane_scrollbar(app, frame, info, rt);
 
@@ -362,10 +366,84 @@ pub(super) fn render_panes(
                 true,
             );
             render_copy_mode_cursor(app, frame, info);
+            if wake_composer {
+                render_dormant_wake_composer(app, ws_idx, info, frame);
+            }
         }
     }
 
     render_pane_borders(app, ws, frame);
+}
+
+fn render_dormant_wake_composer(app: &AppState, ws_idx: usize, info: &PaneInfo, frame: &mut Frame) {
+    let inner = info.inner_rect;
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let draft = app.dormant_wake_drafts.get(&info.id);
+    let submitted = draft.is_some_and(|draft| draft.submitted);
+    let still_dormant = app
+        .workspaces
+        .get(ws_idx)
+        .and_then(|ws| ws.panes.get(&info.id))
+        .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
+        .is_some_and(|terminal| terminal.dormant_agent_session.is_some());
+    let text = draft.map(|draft| draft.text.as_str()).unwrap_or("");
+    let height = 3u16.min(inner.height);
+    let area = Rect::new(
+        inner.x,
+        inner.y + inner.height.saturating_sub(height),
+        inner.width,
+        height,
+    );
+    let title = if submitted {
+        app.title_language
+            .text(" Waiting for Agent… ", " 等待 Agent 就绪… ")
+    } else if still_dormant {
+        app.title_language.text(
+            " Agent paused · Enter resumes and sends ",
+            " Agent 已暂停 · Enter 恢复并发送 ",
+        )
+    } else {
+        app.title_language.text(
+            " Enter sends when Agent is ready · Shift+Enter new line ",
+            " Enter 在 Agent 就绪后发送 · Shift+Enter 换行 ",
+        )
+    };
+    let line = if text.is_empty() {
+        Line::from(Span::styled(
+            app.title_language.text("Type a message…", "输入消息…"),
+            Style::default().fg(app.palette.overlay0),
+        ))
+    } else {
+        Line::from(text.to_string())
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.palette.overlay0))
+        .style(
+            Style::default()
+                .bg(app.palette.panel_bg)
+                .fg(app.palette.text),
+        );
+    frame.render_widget(Clear, area);
+    let composer_inner = block.inner(area);
+    let (composer_scroll, cursor_column, cursor_row) =
+        super::text::composer_cursor(text, composer_inner.width, composer_inner.height);
+    frame.render_widget(
+        Paragraph::new(line)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll((composer_scroll, 0)),
+        area,
+    );
+    if !submitted {
+        frame.set_cursor_position((
+            composer_inner.x.saturating_add(cursor_column),
+            composer_inner.y.saturating_add(cursor_row),
+        ));
+    }
 }
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {

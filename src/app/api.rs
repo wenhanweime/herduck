@@ -75,6 +75,7 @@ impl App {
         if let AppEvent::PaneDied { pane_id } = &ev {
             self.clear_project_runtime_for_pane(*pane_id);
             self.pending_catalog_submissions.remove(pane_id);
+            self.state.dormant_wake_drafts.remove(pane_id);
             self.cancel_project_followups(*pane_id);
         }
 
@@ -296,18 +297,21 @@ impl App {
             self.render_notify.notify_one();
         }
         for update in &pane_updates {
-            if update.previous_state != update.state
-                || update.previous_agent_label != update.agent_label
-            {
-                if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
-                    &self.terminal_runtimes,
-                    update.ws_idx,
-                    update.pane_id,
-                ) {
+            if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
+                &self.terminal_runtimes,
+                update.ws_idx,
+                update.pane_id,
+            ) {
+                runtime
+                    .set_output_counts_as_activity(update.state != crate::detect::AgentState::Idle);
+                if update.previous_state != update.state
+                    || update.previous_agent_label != update.agent_label
+                {
                     runtime.mark_activity_at(Instant::now());
                 }
             }
             self.flush_pending_catalog_submission(update.pane_id, update.state);
+            self.release_idle_dormant_wake_draft(update.pane_id, update.state);
             self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
             self.emit_pane_state_update(update);
         }
@@ -397,6 +401,7 @@ impl App {
         match send_result {
             Ok(()) => {
                 self.pending_catalog_submissions.remove(&pane_id);
+                self.state.dormant_wake_drafts.remove(&pane_id);
             }
             Err(err) => {
                 tracing::warn!(
@@ -2333,6 +2338,56 @@ mod tests {
             "respawning a shell must not steal focus"
         );
         assert_eq!(app.state.selected, 1);
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    async fn pane_died_keeps_a_dormant_agent_grey_in_the_agents_view() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let workspace = crate::workspace::Workspace::test_new("restored");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let terminal = app
+            .state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist");
+        terminal.mark_agent_dormant(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
+                .expect("test session id should be valid"),
+        });
+        terminal.respawn_shell_on_exit = true;
+
+        app.handle_internal_event(AppEvent::PaneDied { pane_id });
+
+        assert!(app.find_pane(pane_id).is_some());
+        let agents = app.collect_agent_infos();
+        assert_eq!(agents.len(), 1);
+        assert!(agents[0].agent_inactive);
+        assert_eq!(agents[0].agent.as_deref(), Some("codex"));
+        let terminal = app
+            .state
+            .terminals
+            .get(&terminal_id)
+            .expect("terminal should survive respawn");
+        assert!(terminal.dormant_agent_session.is_some());
+        assert!(terminal.agent_inactive);
+        assert!(!terminal.respawn_shell_on_exit);
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();

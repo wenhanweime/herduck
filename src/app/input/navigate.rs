@@ -504,6 +504,9 @@ impl App {
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
     ) {
+        // Focusing a grey Agent entry is the explicit resume gesture. Dormant state
+        // remains untouched when the old process is still draining its TERM grace period.
+        self.activate_dormant_agent_for_pane(ws_idx, pane_id);
         let Some(pane_id) = self.public_pane_id(ws_idx, pane_id) else {
             return;
         };

@@ -15,6 +15,266 @@ struct PendingAgentResumeCandidate {
 }
 
 impl App {
+    /// Wakes a greyed Agent. Dormant rows never enter the automatic restore
+    /// queue; a user focus, click, or typed/pasted input may send the native
+    /// resume command. Typed content is held until the CLI reaches idle.
+    pub(crate) fn activate_dormant_agent_for_pane(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    ) -> bool {
+        let Some(pane) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+        else {
+            return false;
+        };
+        let terminal_id = pane.attached_terminal_id.clone();
+        let Some(session) = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .and_then(|terminal| terminal.dormant_agent_session.clone())
+        else {
+            return false;
+        };
+        let Some(plan) =
+            crate::agent_resume::plan(&session.source, &session.agent, &session.session_ref)
+        else {
+            return false;
+        };
+        let (rows, cols) = self
+            .state
+            .view
+            .pane_infos
+            .iter()
+            .find(|info| info.id == pane_id)
+            .map(|info| (info.inner_rect.height.max(1), info.inner_rect.width.max(1)))
+            .unwrap_or((24, 80));
+
+        if let Some(runtime) = self.terminal_runtimes.get(&terminal_id) {
+            // A TERM grace period may still be in flight. Never type the resume command
+            // into the old Agent; leave the row grey and let a later explicit click retry.
+            if runtime
+                .child_pid()
+                .and_then(crate::detect::foreground_job)
+                .and_then(|job| crate::detect::identify_agent_in_job(&job))
+                .is_some()
+            {
+                return false;
+            }
+            let Some(command) = shell_command_from_argv(&plan.argv) else {
+                return false;
+            };
+            let mut input = command;
+            input.push('\r');
+            if runtime.try_send_bytes(Bytes::from(input)).is_err() {
+                return false;
+            }
+            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                terminal.clear_dormant_agent();
+                terminal.set_persisted_agent_session(session);
+                terminal.set_agent_name(plan.agent.clone());
+                terminal.state = crate::detect::AgentState::Working;
+                terminal.fallback_state = crate::detect::AgentState::Working;
+            }
+            self.ensure_dormant_wake_draft(pane_id);
+            self.schedule_session_save();
+            return true;
+        }
+
+        if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+            terminal.pending_agent_resume_plan = Some(plan);
+        }
+        if self.start_pending_agent_resume_for_terminal(&terminal_id, rows, cols, true) {
+            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                terminal.clear_dormant_agent();
+                terminal.set_persisted_agent_session(session.clone());
+                terminal.set_agent_name(session.agent);
+            }
+            self.ensure_dormant_wake_draft(pane_id);
+            self.schedule_session_save();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn pane_intercepts_dormant_wake(
+        &self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    ) -> bool {
+        if self.state.dormant_wake_drafts.contains_key(&pane_id) {
+            return true;
+        }
+        self.state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some())
+    }
+
+    pub(crate) fn ensure_dormant_wake_draft(&mut self, pane_id: crate::layout::PaneId) {
+        self.state
+            .dormant_wake_drafts
+            .entry(pane_id)
+            .or_insert_with(|| crate::app::state::DormantWakeDraft {
+                text: String::new(),
+                submitted: false,
+            });
+    }
+
+    pub(crate) fn handle_dormant_wake_key(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        key: crate::input::TerminalKey,
+    ) {
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return;
+        }
+        self.ensure_dormant_wake_draft(pane_id);
+        if self
+            .state
+            .dormant_wake_drafts
+            .get(&pane_id)
+            .is_some_and(|draft| draft.submitted)
+        {
+            return;
+        }
+        let dormant = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some());
+        if dormant {
+            let _ = self.activate_dormant_agent_for_pane(ws_idx, pane_id);
+        }
+
+        match key.code {
+            crossterm::event::KeyCode::Esc => {
+                if let Some(draft) = self.state.dormant_wake_drafts.get_mut(&pane_id) {
+                    draft.text.clear();
+                }
+            }
+            crossterm::event::KeyCode::Backspace => {
+                if let Some(draft) = self.state.dormant_wake_drafts.get_mut(&pane_id) {
+                    draft.text.pop();
+                }
+            }
+            crossterm::event::KeyCode::Enter
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT) =>
+            {
+                if let Some(draft) = self.state.dormant_wake_drafts.get_mut(&pane_id) {
+                    draft.text.push('\n');
+                }
+            }
+            crossterm::event::KeyCode::Enter => {
+                self.submit_dormant_wake_draft(ws_idx, pane_id);
+            }
+            crossterm::event::KeyCode::Char(character)
+                if !key.modifiers.intersects(
+                    crossterm::event::KeyModifiers::CONTROL
+                        | crossterm::event::KeyModifiers::ALT
+                        | crossterm::event::KeyModifiers::SUPER,
+                ) && !character.is_control() =>
+            {
+                if let Some(draft) = self.state.dormant_wake_drafts.get_mut(&pane_id) {
+                    draft.text.push(character);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(crate) fn append_dormant_wake_paste(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+        text: &str,
+    ) {
+        self.ensure_dormant_wake_draft(pane_id);
+        if self
+            .state
+            .dormant_wake_drafts
+            .get(&pane_id)
+            .is_some_and(|draft| draft.submitted)
+        {
+            return;
+        }
+        let dormant = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some());
+        if dormant {
+            let _ = self.activate_dormant_agent_for_pane(ws_idx, pane_id);
+        }
+        if let Some(draft) = self.state.dormant_wake_drafts.get_mut(&pane_id) {
+            draft
+                .text
+                .extend(text.chars().filter(|character| *character != '\r'));
+        }
+    }
+
+    fn submit_dormant_wake_draft(&mut self, ws_idx: usize, pane_id: crate::layout::PaneId) {
+        let dormant = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some());
+        if dormant && !self.activate_dormant_agent_for_pane(ws_idx, pane_id) {
+            return;
+        }
+        let Some(draft) = self.state.dormant_wake_drafts.get_mut(&pane_id) else {
+            return;
+        };
+        if draft.text.trim().is_empty() {
+            return;
+        }
+        let text = draft.text.clone();
+        draft.submitted = true;
+        self.pending_catalog_submissions.insert(pane_id, text);
+        if let Some(state) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+            .map(|terminal| terminal.state)
+        {
+            self.flush_pending_catalog_submission(pane_id, state);
+        }
+    }
+
+    pub(crate) fn release_idle_dormant_wake_draft(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        state: crate::detect::AgentState,
+    ) {
+        if state != crate::detect::AgentState::Idle {
+            return;
+        }
+        let Some(draft) = self.state.dormant_wake_drafts.get(&pane_id) else {
+            return;
+        };
+        if draft.submitted || !draft.text.is_empty() {
+            return;
+        }
+        self.state.dormant_wake_drafts.remove(&pane_id);
+    }
+
     pub(crate) fn has_pending_agent_resumes(&self) -> bool {
         self.state
             .terminals
@@ -345,7 +605,6 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     fn test_app() -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         App::new(
@@ -355,6 +614,230 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn activating_a_dormant_agent_sends_the_native_resume_command() {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("dormant");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist")
+            .mark_agent_dormant(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::id("idle-session")
+                    .expect("test session id should be valid"),
+            });
+
+        assert!(app.activate_dormant_agent_for_pane(0, pane_id));
+        assert_eq!(
+            receiver.try_recv().expect("resume command"),
+            bytes::Bytes::from_static(b"codex resume idle-session\r")
+        );
+        let terminal = app
+            .state
+            .terminals
+            .get(&terminal_id)
+            .expect("terminal should survive activation");
+        assert!(terminal.dormant_agent_session.is_none());
+        assert!(!terminal.agent_inactive);
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("idle-session")
+        );
+        assert!(app.state.dormant_wake_drafts.contains_key(&pane_id));
+    }
+
+    fn dormant_wake_test_app() -> (
+        App,
+        crate::layout::PaneId,
+        tokio::sync::mpsc::Receiver<bytes::Bytes>,
+    ) {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("dormant");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        app.state.mode = crate::app::Mode::Terminal;
+        let (runtime, receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test terminal should exist")
+            .mark_agent_dormant(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::id("idle-session")
+                    .expect("test session id should be valid"),
+            });
+        (app, pane_id, receiver)
+    }
+
+    #[tokio::test]
+    async fn typing_in_a_dormant_pane_resumes_and_holds_the_message_until_idle() {
+        let (mut app, pane_id, mut receiver) = dormant_wake_test_app();
+
+        app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('h'),
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('i'),
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        assert_eq!(
+            receiver.try_recv().expect("resume command"),
+            bytes::Bytes::from_static(b"codex resume idle-session\r")
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "typed keys must not go to the leftover shell"
+        );
+        assert_eq!(
+            app.state
+                .dormant_wake_drafts
+                .get(&pane_id)
+                .map(|draft| draft.text.as_str()),
+            Some("hi")
+        );
+
+        app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        assert_eq!(
+            app.pending_catalog_submissions
+                .get(&pane_id)
+                .map(String::as_str),
+            Some("hi")
+        );
+        assert!(app
+            .state
+            .dormant_wake_drafts
+            .get(&pane_id)
+            .is_some_and(|draft| draft.submitted));
+        assert!(receiver.try_recv().is_err(), "wait for the idle prompt");
+
+        app.flush_pending_catalog_submission(pane_id, crate::detect::AgentState::Idle);
+        assert_eq!(
+            receiver.try_recv().expect("queued message"),
+            bytes::Bytes::from_static(b"hi\r")
+        );
+        assert!(app.pending_catalog_submissions.is_empty());
+        assert!(!app.state.dormant_wake_drafts.contains_key(&pane_id));
+    }
+
+    #[tokio::test]
+    async fn click_wake_captures_keys_until_the_agent_is_idle() {
+        let (mut app, pane_id, mut receiver) = dormant_wake_test_app();
+        assert!(app.activate_dormant_agent_for_pane(0, pane_id));
+        assert_eq!(
+            receiver.try_recv().expect("resume command"),
+            bytes::Bytes::from_static(b"codex resume idle-session\r")
+        );
+
+        app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('x'),
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        assert!(
+            receiver.try_recv().is_err(),
+            "keys typed while the CLI is starting must not leak into the shell"
+        );
+        assert_eq!(
+            app.state
+                .dormant_wake_drafts
+                .get(&pane_id)
+                .map(|draft| draft.text.as_str()),
+            Some("x")
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_wake_draft_releases_the_pane_once_idle() {
+        let (mut app, pane_id, mut receiver) = dormant_wake_test_app();
+        assert!(app.activate_dormant_agent_for_pane(0, pane_id));
+        assert_eq!(
+            receiver.try_recv().expect("resume command"),
+            bytes::Bytes::from_static(b"codex resume idle-session\r")
+        );
+
+        app.release_idle_dormant_wake_draft(pane_id, crate::detect::AgentState::Idle);
+        assert!(!app.state.dormant_wake_drafts.contains_key(&pane_id));
+
+        app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('z'),
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        assert_eq!(
+            receiver.try_recv().expect("live key"),
+            bytes::Bytes::from_static(b"z")
+        );
+    }
+
+    #[tokio::test]
+    async fn dormant_wake_paste_and_backspace_edit_the_draft() {
+        let (mut app, pane_id, mut receiver) = dormant_wake_test_app();
+        app.append_dormant_wake_paste(0, pane_id, "你好\r吗");
+        assert_eq!(
+            receiver.try_recv().expect("resume command"),
+            bytes::Bytes::from_static(b"codex resume idle-session\r")
+        );
+        assert_eq!(
+            app.state
+                .dormant_wake_drafts
+                .get(&pane_id)
+                .map(|draft| draft.text.as_str()),
+            Some("你好吗")
+        );
+        app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Backspace,
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        assert_eq!(
+            app.state
+                .dormant_wake_drafts
+                .get(&pane_id)
+                .map(|draft| draft.text.as_str()),
+            Some("你好")
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn client_paste_into_a_dormant_pane_is_held_in_the_wake_draft() {
+        let (mut app, pane_id, mut receiver) = dormant_wake_test_app();
+        app.route_client_events(
+            vec![crate::raw_input::RawInputEvent::Paste("跟进\n一下".into())],
+            false,
+        );
+        assert_eq!(
+            receiver.try_recv().expect("resume command"),
+            bytes::Bytes::from_static(b"codex resume idle-session\r")
+        );
+        assert_eq!(
+            app.state
+                .dormant_wake_drafts
+                .get(&pane_id)
+                .map(|draft| draft.text.as_str()),
+            Some("跟进\n一下")
+        );
+        assert!(receiver.try_recv().is_err());
     }
 
     #[cfg(unix)]

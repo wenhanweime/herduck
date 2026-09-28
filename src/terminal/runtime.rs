@@ -483,6 +483,10 @@ impl TerminalRuntime {
         self.0.mark_activity_at(observed_at);
     }
 
+    pub(crate) fn set_output_counts_as_activity(&self, counts: bool) {
+        self.0.set_output_counts_as_activity(counts);
+    }
+
     pub(crate) fn current_size(&self) -> (u16, u16) {
         self.0.current_size()
     }

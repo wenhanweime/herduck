@@ -62,6 +62,12 @@ pub(crate) struct PopupPaneState {
     pub height: Option<crate::popup_size::PopupSize>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DormantWakeDraft {
+    pub text: String,
+    pub submitted: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Selection autoscroll types
 // ---------------------------------------------------------------------------
@@ -1662,6 +1668,9 @@ pub struct AppState {
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
     pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
+    /// In-pane composer for a reclaimed Agent. Keys stay here until Enter, then
+    /// the text is delivered after the native CLI reaches its idle prompt.
+    pub dormant_wake_drafts: std::collections::HashMap<PaneId, DormantWakeDraft>,
     pub copy_feedback: Option<CopyFeedback>,
     /// Last reported focus state for the outer terminal hosting herdr.
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
@@ -1813,6 +1822,24 @@ impl AppState {
         _pane_id: crate::layout::PaneId,
     ) -> bool {
         true
+    }
+
+    pub(crate) fn dormant_wake_composer_visible(
+        &self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    ) -> bool {
+        if self.mode != Mode::Terminal {
+            return false;
+        }
+        if self.dormant_wake_drafts.contains_key(&pane_id) {
+            return true;
+        }
+        self.workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.panes.get(&pane_id))
+            .and_then(|pane| self.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some())
     }
 
     pub(crate) fn integration_updates_available(&self) -> bool {
@@ -2057,6 +2084,7 @@ impl AppState {
             config_diagnostic: None,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
+            dormant_wake_drafts: std::collections::HashMap::new(),
             copy_feedback: None,
             outer_terminal_focus: None,
             prefix_code: KeyCode::Char('b'),
@@ -2211,6 +2239,10 @@ impl AppState {
             assert!(
                 self.pending_agent_notifications.is_empty(),
                 "empty app state must not keep pending agent notifications"
+            );
+            assert!(
+                self.dormant_wake_drafts.is_empty(),
+                "empty app state must not keep dormant wake drafts"
             );
             assert!(
                 self.copy_mode.is_none(),

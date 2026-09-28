@@ -31,6 +31,9 @@ impl App {
         }
         let report = self.find_pane(pane_id).and_then(|(ws_idx, pane)| {
             let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+            if terminal.dormant_agent_session.is_some() {
+                return None;
+            }
             // Lifecycle hooks (Pi/OMP) hold the current native identity in their
             // authority while running. The durable fallback is used after release.
             // Match the identity already exposed by the session API and persistence.

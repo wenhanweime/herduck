@@ -93,10 +93,11 @@ the same process instances can receive KILL after a two-second grace period. An 
 left inactive without being killed. The outer shell and unrelated background shell jobs are retained.
 An Agent launched directly as the terminal process is replaced with a shell without changing focus.
 
-Saved native conversation history and Work plans are not deleted. After reclamation, continue the
-conversation from Sessions or Work using its original Agent; typing in the remaining shell does
-not automatically resume it. The inactive marker is transient while normal exit detection updates
-the terminal. Unsaved input in the Agent is not a saved conversation and is not preserved.
+Saved native conversation history and Work plans are not deleted. After reclamation, focus the
+grey Agent row or type in the pane to resume the original conversation. Typed text is held until
+the CLI reaches its idle prompt, then sent as the next message. The inactive marker is transient
+while normal exit detection updates the terminal. Unsaved input in the Agent is not a saved
+conversation and is not preserved.
 
 Saved history can be browsed without launching an Agent. Continuing a supported conversation
 reuses a matching running session or starts its original Agent. If you manually end an Agent,

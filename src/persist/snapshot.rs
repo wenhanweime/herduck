@@ -108,6 +108,8 @@ pub struct PaneSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dormant_agent_session: Option<PaneAgentSessionSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
 }
 
@@ -348,30 +350,43 @@ fn capture_tab(
             .get(id)
             .and_then(|pane| terminals.get(&pane.attached_terminal_id))
             .and_then(|terminal| terminal.launch_argv.clone());
-        let agent_session =
-            tab.panes
-                .get(id)
-                .and_then(|pane| terminals.get(&pane.attached_terminal_id))
-                .and_then(|terminal| {
-                    if let Some(authority) = terminal.hook_authority.as_ref() {
-                        if let Some(session_ref) = authority.session_ref.as_ref() {
-                            return Some(PaneAgentSessionSnapshot {
-                                source: authority.source.clone(),
-                                agent: authority.agent_label.clone(),
-                                kind: session_ref.kind,
-                                value: session_ref.value.clone(),
-                            });
-                        }
+        let dormant_agent_session = tab
+            .panes
+            .get(id)
+            .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+            .and_then(|terminal| terminal.dormant_agent_session.as_ref())
+            .map(|session| PaneAgentSessionSnapshot {
+                source: session.source.clone(),
+                agent: session.agent.clone(),
+                kind: session.session_ref.kind,
+                value: session.session_ref.value.clone(),
+            });
+        let agent_session = tab
+            .panes
+            .get(id)
+            .and_then(|pane| terminals.get(&pane.attached_terminal_id))
+            .and_then(|terminal| {
+                if let Some(authority) = terminal.hook_authority.as_ref() {
+                    if let Some(session_ref) = authority.session_ref.as_ref() {
+                        return Some(PaneAgentSessionSnapshot {
+                            source: authority.source.clone(),
+                            agent: authority.agent_label.clone(),
+                            kind: session_ref.kind,
+                            value: session_ref.value.clone(),
+                        });
                     }
-                    terminal.persisted_agent_session.as_ref().map(|session| {
-                        PaneAgentSessionSnapshot {
-                            source: session.source.clone(),
-                            agent: session.agent.clone(),
-                            kind: session.session_ref.kind,
-                            value: session.session_ref.value.clone(),
-                        }
+                }
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .filter(|_| dormant_agent_session.is_none())
+                    .map(|session| PaneAgentSessionSnapshot {
+                        source: session.source.clone(),
+                        agent: session.agent.clone(),
+                        kind: session.session_ref.kind,
+                        value: session.session_ref.value.clone(),
                     })
-                });
+            });
         panes.insert(
             id.raw(),
             PaneSnapshot {
@@ -379,6 +394,7 @@ fn capture_tab(
                 label,
                 agent_name,
                 agent_session,
+                dormant_agent_session,
                 launch_argv,
             },
         );
@@ -625,6 +641,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 agent_session: None,
+                dormant_agent_session: None,
                 launch_argv: None,
             },
         );
@@ -635,6 +652,7 @@ mod tests {
                 label: Some("website".into()),
                 agent_name: None,
                 agent_session: None,
+                dormant_agent_session: None,
                 launch_argv: None,
             },
         );
@@ -1184,6 +1202,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 agent_session: None,
+                dormant_agent_session: None,
                 launch_argv: None,
             },
         );
@@ -1196,6 +1215,7 @@ mod tests {
                 label: None,
                 agent_name: None,
                 agent_session: None,
+                dormant_agent_session: None,
                 launch_argv: None,
             },
         );

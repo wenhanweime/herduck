@@ -1481,6 +1481,17 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        if self
+            .find_pane(pane_id)
+            .and_then(|(_, pane)| self.state.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some())
+        {
+            return encode_error(
+                id,
+                "pane_dormant",
+                "agent is paused; focus its pane to resume",
+            );
+        }
         if let Err(err) = runtime.try_send_bytes(Bytes::from(params.text)) {
             return encode_error(id, "pane_send_failed", err.to_string());
         }
@@ -1499,6 +1510,17 @@ impl App {
         let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
             return pane_not_found(id, &params.pane_id);
         };
+        if self
+            .find_pane(pane_id)
+            .and_then(|(_, pane)| self.state.terminals.get(&pane.attached_terminal_id))
+            .is_some_and(|terminal| terminal.dormant_agent_session.is_some())
+        {
+            return encode_error(
+                id,
+                "pane_dormant",
+                "agent is paused; focus its pane to resume",
+            );
+        }
         let encoded_keys = match encode_api_keys(runtime, &params.keys) {
             Ok(encoded_keys) => encoded_keys,
             Err(key) => return encode_error(id, "invalid_key", format!("unsupported key {key}")),

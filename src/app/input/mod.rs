@@ -138,6 +138,17 @@ impl App {
         }
 
         if let Some(ws_idx) = self.state.active {
+            if let Some(pane_id) = self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|ws| ws.focused_pane_id())
+            {
+                if self.pane_intercepts_dormant_wake(ws_idx, pane_id) {
+                    self.append_dormant_wake_paste(ws_idx, pane_id, &text);
+                    return;
+                }
+            }
             if let Some(rt) = self
                 .state
                 .focused_runtime_in_workspace(&self.terminal_runtimes, ws_idx)
@@ -317,6 +328,15 @@ impl App {
         if let Some((ws_idx, pane_id)) =
             mapped_pane.or_else(|| self.pane_for_catalog_session(&session))
         {
+            let dormant = self
+                .find_pane(pane_id)
+                .and_then(|(_, pane)| self.state.terminals.get(&pane.attached_terminal_id))
+                .is_some_and(|terminal| terminal.dormant_agent_session.is_some());
+            if dormant && !self.activate_dormant_agent_for_pane(ws_idx, pane_id) {
+                self.state.projects.history_fallback_reason =
+                    Some("The paused Agent is still stopping; focus it again to retry.".into());
+                return;
+            }
             if !draft.trim().is_empty() {
                 self.pending_catalog_submissions.insert(pane_id, draft);
                 // An already-idle instance may not produce another state transition.
@@ -650,6 +670,16 @@ impl App {
             return Some("This session is no longer available in the current snapshot.".into());
         };
         if let Some((ws_idx, pane_id)) = self.pane_for_catalog_session(&session) {
+            if self
+                .find_pane(pane_id)
+                .and_then(|(_, pane)| self.state.terminals.get(&pane.attached_terminal_id))
+                .is_some_and(|terminal| terminal.dormant_agent_session.is_some())
+            {
+                return Some(
+                    "Read-only preview. This session is paused; focus its Agent row to resume."
+                        .into(),
+                );
+            }
             self.state.projects.history_session_key = None;
             self.focus_pane_internal_via_api(ws_idx, pane_id);
             self.state.mode = Mode::Terminal;

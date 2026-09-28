@@ -225,6 +225,28 @@ mod tests {
     }
 
     #[test]
+    fn pane_details_keep_dormant_agents_visible_and_inactive() {
+        let ws = Workspace::test_new("test");
+        let root_pane = ws.tabs[0].root_pane;
+        let mut terminals = HashMap::new();
+        let mut terminal = terminal_for_pane(&ws, root_pane);
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.mark_agent_dormant(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("codex-session").unwrap(),
+        });
+        terminal.clear_agent_runtime_identity_after_respawn();
+        terminals.insert(terminal.id.clone(), terminal);
+
+        let details = ws.pane_details(&terminals);
+        assert_eq!(details.len(), 1);
+        assert!(details[0].agent_inactive);
+        assert_eq!(details[0].agent_label, "codex");
+        assert_eq!(details[0].agent, Some(Agent::Codex));
+    }
+
+    #[test]
     fn pane_details_includes_tab_context_for_multi_tab_workspace() {
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].custom_name = Some("main".into());

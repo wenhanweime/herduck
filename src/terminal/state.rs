@@ -86,6 +86,8 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    /// Native session retained after idle reclamation; it is never treated as live runtime.
+    pub dormant_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -118,6 +120,7 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            dormant_agent_session: None,
             terminal_title: None,
             manual_label: None,
             agent_name: None,
@@ -255,6 +258,18 @@ impl TerminalState {
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
         let previous_detected_agent = self.detected_agent;
         let previous_session = self.current_session_identity_for_persistence();
+        if self.dormant_agent_session.is_some() {
+            return TerminalStateMutation {
+                effective_state_change: self.recompute_effective_state(
+                    previous_agent_label,
+                    previous_known_agent,
+                    previous_state,
+                    previous_presentation,
+                    now,
+                ),
+                session_ref_changed: false,
+            };
+        }
         if self.should_ignore_detected_state_under_full_lifecycle_hook(agent, process_exited) {
             if self
                 .hook_authority
@@ -982,6 +997,23 @@ impl TerminalState {
         self.persisted_agent_session = Some(session);
     }
 
+    pub fn mark_agent_dormant(&mut self, session: crate::agent_resume::PersistedAgentSession) {
+        self.dormant_agent_session = Some(session);
+        self.persisted_agent_session = None;
+        self.hook_authority = None;
+        self.detected_agent = None;
+        self.fallback_state = AgentState::Idle;
+        self.state = AgentState::Idle;
+        self.set_agent_inactive(true);
+        self.respawn_shell_on_exit = false;
+        self.pending_agent_resume_plan = None;
+    }
+
+    pub fn clear_dormant_agent(&mut self) {
+        self.dormant_agent_session = None;
+        self.set_agent_inactive(false);
+    }
+
     pub fn set_agent_session_ref(
         &mut self,
         source: String,
@@ -1273,13 +1305,22 @@ impl TerminalState {
             .as_ref()
             .map(|authority| authority.agent_label.as_str())
             .or_else(|| self.detected_agent.map(crate::detect::agent_label))
+            .or_else(|| {
+                self.dormant_agent_session
+                    .as_ref()
+                    .map(|session| session.agent.as_str())
+            })
     }
 
     pub fn effective_known_agent(&self) -> Option<Agent> {
         if let Some(authority) = &self.hook_authority {
             return crate::detect::parse_agent_label(&authority.agent_label);
         }
-        self.detected_agent
+        self.detected_agent.or_else(|| {
+            self.dormant_agent_session
+                .as_ref()
+                .and_then(|session| crate::detect::parse_agent_label(&session.agent))
+        })
     }
 
     pub fn full_lifecycle_hook_authority_active(&self) -> bool {
@@ -1324,23 +1365,50 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        let dormant = self.dormant_agent_session.take();
+        let preserved_name = dormant
+            .as_ref()
+            .map(|session| {
+                self.agent_name
+                    .clone()
+                    .unwrap_or_else(|| session.agent.clone())
+            })
+            .or_else(|| {
+                self.agent_inactive
+                    .then(|| self.agent_name.clone())
+                    .flatten()
+            });
+
         self.detected_agent = None;
-        self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
         self.fallback_observed_at = None;
         self.hook_authority = None;
         self.persisted_agent_session = None;
-        self.agent_metadata.clear();
         self.suppressed_full_lifecycle_hook_reports.clear();
         self.stale_full_lifecycle_hook_sessions.clear();
-        self.state = AgentState::Unknown;
-        self.set_agent_inactive(false);
         self.last_agent_state_change_seq = None;
         self.launch_argv = None;
         self.respawn_shell_on_exit = false;
         self.recent_agent_process_exit_at = None;
         self.pending_agent_resume_plan = None;
-        self.clear_agent_name();
+
+        if dormant.is_some() || preserved_name.is_some() {
+            // Keep the grey Agents row. A dormant session is the native resume
+            // handle; a preserved name still keeps the paused conversation visible.
+            self.dormant_agent_session = dormant;
+            self.fallback_state = AgentState::Idle;
+            self.state = AgentState::Idle;
+            self.set_agent_inactive(true);
+            if let Some(name) = preserved_name {
+                self.set_agent_name(name);
+            }
+        } else {
+            self.agent_metadata.clear();
+            self.fallback_state = AgentState::Unknown;
+            self.state = AgentState::Unknown;
+            self.set_agent_inactive(false);
+            self.clear_agent_name();
+        }
     }
 
     pub fn is_agent_terminal(&self) -> bool {
@@ -4290,6 +4358,35 @@ mod tests {
         assert_eq!(terminal.state, AgentState::Unknown);
         assert!(terminal.detected_agent.is_none());
         assert!(terminal.agent_name.is_none());
+        assert!(terminal.persisted_agent_session.is_none());
+        assert!(!terminal.respawn_shell_on_exit);
+    }
+
+    #[test]
+    fn respawn_cleanup_keeps_a_dormant_agent_row_grey() {
+        let mut terminal = test_terminal();
+        terminal.respawn_shell_on_exit = true;
+        terminal.set_agent_name("codex".into());
+        terminal.mark_agent_dormant(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("codex-session").unwrap(),
+        });
+        terminal.respawn_shell_on_exit = true;
+
+        terminal.clear_agent_runtime_identity_after_respawn();
+
+        assert!(terminal.is_agent_terminal());
+        assert!(terminal.agent_inactive);
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert_eq!(terminal.agent_name.as_deref(), Some("codex"));
+        assert_eq!(
+            terminal
+                .dormant_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("codex-session")
+        );
         assert!(terminal.persisted_agent_session.is_none());
         assert!(!terminal.respawn_shell_on_exit);
     }

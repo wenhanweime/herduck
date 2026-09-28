@@ -103,6 +103,7 @@ pub fn session_ref_from_snapshot(
     let session_ref = match (agent, kind) {
         ("pi" | "omp", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
         (_, AgentSessionRefKind::Id) => AgentSessionRef::id(value)?,
+        ("grok", AgentSessionRefKind::Path) => AgentSessionRef::path(value)?,
         _ => return None,
     };
     Some(PersistedAgentSession {
@@ -270,6 +271,21 @@ mod tests {
             "herdr:opencode",
             "opencode"
         ));
+    }
+
+    #[test]
+    fn grok_path_snapshot_is_valid_and_resumes_by_directory_leaf() {
+        let path = absolute_test_path("grok-sessions/session-123");
+        let session =
+            session_ref_from_snapshot("herdr:grok", "grok", AgentSessionRefKind::Path, &path)
+                .expect("grok path should survive snapshot validation");
+        assert_eq!(session.session_ref.kind, AgentSessionRefKind::Path);
+        assert_eq!(
+            plan("herdr:grok", "grok", &session.session_ref)
+                .expect("grok path should produce a resume plan")
+                .argv,
+            vec!["grok", "--resume", "session-123"]
+        );
     }
 
     #[test]

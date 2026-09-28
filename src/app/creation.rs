@@ -486,6 +486,7 @@ fn terminal_agent_session_info(
     terminal
         .persisted_agent_session
         .as_ref()
+        .or(terminal.dormant_agent_session.as_ref())
         .map(|session| crate::api::schema::AgentSessionInfo {
             source: session.source.clone(),
             agent: session.agent.clone(),

@@ -208,7 +208,10 @@ fn catalog_session_title_for_pane(
     let workspace = app.workspaces.get(ws_idx)?;
     let pane = workspace.pane_state(pane_id)?;
     let terminal = app.terminals.get(&pane.attached_terminal_id)?;
-    let persisted = terminal.persisted_agent_session.as_ref();
+    let persisted = terminal
+        .persisted_agent_session
+        .as_ref()
+        .or(terminal.dormant_agent_session.as_ref());
     let pane_key = workspace
         .public_pane_number(pane_id)
         .map(|number| crate::workspace::public_pane_id_for_number(&workspace.id, number))?;

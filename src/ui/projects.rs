@@ -1424,7 +1424,7 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
             .borders(Borders::TOP)
             .border_style(Style::default().fg(app.palette.overlay0));
         let composer_inner = composer_block.inner(composer_area);
-        let (composer_scroll, cursor_column, cursor_row) = history_composer_cursor(
+        let (composer_scroll, cursor_column, cursor_row) = super::text::composer_cursor(
             &app.projects.history_draft,
             composer_inner.width,
             composer_inner.height,
@@ -1450,43 +1450,6 @@ pub(crate) fn render_project_history(app: &AppState, frame: &mut Frame, area: Re
             area,
         );
     }
-}
-
-/// Cursor geometry for the historical-session composer.
-///
-/// A real frame cursor is required for terminal IMEs: without an anchor macOS composition can
-/// accept keystrokes internally while showing no candidate window or committed text, which reads
-/// to the user as an input box that cannot be typed into.
-fn history_composer_cursor(draft: &str, width: u16, height: u16) -> (u16, u16, u16) {
-    let width = width.max(1) as usize;
-    let height = height.max(1) as usize;
-    let mut row = 0usize;
-    let mut column = 0usize;
-
-    for character in draft.chars() {
-        if character == '\n' {
-            row = row.saturating_add(1);
-            column = 0;
-            continue;
-        }
-        let character_width = super::text::display_width(&character.to_string()).max(1);
-        if column.saturating_add(character_width) > width {
-            row = row.saturating_add(1);
-            column = 0;
-        }
-        column = column.saturating_add(character_width);
-        if column >= width {
-            row = row.saturating_add(column / width);
-            column %= width;
-        }
-    }
-
-    let scroll = row.saturating_sub(height.saturating_sub(1));
-    (
-        scroll.min(u16::MAX as usize) as u16,
-        column.min(width.saturating_sub(1)) as u16,
-        row.saturating_sub(scroll).min(height.saturating_sub(1)) as u16,
-    )
 }
 
 #[cfg(test)]

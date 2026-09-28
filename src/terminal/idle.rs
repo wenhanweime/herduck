@@ -111,6 +111,7 @@ mod tests {
                 vec!["node", "/opt/node_modules/@openai/codex/bin/codex.js"],
             ),
             (Agent::Grok, vec!["grok"]),
+            (Agent::Grok, vec!["grok-1.0.30-mac"]),
             (Agent::Grok, vec!["grok-1.0.30-macos-aarch64"]),
         ] {
             let job = ForegroundJob {
