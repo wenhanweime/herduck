@@ -11,11 +11,13 @@
 </p>
 
 <p align="center">
+  <a href="https://www.herduck.com">herduck.com</a> ·
   <a href="#安装">安装</a> ·
   <a href="#一个-work四个视图">四个视图</a> ·
   <a href="#work继续的是工作不只是对话">Work</a> ·
   <a href="#给-agent-用">给 Agent 用</a> ·
-  <a href="README.md">English</a>
+  <a href="README.md">English</a> ·
+  开源 · Alpha · macOS &amp; Linux
 </p>
 
 Herduck 是人和 Agent 共享的**工作上下文基础设施**：把散落在不同 Agent、Session、Project 和 Runtime 中的目标、当前状态、下一步以及相关证据重新组织在一起，让一项工作始终保持完整、可理解，并能从正确的位置继续。
@@ -107,6 +109,11 @@ Work 始终可理解、可继续。**
 </table>
 
 <p align="center"><sub>Herduck alpha 在 Ghostty 中的原生截图，历史对话为预设示例。<a href="assets/screenshots/README.md">截图说明</a>。</sub></p>
+
+
+## Demo
+
+> 15–30 秒演示（Work 聚类 + 不活跃 Agent 睡眠/恢复）即将放在这里（`assets/demo-work-sleep.gif`）。在此之前，上方截图展示四个视图。
 
 ## 安装
 

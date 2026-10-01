@@ -11,11 +11,13 @@
 </p>
 
 <p align="center">
+  <a href="https://www.herduck.com">herduck.com</a> ·
   <a href="#install">Install</a> ·
   <a href="#one-work-four-views">Four views</a> ·
   <a href="#work-continue-the-work-not-just-the-conversation">Work</a> ·
   <a href="#for-agents">For Agents</a> ·
-  <a href="README.zh-CN.md">简体中文</a>
+  <a href="README.zh-CN.md">简体中文</a> ·
+  Open source · Alpha · macOS &amp; Linux
 </p>
 
 Herduck is the **work-context infrastructure** shared by people and Agents: it reassembles the
@@ -114,6 +116,11 @@ The Work stays understandable and ready to continue.**
 </table>
 
 <p align="center"><sub>Native Ghostty captures of Herduck alpha with prepared example histories. <a href="assets/screenshots/README.md">Capture notes</a>.</sub></p>
+
+
+## Demo
+
+> Looking for a short walkthrough? A 15–30s clip of Work clustering + inactive Agent sleep/resume will land here soon (`assets/demo-work-sleep.gif`). Until then, the screenshots above show the four views.
 
 ## Install
 
