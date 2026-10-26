@@ -1,0 +1,24 @@
+id = "wenhanweime.herduck"
+name = "Herduck"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Thin bridge to Herduck (separate app): open Herduck from Herdr, or peek goal/status/blocker/next. Complements Herdr; Herduck is not a Herdr plugin."
+platforms = ["macos", "linux"]
+
+[[actions]]
+id = "open"
+title = "Open Herduck"
+contexts = ["workspace", "pane"]
+command = ["bash", "open-herduck.sh"]
+
+[[actions]]
+id = "show-work"
+title = "Show Herduck work status"
+contexts = ["workspace", "pane"]
+command = ["bash", "show-work.sh"]
+
+[[panes]]
+id = "herduck"
+title = "Herduck"
+placement = "overlay"
+command = ["bash", "open-herduck.sh", "--pane"]
