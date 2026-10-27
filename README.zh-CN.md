@@ -113,7 +113,11 @@ Work 始终可理解、可继续。**
 
 ## Demo
 
-> 15–30 秒演示（Work 聚类 + 不活跃 Agent 睡眠/恢复）即将放在这里（`assets/demo-work-sleep.gif`）。在此之前，上方截图展示四个视图。
+<p align="center">
+  <img src="assets/demo-tour.gif" alt="12 秒看完 Herduck 四个视图：Sessions、Work、Agents、Projects" width="760">
+</p>
+
+<p align="center"><sub>12 秒看完四个视图，由上方截图拼成（示例数据，不是实时录屏）。Work 聚类 + Agent 睡眠/恢复的实机录屏仍在计划中。</sub></p>
 
 ## 安装
 

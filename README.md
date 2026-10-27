@@ -120,7 +120,11 @@ The Work stays understandable and ready to continue.**
 
 ## Demo
 
-> Looking for a short walkthrough? A 15–30s clip of Work clustering + inactive Agent sleep/resume will land here soon (`assets/demo-work-sleep.gif`). Until then, the screenshots above show the four views.
+<p align="center">
+  <img src="assets/demo-tour.gif" alt="A 12-second tour of the four Herduck views: Sessions, Work, Agents and Projects" width="760">
+</p>
+
+<p align="center"><sub>A 12-second tour of the four views, made from the screenshots above (prepared example data, not a live recording). A live screen recording of Work clustering and Agent sleep/resume is still planned.</sub></p>
 
 ## Install
 
