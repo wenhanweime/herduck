@@ -230,6 +230,9 @@ Herduck         让工作跨越以上所有层持续下去
 
 Herduck 与 Agent 已有的记忆和知识工具配合使用：它读取近期证据，而不是取代它们。
 
+不确定自己要不要用？这里有一份和 `claude --resume`、tmux、Herdr 的诚实对比：
+[docs/compare-resume-tmux.zh-CN.md](docs/compare-resume-tmux.zh-CN.md)。
+
 Herduck 源自 [Herdr](https://github.com/ogulcancelik/herdr)——一个面向 Agent、操作方式类似 tmux 的终端运行时。
 Herdr 回答"Agent 在哪里？"，Herduck 进一步回答"它们在参与哪些工作，我该从哪里继续？"。
 

@@ -262,6 +262,9 @@ Herduck             keeps the work continuous across all of them
 Herduck complements the memory and knowledge tools your Agents already use; it reads recent
 evidence rather than replacing it.
 
+Not sure whether you need it? See the honest comparison with `claude --resume`, tmux, and Herdr:
+[docs/compare-resume-tmux.md](docs/compare-resume-tmux.md).
+
 Herduck grew out of [Herdr](https://github.com/ogulcancelik/herdr), an Agent-aware terminal
 runtime with a workflow familiar to tmux users. Herdr answers "Where are the Agents?"
 Herduck adds "What work are they contributing to, and where can I continue?"
