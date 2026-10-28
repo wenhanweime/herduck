@@ -114,10 +114,10 @@ Work 始终可理解、可继续。**
 ## Demo
 
 <p align="center">
-  <img src="assets/demo-tour.gif" alt="12 秒看完 Herduck 四个视图：Sessions、Work、Agents、Projects" width="760">
+  <img src="assets/demo-live.gif" alt="Herduck 实机录屏：Sessions、对话预览、Work 按主题聚合并显示目标/阻塞/下一步，以及 Projects" width="860">
 </p>
 
-<p align="center"><sub>12 秒看完四个视图，由上方截图拼成（示例数据，不是实时录屏）。Work 聚类 + Agent 睡眠/恢复的实机录屏仍在计划中。</sub></p>
+<p align="center"><sub>约 23 秒的实机录屏：真实的 Herduck 0.1.0-alpha.4 二进制，由脚本模拟鼠标点击驱动。项目与对话均为虚构的演示数据；Work 的主题聚类由本地替身模型应答，以保证可重复。录制脚本不在本仓库中。此前的截图拼接版仍在 <a href="assets/demo-tour.gif"><code>assets/demo-tour.gif</code></a>。Agent 睡眠/恢复暂未展示。</sub></p>
 
 ## 安装
 

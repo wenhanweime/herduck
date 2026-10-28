@@ -121,10 +121,10 @@ The Work stays understandable and ready to continue.**
 ## Demo
 
 <p align="center">
-  <img src="assets/demo-tour.gif" alt="A 12-second tour of the four Herduck views: Sessions, Work, Agents and Projects" width="760">
+  <img src="assets/demo-live.gif" alt="Live recording of Herduck: Sessions, a conversation preview, then Work grouping sessions by topic with goal, blocker and next steps, and Projects" width="860">
 </p>
 
-<p align="center"><sub>A 12-second tour of the four views, made from the screenshots above (prepared example data, not a live recording). A live screen recording of Work clustering and Agent sleep/resume is still planned.</sub></p>
+<p align="center"><sub>A ~23-second live recording of the real Herduck 0.1.0-alpha.4 binary, driven by scripted mouse clicks. The projects and conversations are fictional demo data, and the Work topic clustering is answered by a local stand-in model so the run is repeatable. The recording scripts are not part of this repo. The earlier screenshot montage is still at <a href="assets/demo-tour.gif"><code>assets/demo-tour.gif</code></a>. Agent sleep/resume is not shown yet.</sub></p>
 
 ## Install
 
