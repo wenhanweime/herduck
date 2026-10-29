@@ -1,10 +1,10 @@
-# Herduck vs `claude --resume`, tmux, and Herdr
+# Herduck vs `claude --resume`, tmux, Herdr, and other agent session managers
 
 [简体中文](compare-resume-tmux.zh-CN.md)
 
 *Written by the Herduck author. Herduck is an early-stage alpha, so this page tries to say plainly
 what each tool is good at and where Herduck is not the right choice. Facts about other tools are
-taken from their own documentation (linked at the bottom) as of 2026-10-28; check there if
+taken from their own documentation (linked at the bottom) as of 2026-10-28 (the section on other session managers: 2026-10-30); check there if
 something looks stale.*
 
 ## The short version
@@ -116,11 +116,34 @@ What it costs, honestly:
 - Its Work layer is only as good as the goal/blocker/next-step notes and the grouping; it does
   not make an Agent smarter or give it a bigger context window.
 
+## Other multi-agent session managers
+
+Several other open-source tools manage many coding-agent sessions in the terminal. The
+descriptions below are short summaries of each project's own README, checked on 2026-10-30;
+read their pages for the details. Most of them focus on **running** many Agents in parallel
+(isolated worktrees, status, notifications). Herduck's focus is different: remembering **what
+each piece of work is for and what comes next**, across Agents and days. If parallel execution
+is your main problem, one of these may suit you better.
+
+| Tool | What it is, per its README | Worth knowing |
+| --- | --- | --- |
+| [Claude Squad](https://github.com/smtg-ai/claude-squad) | Terminal app to manage multiple AI terminal agents (Claude Code, Codex, OpenCode, Amp) | Each task gets its own isolated git workspace; tasks can run in the background; review changes before applying. Needs tmux and `gh`. |
+| [Agent Deck](https://github.com/asheshgoplani/agent-deck) | Terminal session manager for AI coding agents: one TUI for Claude, Gemini, OpenCode, Codex and more | Shows every session's state in one screen; built-in MCP and skills managers; session groups. Uses tmux. macOS, Linux, WSL. |
+| [CCManager](https://github.com/kbwo/ccmanager) | CLI for running many AI coding assistant sessions (Claude Code, Gemini CLI, Codex CLI, Cursor Agent, Copilot CLI, OpenCode and others) across git worktrees and projects | No tmux needed; busy / waiting / idle status; restores sessions after restart. Installs with npm. |
+| [cmux](https://github.com/manaflow-ai/cmux) | Ghostty-based macOS terminal with vertical tabs and notifications for AI coding agents | A full terminal app rather than a layer on top; macOS only. |
+| [Rove](https://github.com/Sma1lboy/rove) | "The agent multiplexer for your terminal" | Parallel tasks in isolated git worktrees and branches; sessions persist on disconnect; scriptable. |
+
+Claude Code itself now also has **agent view** (`claude agents`) for watching background Claude
+Code sessions in one screen — see the [Claude Code section](#claude---resume--claude---continue)
+above and [How to keep track of many Claude Code sessions](manage-many-claude-code-sessions.md).
+
 ## Quick decision guide
 
 - One Agent, one folder, occasional resume → `claude --resume`.
 - Need terminals to survive detach/SSH, nothing more → tmux.
 - Want Agent-aware status and a runtime built for coding Agents → Herdr.
+- Mainly want many Agents running in parallel, each in its own worktree → see
+  [other multi-agent session managers](#other-multi-agent-session-managers).
 - Many Agents and folders, work that spans days, and you keep losing the thread of *what the
   work is* → try Herduck, ideally on a non-critical project first, and tell me what breaks:
   [open an issue](https://github.com/wenhanweime/herduck/issues).
@@ -129,8 +152,13 @@ What it costs, honestly:
 
 - Claude Code CLI reference (`--continue`, `--resume`, `--name`, `claude agents`, `claude attach`):
   <https://code.claude.com/docs/en/cli-reference>
-- Herdr README and docs: <https://github.com/ogulcancelik/herdr> · <https://herdr.dev/docs/>
+- Herdr README and docs: <https://github.com/herdrdev/herdr> · <https://herdr.dev/docs/>
 - tmux: <https://github.com/tmux/tmux/wiki> · tmux-resurrect:
   <https://github.com/tmux-plugins/tmux-resurrect>
 - Herduck: [README](../README.md) · [UPSTREAM.md](UPSTREAM.md) ·
   [configuration](configuration.md) · [project overview](project-overview.md)
+- Other tools (READMEs, checked 2026-10-30): [Claude Squad](https://github.com/smtg-ai/claude-squad) ·
+  [Agent Deck](https://github.com/asheshgoplani/agent-deck) · [CCManager](https://github.com/kbwo/ccmanager) ·
+  [cmux](https://github.com/manaflow-ai/cmux) · [Rove](https://github.com/Sma1lboy/rove)
+- More: [How to keep track of many Claude Code sessions](manage-many-claude-code-sessions.md) ·
+  [Herduck and Herdr](herduck-and-herdr.md)

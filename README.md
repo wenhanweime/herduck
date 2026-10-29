@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.herduck.com">herduck.com</a> ·
+  <a href="https://herduck.com">herduck.com</a> ·
   <a href="#install">Install</a> ·
   <a href="#one-work-four-views">Four views</a> ·
   <a href="#work-continue-the-work-not-just-the-conversation">Work</a> ·
@@ -24,6 +24,11 @@ Herduck is the **work-context infrastructure** shared by people and Agents: it r
 goal, current state, next steps, and supporting evidence scattered across Agents, sessions,
 projects, and runtimes, so a piece of work stays whole, understandable, and ready to continue
 from the right place.
+
+In plain words: Herduck is an open-source terminal app for people who run many coding agents —
+Claude Code, Codex, OpenCode, Pi — at the same time. Derived from [Herdr](https://github.com/herdrdev/herdr),
+it remembers what each piece of work is for, where it stands, and what's next, so you can pick it
+up again the next day.
 
 ## The problem
 
@@ -262,10 +267,15 @@ Herduck             keeps the work continuous across all of them
 Herduck complements the memory and knowledge tools your Agents already use; it reads recent
 evidence rather than replacing it.
 
-Not sure whether you need it? See the honest comparison with `claude --resume`, tmux, and Herdr:
-[docs/compare-resume-tmux.md](docs/compare-resume-tmux.md).
+Not sure whether you need it? See the honest comparison with `claude --resume`, tmux, Herdr, and
+other agent session managers: [docs/compare-resume-tmux.md](docs/compare-resume-tmux.md).
 
-Herduck grew out of [Herdr](https://github.com/ogulcancelik/herdr), an Agent-aware terminal
+Guides:
+
+- [How to keep track of many Claude Code (and Codex) sessions](docs/manage-many-claude-code-sessions.md)
+- [Herduck and Herdr: what each one does, and how they work together](docs/herduck-and-herdr.md)
+
+Herduck grew out of [Herdr](https://github.com/herdrdev/herdr), an Agent-aware terminal
 runtime with a workflow familiar to tmux users. Herdr answers "Where are the Agents?"
 Herduck adds "What work are they contributing to, and where can I continue?"
 

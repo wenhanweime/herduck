@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://www.herduck.com">herduck.com</a> ·
+  <a href="https://herduck.com">herduck.com</a> ·
   <a href="#安装">安装</a> ·
   <a href="#一个-work四个视图">四个视图</a> ·
   <a href="#work继续的是工作不只是对话">Work</a> ·
@@ -21,6 +21,8 @@
 </p>
 
 Herduck 是人和 Agent 共享的**工作上下文基础设施**：把散落在不同 Agent、Session、Project 和 Runtime 中的目标、当前状态、下一步以及相关证据重新组织在一起，让一项工作始终保持完整、可理解，并能从正确的位置继续。
+
+说白了：Herduck 是一个开源终端应用，给同时开好几个编程 Agent（Claude Code、Codex、OpenCode、Pi）的人用。它从 [Herdr](https://github.com/herdrdev/herdr) 派生而来，帮你记住每件事为了什么、做到哪了、下一步是什么，第二天打开就能接着做。
 
 ## 问题
 
@@ -230,10 +232,15 @@ Herduck         让工作跨越以上所有层持续下去
 
 Herduck 与 Agent 已有的记忆和知识工具配合使用：它读取近期证据，而不是取代它们。
 
-不确定自己要不要用？这里有一份和 `claude --resume`、tmux、Herdr 的诚实对比：
+不确定自己要不要用？这里有一份和 `claude --resume`、tmux、Herdr 以及其他 Agent 会话管理工具的诚实对比：
 [docs/compare-resume-tmux.zh-CN.md](docs/compare-resume-tmux.zh-CN.md)。
 
-Herduck 源自 [Herdr](https://github.com/ogulcancelik/herdr)——一个面向 Agent、操作方式类似 tmux 的终端运行时。
+使用指南：
+
+- [同时开好几个 Claude Code（和 Codex），怎么不乱、第二天怎么接着做](docs/manage-many-claude-code-sessions.zh-CN.md)
+- [Herduck 和 Herdr：各自做什么，怎么一起用](docs/herduck-and-herdr.zh-CN.md)
+
+Herduck 源自 [Herdr](https://github.com/herdrdev/herdr)——一个面向 Agent、操作方式类似 tmux 的终端运行时。
 Herdr 回答"Agent 在哪里？"，Herduck 进一步回答"它们在参与哪些工作，我该从哪里继续？"。
 
 ## 开发
