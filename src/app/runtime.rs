@@ -941,7 +941,12 @@ mod tests {
                 24,
                 80,
                 std::env::temp_dir(),
-                &["zsh".into(), "-f".into(), "-i".into()],
+                &[
+                    "bash".into(),
+                    "--norc".into(),
+                    "--noprofile".into(),
+                    "-i".into(),
+                ],
                 &crate::pane::PaneLaunchEnv::default(),
                 crate::pane::AgentDetection::Disabled,
                 1024 * 1024,
@@ -972,7 +977,7 @@ mod tests {
                 .get(&terminal_id)
                 .unwrap()
                 .try_send_bytes(bytes::Bytes::from(format!(
-                    "zsh -fc '{trap}exec -a {executable} sleep 300'\n"
+                    "bash --norc --noprofile -c '{trap}exec -a {executable} sleep 300'\n"
                 )))
                 .unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -1079,7 +1084,13 @@ mod tests {
             24,
             80,
             std::env::temp_dir(),
-            &["zsh".into(), "-fc".into(), "exec -a codex sleep 300".into()],
+            &[
+                "bash".into(),
+                "--norc".into(),
+                "--noprofile".into(),
+                "-c".into(),
+                "exec -a codex sleep 300".into(),
+            ],
             &crate::pane::PaneLaunchEnv::default(),
             crate::pane::AgentDetection::Disabled,
             1024 * 1024,
