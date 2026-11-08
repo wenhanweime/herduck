@@ -188,11 +188,6 @@ pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn pump_input_source_runloop() {}
 
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn switch_to_chinese_input_source() -> Option<InputSourceRestore> {
-    None
-}
-
 /// Switches the host keyboard input source while prefix mode is active.
 ///
 /// `App` drives this through a trait so the prefix-mode transitions can be
