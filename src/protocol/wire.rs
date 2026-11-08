@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -395,6 +395,20 @@ pub enum ClientMessage {
         /// Replace an existing writable controller for this terminal.
         takeover: bool,
     },
+
+    /// Result of an action applied on the foreground client's host.
+    HostActionResult {
+        target_terminal_id: Option<String>,
+        paste: Option<String>,
+        error: Option<String>,
+    },
+}
+
+/// Operations owned by the connected host rather than the server machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HostAction {
+    PasteClipboard,
+    ToggleInputSource,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -663,6 +677,12 @@ pub enum ServerMessage {
     PrefixInputSource {
         /// Whether the ASCII input source should be active.
         active: bool,
+    },
+
+    /// Request a local host operation from the foreground client.
+    HostAction {
+        action: HostAction,
+        target_terminal_id: Option<String>,
     },
 }
 
@@ -1421,6 +1441,30 @@ mod tests {
                 bincode::serde::decode_from_slice(&encoded, bincode::config::standard()).unwrap();
             assert_eq!(msg, decoded);
         }
+    }
+
+    #[test]
+    fn host_actions_and_failures_roundtrip() {
+        for action in [HostAction::PasteClipboard, HostAction::ToggleInputSource] {
+            let message = ServerMessage::HostAction {
+                action,
+                target_terminal_id: Some("term_test".into()),
+            };
+            let mut bytes = Vec::new();
+            write_message(&mut bytes, &message).unwrap();
+            let actual: ServerMessage =
+                read_message(&mut bytes.as_slice(), MAX_FRAME_SIZE).unwrap();
+            assert_eq!(actual, message);
+        }
+        let message = ClientMessage::HostActionResult {
+            target_terminal_id: None,
+            paste: None,
+            error: Some("剪贴板不可用".into()),
+        };
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &message).unwrap();
+        let actual: ClientMessage = read_message(&mut bytes.as_slice(), MAX_FRAME_SIZE).unwrap();
+        assert_eq!(actual, message);
     }
 
     // ---- Framing ----

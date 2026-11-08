@@ -103,6 +103,54 @@ impl App {
             return;
         }
 
+        if let AppEvent::TerminalInput { terminal_id, key } = ev {
+            if let Some(runtime) = self.terminal_runtimes.get(&terminal_id) {
+                let bytes = runtime.encode_terminal_key(key);
+                if !bytes.is_empty() {
+                    if let Err(error) = runtime.try_send_bytes(bytes.into()) {
+                        self.show_host_action_error(format!("Cannot send shortcut: {error}"));
+                    }
+                }
+            }
+            return;
+        }
+
+        if let AppEvent::HostAction { action, target } = ev {
+            // A server-internal drain must never access the server's clipboard or input source.
+            if !self.local_input_source_switch {
+                self.pending_host_actions.push((action, target));
+                return;
+            }
+            if let Some(error) = crate::platform::host_action_environment_error() {
+                self.show_host_action_error(error.into());
+                return;
+            }
+            let result = match action {
+                crate::protocol::HostAction::ToggleInputSource => self
+                    .host_input_source
+                    .toggle_manual(&mut self.host_ascii_active)
+                    .map_err(str::to_owned),
+                crate::protocol::HostAction::PasteClipboard => {
+                    match crate::platform::read_clipboard_text() {
+                        Some(text) => match target {
+                            Some(target) => {
+                                self.paste_host_text_to_terminal(&target.to_string(), text)
+                            }
+                            None => Err("Focus a terminal before pasting.".into()),
+                        },
+                        None => Err(
+                            "Clipboard text is unavailable. Use your device's Paste command."
+                                .into(),
+                        ),
+                    }
+                }
+            };
+            if let Err(error) = result {
+                self.show_host_action_error(error);
+            }
+            return;
+        }
+
         if let AppEvent::GitStatusRefreshed {
             results,
             cache_updates,
@@ -354,6 +402,44 @@ impl App {
 
         self.sync_toast_deadline(previous_toast);
         self.shutdown_detached_terminal_runtimes();
+    }
+
+    pub(crate) fn show_host_action_error(&mut self, error: String) {
+        self.state.config_diagnostic = Some(error);
+        self.config_diagnostic_deadline = Some(Instant::now() + Duration::from_secs(5));
+        self.render_dirty.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn paste_host_text_to_terminal(
+        &mut self,
+        terminal_id: &str,
+        text: String,
+    ) -> Result<(), String> {
+        // Resolve against durable terminal identity, never whatever happens to be focused when
+        // an asynchronous host clipboard read completes.
+        let target_id = self
+            .state
+            .terminals
+            .keys()
+            .find(|id| id.to_string() == terminal_id)
+            .cloned()
+            .ok_or("The shortcut's target terminal is no longer available.")?;
+        if let Ok(target) = self.resolve_terminal_target(terminal_id) {
+            if let Some(runtime) = self.state.runtime_for_pane_in_workspace(
+                &self.terminal_runtimes,
+                target.ws_idx,
+                target.pane_id,
+            ) {
+                return runtime
+                    .try_send_paste(text)
+                    .map_err(|error| error.to_string());
+            }
+        }
+        self.terminal_runtimes
+            .get(&target_id)
+            .ok_or("The shortcut's target terminal is no longer available.")?
+            .try_send_paste(text)
+            .map_err(|error| error.to_string())
     }
 
     /// Delivers the first user message only after the resumed agent has rendered an idle prompt.
@@ -1562,6 +1648,73 @@ pub(super) mod test_support {
 mod tests {
     use super::*;
     use crate::detect::{Agent, AgentState};
+
+    #[tokio::test]
+    async fn host_paste_keeps_terminal_target_and_bracketed_input_after_focus_change() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("paste")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        runtime.test_process_pty_bytes(b"\x1b[?2004h");
+        app.state.insert_test_runtime(pane_id, runtime);
+        app.state.mode = Mode::Terminal;
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .to_string();
+        app.state.active = None;
+        app.state.mode = Mode::Navigate;
+        app.paste_host_text_to_terminal(&terminal_id, "你好\nworld".into())
+            .expect("paste to original terminal");
+        assert_eq!(
+            receiver.recv().await.expect("terminal paste").as_ref(),
+            "\x1b[200~你好\nworld\x1b[201~".as_bytes()
+        );
+        assert!(receiver.try_recv().is_err(), "paste must only be sent once");
+        assert!(app
+            .paste_host_text_to_terminal("removed", "must not route".into())
+            .is_err());
+        assert!(
+            receiver.try_recv().is_err(),
+            "a missing target must not redirect paste"
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_terminal_input_keeps_target_after_focus_changes() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let terminal_id = crate::terminal::TerminalId::alloc();
+        let (runtime, mut receiver) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+        app.state.active = None;
+        app.handle_internal_event(AppEvent::TerminalInput {
+            terminal_id,
+            key: crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Char('c'),
+                crossterm::event::KeyModifiers::CONTROL,
+            ),
+        });
+        assert_eq!(
+            receiver.recv().await.expect("pinned input").as_ref(),
+            b"\x03"
+        );
+    }
 
     #[tokio::test]
     async fn idle_resumed_agent_receives_pending_catalog_submission_once() {

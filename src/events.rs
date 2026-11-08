@@ -132,6 +132,16 @@ pub enum AppEvent {
     /// restore (`active = false`): the client in server mode (via server forwarding), the
     /// app itself in monolithic mode.
     PrefixInputSource { active: bool },
+    /// A foreground-host operation; headless servers forward this to their client.
+    HostAction {
+        action: crate::protocol::HostAction,
+        target: Option<crate::terminal::TerminalId>,
+    },
+    /// One step of a queued input sequence, pinned to a terminal rather than current UI focus.
+    TerminalInput {
+        terminal_id: crate::terminal::TerminalId,
+        key: crate::input::TerminalKey,
+    },
     /// A pane child reported its shell current directory through terminal
     /// metadata such as OSC 7.
     TerminalCwdReported {

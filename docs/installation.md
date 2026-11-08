@@ -3,8 +3,8 @@
 Herduck is an alpha preview for macOS and Linux. Install your coding-agent CLIs and complete their
 login separately; Herduck does not supply an Agent subscription or credentials.
 
-The current published alpha is **0.1.0-alpha.4**. The npm package installs the same native
-binary as this repository, including Work plans, Topic covers, and the project overview.
+The current published alpha is **0.1.0-alpha.5**. The npm package installs the same native
+binary as this repository, including the Quick Keys dock, Agent-row close, Work plans, Topic covers, and the project overview.
 
 ## npm and npx
 
@@ -23,7 +23,7 @@ npx --yes herduck@alpha
 ```
 
 The `alpha` tag selects the published alpha. To pin the available package, use
-`npm install -g herduck@0.1.0-alpha.4` or `npx --yes herduck@0.1.0-alpha.4`.
+`npm install -g herduck@0.1.0-alpha.5` or `npx --yes herduck@0.1.0-alpha.5`.
 
 The first launch downloads the matching binary from the exact GitHub release and checks its SHA-256
 against the package's embedded manifest. Subsequent launches reuse the verified binary and can work offline. Agent
@@ -35,17 +35,17 @@ your user. Do not run Herduck with `sudo`.
 
 ### Install from GitHub
 
-The identical npm archive is also attached to the GitHub release. These URLs pin version `0.1.0-alpha.4`:
+The identical npm archive is also attached to the GitHub release. These URLs pin version `0.1.0-alpha.5`:
 
 ```sh
-npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.4/herduck-0.1.0-alpha.4.tgz
+npm install -g https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.5/herduck-0.1.0-alpha.5.tgz
 herduck
 ```
 
 Or use npx:
 
 ```sh
-npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.4/herduck-0.1.0-alpha.4.tgz herduck
+npx --yes --package=https://github.com/wenhanweime/herduck/releases/download/v0.1.0-alpha.5/herduck-0.1.0-alpha.5.tgz herduck
 ```
 
 ## Supported prebuilt platforms
@@ -64,7 +64,7 @@ have not been validated. macOS binaries use ad hoc signing, not Apple notarizati
 ## Direct binaries
 
 Download the asset for your CPU and `SHA256SUMS` from the
-[release](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.4). In the download directory,
+[release](https://github.com/wenhanweime/herduck/releases/tag/v0.1.0-alpha.5). In the download directory,
 verify that asset before installation. For example, on Apple silicon:
 
 ```sh

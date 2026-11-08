@@ -86,6 +86,7 @@ mod product_announcements;
 mod projects;
 mod protocol;
 mod pty;
+mod quick_keys;
 mod raw_input;
 mod release_notes;
 mod remote;

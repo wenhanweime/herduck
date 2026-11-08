@@ -1022,19 +1022,19 @@ mod tests {
                 20,
                 3,
                 4096,
-                b"alpha\r\nbeta\r\ngamma\r\n",
+                b"SCROLLBACK_LINE_ONE\r\nbeta\r\ngamma\r\n",
             ),
         );
 
         let snapshot = capture_from_state_with_runtimes(&state, &terminal_runtimes);
         let encoded = serde_json::to_string(&snapshot).unwrap();
-        assert!(!encoded.contains("alpha"));
+        assert!(!encoded.contains("SCROLLBACK_LINE_ONE"));
         assert!(!encoded.contains("\"history\""));
 
         let history_snapshot = capture_history_from_state_with_runtimes(&state, &terminal_runtimes);
         let history = &history_snapshot.workspaces[0].tabs[0].panes[&root.raw()];
 
-        assert!(history.ansi.contains("alpha"));
+        assert!(history.ansi.contains("SCROLLBACK_LINE_ONE"));
         assert!(history.ansi.contains("gamma"));
         assert!(history.lines >= 3);
     }

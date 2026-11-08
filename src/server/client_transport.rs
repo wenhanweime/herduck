@@ -346,6 +346,13 @@ pub(crate) enum ServerEvent {
     ClientWriterDrained { client_id: u64 },
     /// Ctrl+C or external shutdown signal received.
     QuitSignal,
+    /// The foreground host reports a local action failure.
+    ClientHostActionResult {
+        client_id: u64,
+        target_terminal_id: Option<String>,
+        paste: Option<String>,
+        error: Option<String>,
+    },
 }
 
 /// Clamp client-reported terminal dimensions to a minimum viable size.
@@ -747,6 +754,26 @@ fn client_read_loop(
             ClientMessage::Hello { .. } => {
                 // Duplicate Hello — ignore.
                 continue;
+            }
+            ClientMessage::HostActionResult {
+                target_terminal_id,
+                paste,
+                error,
+            } => {
+                if paste
+                    .as_ref()
+                    .is_some_and(|text| text.len() > MAX_INPUT_PAYLOAD)
+                {
+                    let _ = server_event_tx
+                        .blocking_send(ServerEvent::ClientDisconnected { client_id });
+                    break;
+                }
+                ServerEvent::ClientHostActionResult {
+                    client_id,
+                    target_terminal_id,
+                    paste,
+                    error: error.map(|text| text.chars().take(512).collect()),
+                }
             }
         };
 

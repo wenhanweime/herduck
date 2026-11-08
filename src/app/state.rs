@@ -1582,6 +1582,7 @@ pub(crate) struct PaneFocusTarget {
 /// All application state — pure data, no channels or async runtime.
 /// Testable without PTYs or a tokio runtime.
 pub struct AppState {
+    pub(crate) quick_keys: crate::quick_keys::QuickKeysState,
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
     /// Terminal ids whose size is currently owned by a direct attach client.
@@ -1970,6 +1971,7 @@ impl AppState {
     /// Create an AppState for testing — no channels, no PTYs.
     pub fn test_new() -> Self {
         Self {
+            quick_keys: crate::quick_keys::QuickKeysState::default(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),

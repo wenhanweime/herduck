@@ -188,6 +188,11 @@ pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn pump_input_source_runloop() {}
 
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn switch_to_chinese_input_source() -> Option<InputSourceRestore> {
+    None
+}
+
 /// Switches the host keyboard input source while prefix mode is active.
 ///
 /// `App` drives this through a trait so the prefix-mode transitions can be
@@ -210,6 +215,47 @@ pub(crate) struct RealPrefixInputSource {
     restore: Option<InputSourceRestore>,
 }
 
+/// An SSH client process does not own the device keyboard or clipboard. Reading the server's
+/// desktop clipboard here would act on the wrong machine, including SSH sessions on macOS.
+pub(crate) fn host_action_environment_error() -> Option<&'static str> {
+    host_action_environment_error_for(
+        std::env::var_os("SSH_CONNECTION").is_some(),
+        std::env::var_os("SSH_TTY").is_some(),
+    )
+}
+
+fn host_action_environment_error_for(ssh_connection: bool, ssh_tty: bool) -> Option<&'static str> {
+    (ssh_connection || ssh_tty)
+        .then_some("请使用设备键盘的粘贴或中英切换；当前 SSH 终端无法调用手机系统动作。")
+}
+
+impl RealPrefixInputSource {
+    /// Manually switch between ASCII and the input source saved by this control.
+    /// Keeps its restore state separate from prefix-mode switching.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn toggle_manual(&mut self, active: &mut bool) -> Result<(), &'static str> {
+        if *active {
+            self.restore();
+            *active = false;
+            return Ok(());
+        }
+        self.switch_to_ascii();
+        if self.restore.is_none() {
+            self.restore = switch_to_chinese_input_source();
+        }
+        if self.restore.is_none() {
+            return Err("Enable a Chinese input source in macOS Keyboard settings to use 中/英.");
+        }
+        *active = true;
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub(crate) fn toggle_manual(&mut self, _active: &mut bool) -> Result<(), &'static str> {
+        Err("Switch the input language using your device's keyboard controls.")
+    }
+}
+
 impl PrefixInputSource for RealPrefixInputSource {
     fn switch_to_ascii(&mut self) {
         if self.restore.is_none() {
@@ -228,6 +274,14 @@ impl PrefixInputSource for RealPrefixInputSource {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_actions_are_unavailable_over_ssh_without_reading_the_server_clipboard() {
+        assert!(host_action_environment_error_for(false, false).is_none());
+        for (connection, tty) in [(true, false), (false, true), (true, true)] {
+            assert!(host_action_environment_error_for(connection, tty).is_some());
+        }
+    }
 
     #[test]
     fn detached_custom_command_preserves_unix_login_shell_flag() {

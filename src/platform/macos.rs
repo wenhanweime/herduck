@@ -174,6 +174,15 @@ extern "C" {
     #[link_name = "kTISPropertyInputSourceID"]
     static TIS_PROPERTY_INPUT_SOURCE_ID: CfStringRef;
 
+    #[link_name = "kTISPropertyInputSourceLanguages"]
+    static TIS_PROPERTY_INPUT_SOURCE_LANGUAGES: CfStringRef;
+
+    #[link_name = "kTISPropertyInputSourceIsSelectCapable"]
+    static TIS_PROPERTY_INPUT_SOURCE_IS_SELECT_CAPABLE: CfStringRef;
+
+    #[link_name = "TISCreateInputSourceList"]
+    fn tis_create_input_source_list(properties: CfTypeRef, include_all: Boolean) -> CfTypeRef;
+
     #[link_name = "TISCopyCurrentKeyboardInputSource"]
     fn tis_copy_current_keyboard_input_source() -> TisInputSourceRef;
 
@@ -197,6 +206,15 @@ extern "C" {
 
     #[link_name = "CFEqual"]
     fn cf_equal(left: CfTypeRef, right: CfTypeRef) -> Boolean;
+
+    #[link_name = "CFArrayGetCount"]
+    fn cf_array_get_count(array: CfTypeRef) -> CfIndex;
+
+    #[link_name = "CFArrayGetValueAtIndex"]
+    fn cf_array_get_value_at_index(array: CfTypeRef, index: CfIndex) -> CfTypeRef;
+
+    #[link_name = "CFBooleanGetValue"]
+    fn cf_boolean_get_value(value: CfTypeRef) -> Boolean;
 
     #[link_name = "CFStringGetCStringPtr"]
     fn cf_string_get_cstring_ptr(value: CfStringRef, encoding: u32) -> *const libc::c_char;
@@ -308,6 +326,51 @@ pub(crate) fn switch_to_ascii_input_source() -> Option<InputSourceRestore> {
         }
 
         Some(InputSourceRestore { previous: current })
+    }
+}
+
+/// Select an enabled Chinese input mode when the host currently uses an English layout.
+pub(crate) fn switch_to_chinese_input_source() -> Option<InputSourceRestore> {
+    // SAFETY: Copy/Create return retained CF references. Array and property values are borrowed
+    // until the array is released; only the separately retained current source survives the call.
+    unsafe {
+        let current =
+            NonNull::new(tis_copy_current_keyboard_input_source() as *mut TisInputSource)?;
+        let sources = tis_create_input_source_list(std::ptr::null(), 0);
+        if sources.is_null() {
+            cf_release(current.as_ptr().cast());
+            return None;
+        }
+        let mut switched = false;
+        for index in 0..cf_array_get_count(sources) {
+            let source = cf_array_get_value_at_index(sources, index) as TisInputSourceRef;
+            let selectable =
+                tis_get_input_source_property(source, TIS_PROPERTY_INPUT_SOURCE_IS_SELECT_CAPABLE);
+            if selectable.is_null() || cf_boolean_get_value(selectable) == 0 {
+                continue;
+            }
+            let languages =
+                tis_get_input_source_property(source, TIS_PROPERTY_INPUT_SOURCE_LANGUAGES);
+            let chinese = !languages.is_null()
+                && (0..cf_array_get_count(languages)).any(|index| {
+                    cf_string_to_string(cf_array_get_value_at_index(languages, index))
+                        .is_some_and(|language| language == "zh" || language.starts_with("zh-"))
+                });
+            if chinese
+                && !input_source_ids_equal(current.as_ptr(), source)
+                && tis_select_input_source(source) == 0
+            {
+                switched = true;
+                break;
+            }
+        }
+        cf_release(sources);
+        if switched {
+            Some(InputSourceRestore { previous: current })
+        } else {
+            cf_release(current.as_ptr().cast());
+            None
+        }
     }
 }
 

@@ -4,6 +4,35 @@ use crate::app::state::{AppState, ViewLayout};
 
 use super::ScrollbarClickTarget;
 
+impl crate::app::App {
+    pub(super) fn close_agent_conversation_via_api(
+        &mut self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    ) {
+        let Some(target) = self.public_pane_id(ws_idx, pane_id) else {
+            return;
+        };
+        let focused_pane = |app: &Self| {
+            let ws_idx = app.state.active?;
+            let pane_id = app.state.workspaces.get(ws_idx)?.focused_pane_id()?;
+            app.public_pane_id(ws_idx, pane_id)
+        };
+        let focused = focused_pane(self);
+        self.runtime_pane_close("tui.pane.close", target);
+        // Closing the last pane of another workspace can move the runtime's focus.
+        // Keep the conversation the user was reading when it still exists.
+        if self.state.mode == crate::app::Mode::Terminal {
+            if let Some(focused) = focused {
+                let current = focused_pane(self);
+                if current.as_ref() != Some(&focused) && self.parse_pane_id(&focused).is_some() {
+                    self.runtime_pane_focus("tui.pane.focus", focused);
+                }
+            }
+        }
+    }
+}
+
 impl AppState {
     pub(super) fn workspace_list_rect(&self) -> Rect {
         let sidebar = self.view.sidebar_rect;
@@ -422,6 +451,32 @@ impl AppState {
         best.map(|(insert_idx, _)| insert_idx)
     }
 
+    pub(super) fn agent_detail_close_target_at(
+        &self,
+        col: u16,
+        row: u16,
+    ) -> Option<(usize, crate::layout::PaneId)> {
+        if self.sidebar_collapsed {
+            return None;
+        }
+        let area = self.agent_panel_rect();
+        let body = crate::ui::agent_panel_body_rect(
+            area,
+            crate::ui::should_show_scrollbar(crate::ui::agent_panel_scroll_metrics(self, area)),
+        );
+        if !crate::ui::agent_entry_close_rect(body, row)
+            .contains(ratatui::layout::Position::new(col, row))
+        {
+            return None;
+        }
+        let target = self.agent_detail_target_at(row)?;
+        // Metadata rows still focus the conversation; only its first row has a close button.
+        if row > body.y && self.agent_detail_target_at(row - 1) == Some(target) {
+            return None;
+        }
+        Some((target.0, target.2))
+    }
+
     pub(super) fn agent_detail_target_at(
         &self,
         row: u16,
@@ -815,6 +870,101 @@ mod tests {
             app.state.agent_detail_target_at(body.y + 1),
             Some((1, 0, second_pane))
         );
+    }
+
+    #[test]
+    fn agent_close_button_closes_inactive_tab_and_keeps_focused_conversation() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        let focused_pane = ws.tabs[0].root_pane;
+        let inactive_tab = ws.test_add_tab(Some("old conversation"));
+        let inactive_pane = ws.tabs[inactive_tab].root_pane;
+        ws.active_tab = 0;
+        app.state.workspaces = vec![ws];
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.terminal_id_for_pane(0, inactive_pane).unwrap();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.set_agent_inactive(true);
+        app.state.active = Some(0);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 30));
+        let area = app.state.agent_panel_rect();
+        let (col, row) = (area.y..area.bottom())
+            .flat_map(|row| (area.x..area.right()).map(move |col| (col, row)))
+            .find(|&(col, row)| {
+                app.state.agent_detail_close_target_at(col, row) == Some((0, inactive_pane))
+            })
+            .expect("inactive conversation has a close button");
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), col, row));
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(
+            app.state.workspaces[0].focused_pane_id(),
+            Some(focused_pane)
+        );
+        assert!(!app.state.terminals.contains_key(&terminal_id));
+        assert_eq!(app.state.mode, Mode::Terminal);
+    }
+
+    #[test]
+    fn scrolled_agent_close_buttons_skip_metadata_gaps_and_scrollbar() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = (0..8)
+            .map(|i| Workspace::test_new(&format!("conversation {i}")))
+            .collect();
+        app.state.ensure_test_terminals();
+        for ws_idx in 0..8 {
+            let pane_id = app.state.workspaces[ws_idx].focused_pane_id().unwrap();
+            let terminal_id = app.state.terminal_id_for_pane(ws_idx, pane_id).unwrap();
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .detected_agent = Some(Agent::Codex);
+        }
+        app.state.active = Some(0);
+        app.state.sidebar_agents.row_gap = 1;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 30));
+        app.state.agent_panel_scroll = 2;
+        let area = app.state.agent_panel_rect();
+        let metrics = crate::ui::agent_panel_scroll_metrics(&app.state, area);
+        assert!(crate::ui::should_show_scrollbar(metrics));
+        let body = crate::ui::agent_panel_body_rect(area, true);
+        let pane_id = app.state.workspaces[2].focused_pane_id().unwrap();
+        let close = crate::ui::agent_entry_close_rect(body, body.y);
+        assert_eq!(
+            app.state.agent_detail_close_target_at(close.x + 1, close.y),
+            Some((2, pane_id))
+        );
+        assert_eq!(
+            app.state
+                .agent_detail_close_target_at(close.x + 1, close.y + 1),
+            None
+        );
+        assert_eq!(
+            app.state
+                .agent_detail_close_target_at(close.x + 1, close.y + 2),
+            None
+        );
+        assert_eq!(
+            app.state.agent_detail_close_target_at(body.right(), body.y),
+            None
+        );
+        let focused_workspace = app.state.workspaces[0].id.clone();
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            close.x + 1,
+            close.y,
+        ));
+        assert_eq!(app.state.workspaces.len(), 7);
+        assert_eq!(
+            app.state.workspaces[app.state.active.unwrap()].id,
+            focused_workspace
+        );
+        assert!(app
+            .state
+            .workspaces
+            .iter()
+            .all(|ws| ws.find_tab_index_for_pane(pane_id).is_none()));
     }
 
     #[test]

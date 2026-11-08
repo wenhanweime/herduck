@@ -37,6 +37,10 @@ pub(super) enum MouseAction {
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
     },
+    ClosePane {
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    },
     FocusToastTarget,
     ProjectTree(ProjectTreeAction),
     MoveWorkspace {
@@ -722,6 +726,13 @@ impl AppState {
                         return None;
                     }
 
+                    if let Some((ws_idx, pane_id)) =
+                        self.agent_detail_close_target_at(mouse.column, mouse.row)
+                    {
+                        self.mode = Mode::Terminal;
+                        return Some(MouseAction::ClosePane { ws_idx, pane_id });
+                    }
+
                     if let Some((ws_idx, _tab_idx, pane_id)) =
                         self.agent_detail_target_at(mouse.row)
                     {
@@ -1349,7 +1360,12 @@ impl AppState {
         let y = sidebar.y.min(terminal.y);
         let right = (sidebar.x + sidebar.width).max(terminal.x + terminal.width);
         let bottom = (sidebar.y + sidebar.height).max(terminal.y + terminal.height);
-        Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y))
+        let screen = Rect::new(x, y, right.saturating_sub(x), bottom.saturating_sub(y));
+        if self.quick_keys.rect.is_empty() {
+            screen
+        } else {
+            screen.union(self.quick_keys.rect)
+        }
     }
 
     pub(crate) fn context_menu_rect(&self) -> Option<Rect> {

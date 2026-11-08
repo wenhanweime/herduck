@@ -757,6 +757,16 @@ impl HeadlessServer {
     fn handle_deferred_requests_headless(&mut self) -> bool {
         let mut needs_render = false;
 
+        // API handling can drain AppEvent before the server's forwarding drain. Preserve those
+        // foreground host intents rather than losing them or applying them on the server host.
+        for (action, target) in std::mem::take(&mut self.app.pending_host_actions) {
+            self.send_to_foreground_client(ServerMessage::HostAction {
+                action,
+                target_terminal_id: target.map(|id| id.to_string()),
+            });
+            needs_render = true;
+        }
+
         if self.app.state.request_complete_onboarding {
             self.app.state.request_complete_onboarding = false;
             self.app.open_settings_from_onboarding();
@@ -2027,6 +2037,13 @@ impl HeadlessServer {
                 });
                 true
             }
+            AppEvent::HostAction { action, target } => {
+                self.send_to_foreground_client(ServerMessage::HostAction {
+                    action: *action,
+                    target_terminal_id: target.as_ref().map(ToString::to_string),
+                });
+                true
+            }
             AppEvent::StateChanged { pane_id, agent, .. } => {
                 // Capture toast before handling.
                 let toast_before = self.app.state.toast.clone();
@@ -2616,6 +2633,15 @@ impl HeadlessServer {
         let theme_changed = self.update_client_host_theme_from_events(client_id, &events);
         self.app
             .route_client_events(events, self.foreground_client_id == Some(client_id));
+        // Dispatch host intents before another client's input can change the foreground owner.
+        // An API-internal drain may have consumed an intent into pending_host_actions instead.
+        self.drain_all_internal_events_with_forwarding();
+        for (action, target) in std::mem::take(&mut self.app.pending_host_actions) {
+            self.send_to_foreground_client(ServerMessage::HostAction {
+                action,
+                target_terminal_id: target.map(|id| id.to_string()),
+            });
+        }
         if self.app.take_config_reloaded_from_disk() {
             self.reload_server_config(false);
         } else {
@@ -2777,6 +2803,33 @@ impl HeadlessServer {
                     Vec::new()
                 };
                 self.handle_client_input_events(client_id, events)
+            }
+            ServerEvent::ClientHostActionResult {
+                client_id,
+                target_terminal_id,
+                paste,
+                error,
+            } => {
+                if self.foreground_client_id != Some(client_id) || self.handoff_in_progress {
+                    return false;
+                }
+                if let Some(error) = error {
+                    self.app.show_host_action_error(error);
+                    return true;
+                }
+                if let Some(text) = paste {
+                    let result = match target_terminal_id {
+                        Some(target) => self.app.paste_host_text_to_terminal(&target, text),
+                        None => {
+                            Err("The shortcut's target terminal is no longer available.".into())
+                        }
+                    };
+                    if let Err(error) = result {
+                        self.app.show_host_action_error(error);
+                    }
+                    return true;
+                }
+                false
             }
             ServerEvent::ClientInputEvents { client_id, events } => {
                 if self.handoff_in_progress {
@@ -3469,6 +3522,10 @@ impl HeadlessServer {
 
     fn retained_pty_update_allowed_by_app_state(&self) -> bool {
         self.app.state.mode == app::Mode::Terminal
+            && self.app.state.quick_keys.editor.is_none()
+            && self.app.state.quick_keys.notice.is_none()
+            && self.app.state.quick_keys.press.is_none()
+            && self.app.state.quick_keys.activated.is_none()
             && self.app.state.popup_pane.is_none()
             && self.app.state.selection.is_none()
             && self.app.state.copy_mode.is_none()
@@ -3838,6 +3895,8 @@ impl HeadlessServer {
     /// (the server doesn't have a terminal to resize).
     fn handle_scheduled_tasks_headless(&mut self, now: Instant, geometry_dirty: bool) -> bool {
         let mut changed = self.app.sync_projects_snapshot();
+        changed |= self.app.state.quick_keys.expire_notice(now);
+        changed |= self.app.state.quick_keys.expire_activation(now);
 
         self.app.sync_headless_animation_timer(now);
 
@@ -8668,6 +8727,76 @@ next_tab = ""
                 .recv_timeout(Duration::from_millis(50))
                 .is_err(),
             "background client should not receive prefix input-source changes"
+        );
+
+        for action in [
+            crate::protocol::HostAction::PasteClipboard,
+            crate::protocol::HostAction::ToggleInputSource,
+        ] {
+            assert!(
+                server.handle_internal_event_with_forwarding(AppEvent::HostAction {
+                    action,
+                    target: None
+                })
+            );
+            assert_eq!(
+                read_server_message(
+                    foreground_control_rx
+                        .recv_timeout(Duration::from_millis(100))
+                        .expect("foreground host action")
+                ),
+                ServerMessage::HostAction {
+                    action,
+                    target_terminal_id: None
+                }
+            );
+            assert!(background_control_rx.try_recv().is_err());
+        }
+
+        server.app.handle_internal_event(AppEvent::HostAction {
+            action: crate::protocol::HostAction::PasteClipboard,
+            target: None,
+        });
+        assert_eq!(
+            server.app.pending_host_actions.len(),
+            1,
+            "an internal app drain must preserve host actions for server forwarding"
+        );
+        assert!(foreground_control_rx.try_recv().is_err());
+        server.handle_deferred_requests_headless();
+        assert!(server.app.pending_host_actions.is_empty());
+        assert_eq!(
+            read_server_message(
+                foreground_control_rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .expect("deferred foreground host action")
+            ),
+            ServerMessage::HostAction {
+                action: crate::protocol::HostAction::PasteClipboard,
+                target_terminal_id: None,
+            }
+        );
+
+        assert!(
+            !server.handle_server_event(ServerEvent::ClientHostActionResult {
+                client_id: 1,
+                target_terminal_id: Some("gone".into()),
+                paste: Some("must not route".into()),
+                error: None,
+            })
+        );
+        assert!(server.app.state.config_diagnostic.is_none());
+        assert!(
+            server.handle_server_event(ServerEvent::ClientHostActionResult {
+                client_id: 2,
+                target_terminal_id: None,
+                paste: None,
+                error: Some("Clipboard text unavailable".into()),
+            })
+        );
+        assert_eq!(
+            server.app.state.config_diagnostic.as_deref(),
+            Some("Clipboard text unavailable")
         );
     }
 

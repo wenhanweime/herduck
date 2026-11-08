@@ -1373,6 +1373,8 @@ async fn run_client_loop(
     // This (foreground) client owns the prefix ASCII input-source switch; a no-op on non-macOS.
     use crate::platform::PrefixInputSource;
     let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
+    let mut host_input_source = crate::platform::RealPrefixInputSource::default();
+    let mut host_ascii_active = false;
 
     // Main event loop.
     while !should_quit.load(Ordering::Acquire) {
@@ -1600,6 +1602,45 @@ async fn run_client_loop(
                         prefix_input_source.switch_to_ascii();
                     } else {
                         prefix_input_source.restore();
+                    }
+                }
+                ServerMessage::HostAction {
+                    action,
+                    target_terminal_id,
+                } => {
+                    let result = if let Some(error) =
+                        crate::platform::host_action_environment_error()
+                    {
+                        Err(error.to_owned())
+                    } else {
+                        match action {
+                            crate::protocol::HostAction::PasteClipboard => {
+                                crate::platform::read_clipboard_text().map(Some).ok_or_else(
+                                    || {
+                                        "Clipboard text is unavailable. Use your device's Paste command."
+                                            .to_owned()
+                                    },
+                                )
+                            }
+                            crate::protocol::HostAction::ToggleInputSource => host_input_source
+                                .toggle_manual(&mut host_ascii_active)
+                                .map(|()| None)
+                                .map_err(str::to_owned),
+                        }
+                    };
+                    let (paste, error) = match result {
+                        Ok(paste) => (paste, None),
+                        Err(error) => (None, Some(error)),
+                    };
+                    if let Err(error) = write_to_server(
+                        &mut write_stream,
+                        &ClientMessage::HostActionResult {
+                            target_terminal_id,
+                            paste,
+                            error,
+                        },
+                    ) {
+                        return Err(ClientError::ConnectionLost(error));
                     }
                 }
                 ServerMessage::Welcome { .. } => {

@@ -165,6 +165,13 @@ pub struct App {
     pub(crate) local_input_source_switch: bool,
     pub(crate) config_reloaded_from_disk: bool,
     prefix_input_source: Box<dyn crate::platform::PrefixInputSource>,
+    host_input_source: crate::platform::RealPrefixInputSource,
+    host_ascii_active: bool,
+    /// Host intents consumed by an internal drain wait here for the server's foreground dispatch.
+    pub(crate) pending_host_actions: Vec<(
+        crate::protocol::HostAction,
+        Option<crate::terminal::TerminalId>,
+    )>,
 }
 
 pub(crate) const APP_EVENT_CHANNEL_CAPACITY: usize = 256;
@@ -540,6 +547,7 @@ impl App {
         let (theme_palette, theme_name) = resolve_effective_theme(&theme_runtime, None);
 
         let mut state = AppState {
+            quick_keys: crate::quick_keys::QuickKeysState::load(),
             terminals: std::collections::HashMap::new(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
             pane_id_aliases: std::collections::HashMap::new(),
@@ -838,6 +846,9 @@ impl App {
             local_input_source_switch: true,
             config_reloaded_from_disk: false,
             prefix_input_source: Box::new(crate::platform::RealPrefixInputSource::default()),
+            host_input_source: crate::platform::RealPrefixInputSource::default(),
+            host_ascii_active: false,
+            pending_host_actions: Vec::new(),
         };
         app.refresh_session_setup();
         app.state
@@ -1859,6 +1870,17 @@ impl App {
             let previous_mode = self.state.mode;
             match event {
                 crate::raw_input::RawInputEvent::Key(key) => {
+                    if self.quick_keys_editor_key(key.as_key_event()) {
+                        continue;
+                    }
+                    let key = if self.state.mode == Mode::Terminal {
+                        let Some(modified) = self.apply_quick_key_modifiers(key) else {
+                            continue;
+                        };
+                        modified
+                    } else {
+                        key
+                    };
                     let key_id = repeat_key_identity(&key);
                     match key.kind {
                         crossterm::event::KeyEventKind::Press => {
@@ -1895,6 +1917,10 @@ impl App {
                     }
                 }
                 crate::raw_input::RawInputEvent::Paste(text) => {
+                    if self.state.quick_keys.editor.is_some() {
+                        self.paste_into_active_text_input(&text);
+                        continue;
+                    }
                     if self.try_route_paste_to_popup(&text) {
                     } else if self.state.mode != Mode::Terminal {
                         self.paste_into_active_text_input(&text);

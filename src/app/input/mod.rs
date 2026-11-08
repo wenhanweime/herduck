@@ -41,6 +41,7 @@ mod modal;
 mod mouse;
 mod navigate;
 mod overlays;
+mod quick_keys;
 mod selection;
 mod settings;
 mod sidebar;
@@ -76,6 +77,17 @@ pub(crate) use settings::select_settings_section;
 impl App {
     pub(super) async fn handle_key(&mut self, key: TerminalKey) {
         let key_event = key.as_key_event();
+        if self.quick_keys_editor_key(key_event) {
+            return;
+        }
+        let key = if self.state.mode == Mode::Terminal {
+            let Some(modified) = self.apply_quick_key_modifiers(key) else {
+                return;
+            };
+            modified
+        } else {
+            key
+        };
         if self.state.popup_pane.is_some() {
             self.handle_terminal_key(key).await;
             return;
@@ -124,6 +136,10 @@ impl App {
     }
 
     pub(super) async fn handle_paste(&mut self, text: String) {
+        if self.state.quick_keys.editor.is_some() {
+            self.paste_into_active_text_input(&text);
+            return;
+        }
         if self.state.popup_pane.is_some() {
             if let Some(runtime) = self.popup_runtime() {
                 let _ = runtime.send_paste(text).await;
@@ -148,6 +164,10 @@ impl App {
     }
 
     pub(crate) fn paste_into_active_text_input(&mut self, text: &str) -> bool {
+        if let Some(editor) = self.state.quick_keys.editor.as_mut() {
+            editor.insert(text);
+            return true;
+        }
         match self.state.mode {
             Mode::Settings => false,
             Mode::EditTopicCover => {
@@ -964,6 +984,9 @@ impl App {
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.quick_keys_mouse(mouse) {
+            return;
+        }
         if self.state.popup_pane.is_some() {
             self.handle_popup_mouse(mouse);
             return;
@@ -1054,6 +1077,9 @@ impl App {
                     MouseAction::FocusTab { tab_idx } => self.focus_tab_idx_via_api(tab_idx),
                     MouseAction::FocusPane { ws_idx, pane_id } => {
                         self.focus_pane_internal_via_api(ws_idx, pane_id)
+                    }
+                    MouseAction::ClosePane { ws_idx, pane_id } => {
+                        self.close_agent_conversation_via_api(ws_idx, pane_id);
                     }
                     MouseAction::FocusToastTarget => self.focus_toast_target_via_api(),
                     MouseAction::ProjectTree(action) => self.execute_project_tree_action(action),

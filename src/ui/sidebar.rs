@@ -601,6 +601,14 @@ pub(crate) fn workspace_list_scrollbar_rect(app: &AppState, area: Rect) -> Optio
     ))
 }
 
+/// The first row of each conversation reserves three cells before the scrollbar.
+pub(crate) fn agent_entry_close_rect(body: Rect, row_y: u16) -> Rect {
+    if body.width < 5 || row_y < body.y || row_y >= body.bottom() {
+        return Rect::default();
+    }
+    Rect::new(body.right() - 3, row_y, 3, 1)
+}
+
 pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
     if area.width == 0 || area.height <= AGENT_PANEL_HEADER_ROWS {
         return Rect::default();
@@ -1452,8 +1460,14 @@ fn render_agent_detail(
             agent_identity_style(detail.agent, p)
         };
         let state_icon = detail.status_icon(app.spinner_tick, p);
+        let close_rect = agent_entry_close_rect(body, row_y);
 
         for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
+            let width = if row_index == 0 {
+                body.width.saturating_sub(close_rect.width)
+            } else {
+                body.width
+            };
             let mut spans = vec![Span::raw(if row_index == 0 { " " } else { "   " })];
             spans.extend(resolved_token_spans(
                 resolved,
@@ -1465,14 +1479,17 @@ fn render_agent_detail(
                 name_style,
                 agent_style,
                 p,
-                body.width
-                    .saturating_sub(if row_index == 0 { 1 } else { 3 }) as usize,
+                width.saturating_sub(if row_index == 0 { 1 } else { 3 }) as usize,
             ));
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).style(row_style),
-                Rect::new(body.x, row_y + row_index as u16, body.width, 1),
+                Rect::new(body.x, row_y + row_index as u16, width, 1),
             );
         }
+        frame.render_widget(
+            Paragraph::new(" × ").style(row_style.fg(p.overlay1)),
+            close_rect,
+        );
         if is_active && body.width > 0 {
             frame.buffer_mut()[(body.x, row_y)]
                 .set_symbol("▎")
@@ -1612,6 +1629,8 @@ mod tests {
             let body = agent_panel_body_rect(agent_area, false);
             let buffer = terminal.backend().buffer();
             assert!(row_text(buffer, body.y, area.width).contains("review auth"));
+            let close = agent_entry_close_rect(body, body.y);
+            assert_eq!(buffer[(close.x + 1, close.y)].symbol(), "×");
             let second = row_text(buffer, body.y + 1, area.width);
             assert!(second.contains("inactive"), "{second}");
             assert!(second.contains("one"), "{second}");
@@ -1700,8 +1719,12 @@ mod tests {
 
         assert_eq!(metrics.viewport_rows, 2);
         assert_eq!(metrics.max_offset_from_bottom, 0);
-        assert_eq!(row_text(buffer, body.y, body.width), " pi");
-        assert_eq!(row_text(buffer, body.y + 1, body.width), " claude");
+        let close = agent_entry_close_rect(body, body.y);
+        let text_width = body.width - close.width;
+        assert_eq!(row_text(buffer, body.y, text_width), " pi");
+        assert_eq!(row_text(buffer, body.y + 1, text_width), " claude");
+        assert_eq!(buffer[(close.x + 1, body.y)].symbol(), "×");
+        assert_eq!(buffer[(close.x + 1, body.y + 1)].symbol(), "×");
     }
 
     #[test]

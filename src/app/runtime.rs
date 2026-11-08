@@ -220,7 +220,8 @@ impl App {
     }
 
     pub(crate) fn handle_scheduled_tasks(&mut self, now: Instant, geometry_dirty: bool) -> bool {
-        let mut changed = false;
+        let mut changed = self.state.quick_keys.expire_notice(now);
+        changed |= self.state.quick_keys.expire_activation(now);
         let mut resized = false;
 
         self.sync_animation_timer(now);
@@ -715,6 +716,8 @@ impl App {
         [
             include_resize_poll.then_some(self.next_resize_poll),
             self.config_diagnostic_deadline,
+            self.state.quick_keys.notice_deadline(),
+            self.state.quick_keys.activation_deadline(),
             self.toast_deadline,
             self.state.next_pending_agent_notification_deadline(),
             self.copy_feedback_deadline,

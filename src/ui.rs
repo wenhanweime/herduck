@@ -16,6 +16,7 @@ mod onboarding;
 mod panes;
 mod project_overview;
 mod projects;
+pub(crate) mod quick_keys;
 mod release_notes;
 mod scrollbar;
 mod session_label;
@@ -95,13 +96,14 @@ pub(crate) use self::{
         settings_new_session_rect, settings_popup_height, settings_tab_rects, SETTINGS_POPUP_WIDTH,
     },
     sidebar::{
-        agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
-        agent_panel_scroll_for_target, agent_panel_scroll_metrics, agent_panel_scrollbar_rect,
-        collapsed_sidebar_sections, collapsed_sidebar_toggle_rect, compute_workspace_card_areas,
-        expanded_sidebar_sections, expanded_sidebar_toggle_rect, normalized_workspace_scroll,
-        sidebar_section_divider_rect, workspace_drop_indicator_row, workspace_list_entries,
-        workspace_list_entries_expanded, workspace_list_rect, workspace_list_scroll_metrics,
-        workspace_list_scrollbar_rect, workspace_parent_group_state, WorkspaceListEntry,
+        agent_entry_close_rect, agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect,
+        agent_panel_entries, agent_panel_scroll_for_target, agent_panel_scroll_metrics,
+        agent_panel_scrollbar_rect, collapsed_sidebar_sections, collapsed_sidebar_toggle_rect,
+        compute_workspace_card_areas, expanded_sidebar_sections, expanded_sidebar_toggle_rect,
+        normalized_workspace_scroll, sidebar_section_divider_rect, workspace_drop_indicator_row,
+        workspace_list_entries, workspace_list_entries_expanded, workspace_list_rect,
+        workspace_list_scroll_metrics, workspace_list_scrollbar_rect, workspace_parent_group_state,
+        WorkspaceListEntry,
     },
 };
 pub(crate) use self::{
@@ -227,6 +229,33 @@ fn desktop_tab_bar_and_terminal_area(
     }
 }
 
+fn reserve_quick_keys(app: &mut AppState, area: Rect) -> Rect {
+    let dock_h = if area.width == 0 || area.height < 5 {
+        0
+    } else if app.quick_keys.collapsed || area.height < 10 {
+        1
+    } else {
+        3
+    };
+    app.quick_keys.rect = Rect::new(
+        area.x,
+        area.bottom().saturating_sub(dock_h),
+        area.width,
+        dock_h,
+    );
+    let available = quick_keys::viewport(app.quick_keys.rect).width;
+    app.quick_keys.offset = app
+        .quick_keys
+        .offset
+        .min(quick_keys::content_width(app).saturating_sub(available));
+    Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height.saturating_sub(dock_h),
+    )
+}
+
 fn compute_view_internal(
     app: &mut AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -235,6 +264,7 @@ fn compute_view_internal(
     cell_size: crate::kitty_graphics::HostCellSize,
 ) {
     if is_mobile_width(area, app.mobile_width_threshold) {
+        let area = reserve_quick_keys(app, area);
         compute_mobile_view(app, terminal_runtimes, area, resize_panes, cell_size);
         return;
     }
@@ -251,6 +281,8 @@ fn compute_view_internal(
 
     let [sidebar_area, main_area] =
         Layout::horizontal([Constraint::Length(sidebar_w), Constraint::Min(1)]).areas(area);
+    // The sidebar keeps its full height; the dock belongs to the terminal column.
+    let main_area = reserve_quick_keys(app, main_area);
 
     let (tab_bar_rect, terminal_area) = app
         .active
@@ -320,7 +352,12 @@ fn compute_view_internal(
         .as_ref()
         .map(|toast| {
             toast_notification_rect(
-                area,
+                Rect::new(
+                    area.x,
+                    area.y,
+                    area.width,
+                    area.height.saturating_sub(app.quick_keys.rect.height),
+                ),
                 toast,
                 app.config_diagnostic.is_some(),
                 toast.position.unwrap_or(app.toast_config.herduck.position),
@@ -483,6 +520,8 @@ pub fn render_with_runtime_registry(
     }
     render_panes(app, terminal_runtimes, frame, terminal_area);
 
+    quick_keys::render(app, frame);
+
     // Ambient notifications sit above panes, but below interactive overlays.
     render_notifications(app, frame, terminal_area);
     render_popup_pane(app, terminal_runtimes, frame, terminal_area);
@@ -492,7 +531,14 @@ pub fn render_with_runtime_registry(
         Mode::ReleaseNotes => render_release_notes_overlay(app, frame, frame.area()),
         Mode::ProductAnnouncement => render_product_announcement_overlay(app, frame, frame.area()),
         Mode::Navigate if app.view.layout == ViewLayout::Mobile => {
-            render_mobile_panel(app, terminal_runtimes, frame, frame.area())
+            let screen = frame.area();
+            let content = Rect::new(
+                screen.x,
+                screen.y,
+                screen.width,
+                screen.height.saturating_sub(app.quick_keys.rect.height),
+            );
+            render_mobile_panel(app, terminal_runtimes, frame, content)
         }
         Mode::Navigate => render_navigate_overlay(app, frame, terminal_area),
         Mode::Prefix => render_prefix_overlay(app, frame, terminal_area),
@@ -522,15 +568,24 @@ pub fn render_with_runtime_registry(
         }
         Mode::Terminal => {}
     }
+    quick_keys::render_notice(app, frame);
+    quick_keys::render_editor(app, frame);
 }
 
 fn render_notifications(app: &AppState, frame: &mut Frame, terminal_area: Rect) {
+    let screen = frame.area();
+    let content = Rect::new(
+        screen.x,
+        screen.y,
+        screen.width,
+        screen.height.saturating_sub(app.quick_keys.rect.height),
+    );
     let has_config_diagnostic = app.config_diagnostic.is_some();
     if let Some(message) = &app.config_diagnostic {
         let diagnostic_area = if app.view.layout == ViewLayout::Mobile {
             terminal_area
         } else {
-            frame.area()
+            content
         };
         render_config_diagnostic(frame, diagnostic_area, message, &app.palette);
     }
@@ -538,39 +593,30 @@ fn render_notifications(app: &AppState, frame: &mut Frame, terminal_area: Rect) 
     let mut toast_rect = None;
     if let Some(toast) = &app.toast {
         if app.view.layout == ViewLayout::Mobile {
-            render_mobile_toast_banner(
-                frame,
-                frame.area(),
-                toast,
-                has_config_diagnostic,
-                &app.palette,
-            );
+            render_mobile_toast_banner(frame, content, toast, has_config_diagnostic, &app.palette);
         } else {
             render_toast_notification(
                 frame,
-                frame.area(),
+                content,
                 toast,
                 has_config_diagnostic,
                 toast.position.unwrap_or(app.toast_config.herduck.position),
                 &app.palette,
             );
             toast_rect = Some(toast_notification_rect(
-                frame.area(),
+                content,
                 toast,
                 has_config_diagnostic,
                 toast.position.unwrap_or(app.toast_config.herduck.position),
             ));
         }
         if app.view.layout == ViewLayout::Mobile {
-            toast_rect = Some(mobile_toast_banner_rect(
-                frame.area(),
-                has_config_diagnostic,
-            ));
+            toast_rect = Some(mobile_toast_banner_rect(content, has_config_diagnostic));
         }
     }
     if let Some(feedback) = &app.copy_feedback {
         let area = if app.view.layout == ViewLayout::Mobile {
-            frame.area()
+            content
         } else {
             terminal_area
         };
@@ -746,7 +792,7 @@ mod tests {
         assert_eq!(app.view.sidebar_rect, Rect::default());
         assert_eq!(app.view.tab_bar_rect, Rect::default());
         assert_eq!(app.view.mobile_header_rect, Rect::new(0, 0, 44, 2));
-        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 44, 18));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 44, 15));
         assert_eq!(app.view.mobile_menu_hit_area.height, 2);
         assert_eq!(
             app.view.mobile_menu_hit_area.x + app.view.mobile_menu_hit_area.width,
@@ -835,7 +881,7 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
         assert_eq!(app.view.layout, ViewLayout::Mobile);
         assert_eq!(app.view.mobile_header_rect, Rect::new(0, 0, 80, 2));
-        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 80, 18));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 80, 15));
     }
 
     #[test]
@@ -850,7 +896,7 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
         let single_tab_terminal_area = app.view.terminal_area;
         assert_eq!(app.view.tab_bar_rect, Rect::default());
-        assert_eq!(single_tab_terminal_area, Rect::new(26, 0, 54, 20));
+        assert_eq!(single_tab_terminal_area, Rect::new(26, 0, 54, 17));
         assert!(app.view.tab_hit_areas.is_empty());
         assert_eq!(app.view.new_tab_hit_area, Rect::default());
 
@@ -858,7 +904,7 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 80, 20));
 
         assert_eq!(app.view.tab_bar_rect, Rect::new(26, 0, 54, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 54, 19));
+        assert_eq!(app.view.terminal_area, Rect::new(26, 1, 54, 16));
         assert_eq!(app.view.tab_hit_areas.len(), 2);
         assert!(app.view.tab_hit_areas.iter().all(|rect| rect.width > 0));
         assert!(app.view.new_tab_hit_area.width > 0);
@@ -902,8 +948,8 @@ mod tests {
         let one_tab_size = app.workspaces[0].tabs[0].runtimes[&one_tab_pane].current_size();
         let two_tab_size =
             app.workspaces[1].tabs[background_tab].runtimes[&two_tab_pane].current_size();
-        assert_eq!(one_tab_size, (20, 53));
-        assert_eq!(two_tab_size, (19, 53));
+        assert_eq!(one_tab_size, (17, 53));
+        assert_eq!(two_tab_size, (16, 53));
     }
 
     #[tokio::test]
@@ -926,10 +972,10 @@ mod tests {
         compute_view(&mut app, Rect::new(0, 0, 44, 20));
 
         assert_eq!(app.view.layout, ViewLayout::Mobile);
-        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 44, 18));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 2, 44, 15));
         assert_eq!(
             app.workspaces[0].tabs[background_tab].runtimes[&background_pane].current_size(),
-            (18, 43)
+            (15, 43)
         );
     }
 
@@ -1018,7 +1064,7 @@ mod tests {
 
         assert_eq!(app.view.sidebar_rect, Rect::new(0, 0, 0, 20));
         assert_eq!(app.view.tab_bar_rect, Rect::new(0, 0, 80, 1));
-        assert_eq!(app.view.terminal_area, Rect::new(0, 1, 80, 19));
+        assert_eq!(app.view.terminal_area, Rect::new(0, 1, 80, 16));
         assert!(app.view.workspace_card_areas.is_empty());
 
         let backend = TestBackend::new(80, 20);

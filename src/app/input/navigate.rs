@@ -2379,7 +2379,9 @@ navigate_pane_right = "ctrl+l"
         );
 
         assert_eq!(state.selected, 1);
-        assert_eq!(state.mobile_switcher_scroll, 1);
+        // Short mobile screens keep a 1-row Quick Keys dock, so the switcher
+        // viewport is one row shorter than an 8-row screen without the dock.
+        assert_eq!(state.mobile_switcher_scroll, 2);
     }
 
     #[test]

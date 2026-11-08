@@ -1525,11 +1525,16 @@ mod tests {
         assert!(first.starts_with('w'));
         assert!(second.starts_with('w'));
         assert_ne!(first, second);
-        assert!(first.len() <= 3, "unexpectedly long workspace id: {first}");
-        assert!(
-            second.len() <= 3,
-            "unexpectedly long workspace id: {second}"
-        );
+        for id in [&first, &second] {
+            assert!(
+                id[1..]
+                    .chars()
+                    .all(|ch| PUBLIC_ID_ALPHABET.contains(&(ch as u8))),
+                "workspace id {id} is not a w-prefixed base32 handle"
+            );
+        }
+        assert_eq!(encode_public_number(1), "1");
+        assert_eq!(encode_public_number(33).len(), 2);
     }
 
     #[test]
