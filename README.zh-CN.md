@@ -123,7 +123,15 @@ Work 始终可理解、可继续。**
 
 ## 安装
 
-在 macOS 或 Linux 上准备[所需的 Rust 和 Zig 工具链](docs/installation.md#build-from-source)，然后运行：
+在 macOS 或 Linux 上，一行命令就能跑起来（不用装编译工具）：
+
+```sh
+npx --yes herduck@alpha
+```
+
+也可以用 `npm install -g herduck@alpha` 全局安装，之后直接运行 `herduck`。
+
+想从源码构建的话，先准备[所需的 Rust 和 Zig 工具链](docs/installation.md#build-from-source)，然后运行：
 
 ```sh
 git clone https://github.com/wenhanweime/herduck.git
